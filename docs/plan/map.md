@@ -8,14 +8,15 @@ Home Assistant surfacing presence/occupancy, person count, coarse pose, breathin
 and heart rate; the HACS component and the ingress dashboard install from the
 published repository; the three in-domain bars (torso PCK@20 ≥ 65 %, presence
 F1 ≥ 0.90, breathing MAE ≤ 2 brpm) evidenced by commit-keyed ledger rows; global
-whole-home calibration first-class and versioned by commit; and the whole
+whole-home calibration first-class and versioned by commit; node firmware
+updates over the LAN by signed OTA surfaced in Home Assistant; and the whole
 pipeline reproducible from recorded fixtures without hardware.
 
 ## Notes
 
 - Read `CONTEXT.md` first; it fixes the vocabulary. Use it exactly.
 - Normative: `docs/spec/` (index at `docs/spec/README.md`),
-  `docs/adr/0001`–`0003`, and `docs/spec/interface-register.md`.
+  `docs/adr/0001`–`0004`, and `docs/spec/interface-register.md`.
 - Advisory: `docs/research/` — it never defines v1 scope.
 - External claims cite `docs/reference/sources.json` by `id`.
 - Ordering principle: **tracer bullets** (`roadmap.md`). Every ticket cuts the
@@ -62,6 +63,11 @@ The settled design, in gists that point at the deciding document:
 - **Toolchain and repo**: one GPLv3-only monorepo, pinned toolchain, enforced
   DAG, no committed agent scaffolding, conventional non-squashed history.
   ADR-0002, `repository-tooling.md`.
+- **Firmware OTA over the control channel**: signed images (Ed25519 + SHA-256),
+  dual-partition A/B, automatic rollback, an anti-rollback version floor; driven
+  and observed from Home Assistant as one `update` entity per node; no cloud and
+  no node HTTP server. `firmware-ota.md`, `interface-register.md` (Firmware OTA),
+  ADR-0004.
 - **Licence**: GPL-3.0-only code; the project is non-commercial, so NC datasets
   and NC weights are usable but derivative artefacts stay NC and out of the GPL
   history. `inference-models.md` §6, `risks.md` R-13/R-14.

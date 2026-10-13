@@ -1,7 +1,7 @@
 # Plan — published issues
 
 The v1 plan is published on GitHub at `belikh/aquila`. The in-repo files under
-`docs/plan/tickets/` are the source drafts and use plan numbers (01–11); the table below maps
+`docs/plan/tickets/` are the source drafts and use plan numbers (01–14); the table below maps
 them to issue numbers. Blocking edges are recorded as native GitHub issue dependencies; work the
 frontier (the first open, unblocked, unassigned ticket in map order).
 
@@ -19,6 +19,9 @@ frontier (the first open, unblocked, unassigned ticket in map order).
 | 08-hacs-integration | #9 | HACS integration | #8 |
 | 09-management-dashboard | #10 | Management dashboard | #8 |
 | 10-packaging-and-v1-release | #11 | Packaging and v1 release | #9, #10 |
+| 12-ota-control-and-core-image-store | #13 | OTA control channel and core image store | #8 |
+| 13-firmware-ota-agent | #14 | ESP32-S3 firmware OTA agent | #8, #13 |
+| 14-ha-firmware-update-entity | #15 | Home Assistant firmware update entity | #9, #13 |
 
 ## Working the plan
 

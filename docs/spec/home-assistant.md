@@ -32,7 +32,7 @@ thing that does DSP, inference, fusion, calibration and measurement.
  │   ┌──────────────────────────┐   core→node control     │              │
  │   │ Aquila Core add-on       │─────────────────────────┘              │
  │   │ (Rust core + WASM dash)  │                                        │
- │   │  :6969/udp  CSI ingest   │                                        │
+  │   │  :9100/udp  CSI ingest   │                                        │
  │   │  :8099      HTTP+WS+ingress                                        │
  │   └────────────┬─────────────┘                                        │
  │                │ hassio Docker network (not LAN-published)            │
@@ -43,8 +43,9 @@ thing that does DSP, inference, fusion, calibration and measurement.
  └───────────────────────────────────────────────────────────────────────┘
 ```
 
-- The add-on runs with **bridge networking** and publishes exactly one host
-  port: UDP 6969 for node ingest. The HTTP+WS API on 8099 is **not** published
+- The add-on runs with **bridge networking** and publishes exactly two host
+  ports: UDP `9100` for CSI ingest and UDP `9101` for the node control channel
+  (ADR-0003 §7). The HTTP+WS API on 8099 is **not** published
   to the host LAN; it is reachable only from HA Core / other add-ons over the
   `hassio` Docker network. That is what makes it "private".
 - CSI is **unicast** UDP: nodes are provisioned with the core's host address and
@@ -82,9 +83,11 @@ panel_icon: mdi:radar
 panel_title: Aquila
 panel_admin: true
 ports:
-  6969/udp: 6969
+  9100/udp: 9100
+  9101/udp: 9101
 ports_description:
-  6969/udp: Raw CSI ingest from nodes (UDP unicast)
+  9100/udp: Raw CSI ingest from nodes (UDP unicast)
+  9101/udp: Node control channel (pairing, config, firmware OTA)
 options:
   log_level: info
   calibration_profile: default
@@ -138,6 +141,7 @@ custom_components/aquila/
 ├── config_flow.py       # config + options + reauth
 ├── binary_sensor.py     # presence, occupancy, connectivity, self-test
 ├── sensor.py            # person count, breathing, heart rate, health
+├── update.py            # per-node firmware update entity (see firmware-ota.md)
 ├── diagnostics.py       # config-entry diagnostics (redacted)
 ├── strings.json
 ├── translations/en.json
@@ -210,7 +214,7 @@ at `belikh/aquila`:
 | Add-on slug | `aquila_core` | lowercase, `_` separators; full store slug `<repo>_aquila_core`; network hostname `aquila-core` |
 | Component domain | `aquila` | drives `custom_components/aquila`, entity service namespace, `DOMAIN` |
 | Add-on TCP port | `8099` | HTTP + WS + ingress (not host-published) |
-| Add-on UDP port | `6969` | CSI ingest (host-published) |
+| Add-on UDP ports | `9100`/`9101` | CSI ingest + node control (host-published; ADR-0003 §7) |
 | Entity unique_id | `aquila:{instance_id}:{zone_id}:{metric}` | `instance_id` from core `/api/v1/health`; `zone_id` stable slug |
 | Node device id | `("aquila", "{instance_id}:node:{node_mac}")` | one HA device per node |
 | Zone device id | `("aquila", "{instance_id}:zone:{zone_id}")` | one HA device per room/floor |
@@ -267,6 +271,11 @@ REST (all `GET` unless noted), base `http://aquila-core:8099`:
 | `/api/v1/schema` | zone tree (home → floor → room), metric vocabulary, units |
 | `/api/v1/state` | full current snapshot: every zone's presence/vitals + system health (coordinator poll + initial load) |
 | `/api/v1/nodes` | per-node identity, MAC, floor/room, online state, clock-drift estimate |
+| `/api/v1/firmware` | firmware image store manifest (versions, sha256, target chip) — see `firmware-ota.md` §7 |
+| `/api/v1/nodes/{node}/firmware` | installed version, boot partition, pending state, last OTA result |
+| `/api/v1/nodes/{node}/firmware/install` (`POST`) | begin a firmware OTA for a node |
+| `/api/v1/nodes/{node}/firmware/job` | OTA job progress/state |
+| `/api/v1/nodes/{node}/firmware/abort` (`POST`) | abort an in-progress OTA |
 
 WS: `ws://aquila-core:8099/api/v1/stream`
 
@@ -274,6 +283,9 @@ WS: `ws://aquila-core:8099/api/v1/stream`
   `{"type":"state","seq":123,"ts":...,"zone_id":"living_room",
     "measurements":{"presence":true,"breathing_rate":13.2,"heart_rate":62}}`
   and `{"type":"health","seq":124,"ts":...,"core_connected":true,"nodes_online":9}`.
+- A `firmware` event carries per-node OTA progress for the `update` entity:
+  `{"type":"firmware","seq":125,"ts":...,"node":"aa:bb:...","state":"downloading","progress":0.42}`
+  (see `firmware-ota.md` §7).
 - The component ignores any event whose `seq` is not greater than the last
   applied `seq`; timestamps are informational only (software time sync is the
   core's concern, not HA's).
@@ -329,6 +341,7 @@ Data shape in the coordinator snapshot:
 | `sensor.aquila_clock_drift` | sensor | system | ms | `measurement` | diagnostic |
 | `sensor.aquila_last_csi_packet` | sensor | system | — | `timestamp` | diagnostic |
 | `binary_sensor.aquila_self_test` | binary_sensor | system | — | `problem` | diagnostic |
+| `update.aquila_<node>_firmware` | update | node | — | `firmware` | diagnostic |
 
 Rules:
 
@@ -465,6 +478,9 @@ navigation entry and the connection health shown to HA users.
 - **Component:** bump `version` in `manifest.json`; the release workflow
   rebuilds `aquila.zip`; HACS shows an update; the user updates and restarts.
   `async_migrate_entry` runs in place.
+- **Node firmware:** updated over the LAN by OTA from the add-on, surfaced as an
+  `update.aquila_<node>_firmware` entity per node — no internet, no cloud. The
+  full design is in `firmware-ota.md`.
 - **Contract compatibility:** the component compares its own
   `min_component_version`/`api_version` against `/api/v1/health`. A core that is
   too new or too old is reported clearly (repair/`ConfigEntryError`) rather than

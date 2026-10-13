@@ -10,6 +10,7 @@ this spec uses. Numbers and external claims cite `../reference/sources.json`.
 | `architecture.md` | Crate/module decomposition, the dependency DAG, and the seams. |
 | `data-contracts.md` | Canonical versioned types (`CsiFrame`, `Pose`, `VitalsReading`, topology, ledger row). |
 | `capture-and-firmware.md` | The `CsiSource` seam, ESP32-S3 node firmware, the UDP wire protocol, the simulator, `.aqs` sessions. |
+| `firmware-ota.md` | Node firmware OTA: signed images, dual-partition A/B, rollback, and the HA `update` entity. |
 | `signal.md` | The pure signal-conditioning module: decode, sanitise, filter, features. |
 | `geometry-calibration.md` | Topology → zones, coordinate frames, the global whole-home calibration artefact. |
 | `inference-models.md` | `PoseModel`/`VitalsModel` seam, the Python→ONNX pipeline, runtime choice (`ort`). |

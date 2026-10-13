@@ -68,3 +68,11 @@ Cite by `id`. Licences are as reported by the source and should be re-verified b
 | `ha-arch` | https://developers.home-assistant.io/docs/architecture_index/ | Components vs add-ons |
 | `ha-addons` | https://developers.home-assistant.io/docs/add-ons/ | Add-on packaging + ingress |
 | `ha-hacs` | https://hacs.xyz/docs/publish/start | Publishing a custom component |
+| `ha-update` | https://developers.home-assistant.io/docs/core/entity/update/ | `update` entity (firmware OTA surface) |
+
+## Firmware update (OTA)
+
+| id | Resource | Notes |
+| --- | --- | --- |
+| `esp-idf-ota` | https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/system/ota.html | ESP-IDF OTA API + dual partition |
+| `esp-idf-ota-rollback` | same | Rollback / anti-rollback (anchor to verify) |

@@ -594,6 +594,16 @@ Compile-time: firmware version and chip target.
 committed header matches and runs shared golden vectors through both
 implementations, so the two ends cannot silently drift.
 
+### 9.5 Firmware update (OTA)
+
+Node firmware is updated over the LAN by the core, with no cloud. OTA rides the
+**node control plane** (`9101/udp`) via opcodes `0x0E`–`0x14` (new, extending
+§6.2), not a node-facing HTTP server. The node uses ESP-IDF dual-partition A/B OTA
+with Ed25519 verification, an anti-rollback version floor, and automatic rollback
+if the new image does not self-confirm. The design is specified in
+`docs/spec/firmware-ota.md`; Home Assistant surfaces it as an `update` entity per
+node (`home-assistant.md` §6).
+
 ## 10. Crate map (proposed additions)
 
 The roadmap's crate set is provisional and ADR-revisable. This document needs

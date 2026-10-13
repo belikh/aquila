@@ -236,6 +236,28 @@ install, and the honest-claims statement — everything needed to call v1 shippe
 
 **Ledger rows.** `release.build.digest`, `v1.bars.pass`.
 
+### Slice 10 — Firmware OTA
+
+**Goal.** Node firmware updates over the LAN from the core, signed and verified,
+with Home Assistant surfacing and triggering it — no cloud.
+
+**Entry.** Slice 7 exit (live nodes and the control channel).
+
+**Exercises.** `aquila-wire` (OTA control opcodes `0x0E`–`0x14`), `aquila-api`
+(OTA endpoints + signed image store), the firmware OTA agent (dual-partition A/B,
+Ed25519, rollback), `aquila-ha` (an `update` entity per node). See
+`docs/spec/firmware-ota.md`.
+
+**Exit criteria.**
+- A signed image installs on a node over the control channel and the node
+  confirms it, or rolls back automatically if it fails its health check.
+- Each node appears as an `update.aquila_<node>_firmware` entity with installed /
+  latest versions and progress.
+- No internet and no cloud are involved; the node runs no HTTP server.
+- A bad signature is rejected and never activated.
+
+**Ledger rows.** `firmware.ota.result`, `firmware.version.installed`.
+
 ## What "v1 shipped" means
 
 v1 is shipped when **all** of the following are true on the reference,
@@ -258,6 +280,8 @@ three floors):
    re-applies across the full topology.
 5. The pipeline is replay-and-sim first: any ledger row can be reproduced from
    recorded fixtures without hardware.
+6. Node firmware updates over the LAN from Home Assistant, signed and verified,
+   with automatic rollback — no cloud (`firmware-ota.md`).
 
 Metrics are recorded and diffed across commits; none gate CI yet. v1 does not
 claim out-of-domain accuracy, cross-environment generalisation, or any of the

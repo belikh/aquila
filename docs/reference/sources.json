@@ -37,6 +37,9 @@
     { "id": "fcc-part15", "type": "regulatory", "title": "FCC Part 15", "url": "https://www.fcc.gov", "verified": true },
     { "id": "ha-arch", "type": "docs", "title": "Home Assistant architecture", "url": "https://developers.home-assistant.io/docs/architecture_index/", "verified": true },
     { "id": "ha-addons", "type": "docs", "title": "Home Assistant add-ons", "url": "https://developers.home-assistant.io/docs/add-ons/", "verified": true },
-    { "id": "ha-hacs", "type": "docs", "title": "Publishing a HACS component", "url": "https://hacs.xyz/docs/publish/start", "verified": true }
+    { "id": "ha-hacs", "type": "docs", "title": "Publishing a HACS component", "url": "https://hacs.xyz/docs/publish/start", "verified": true },
+    { "id": "ha-update", "type": "docs", "title": "Home Assistant update entity", "url": "https://developers.home-assistant.io/docs/core/entity/update/", "verified": true },
+    { "id": "esp-idf-ota", "type": "docs", "title": "ESP-IDF OTA updates", "url": "https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/system/ota.html", "verified": true },
+    { "id": "esp-idf-ota-rollback", "type": "docs", "title": "ESP-IDF app rollback and anti-rollback", "url": "https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/system/ota.html", "verified": false, "note": "exact anchor to verify" }
   ]
 }

@@ -37,8 +37,11 @@ spec index, then the ADRs relevant to what you are touching.
 
 ## Status
 
-- Specs: 16 files written, **pending reconciliation of the crate graph and wire ports** (see
-  `docs/spec/README.md` → Known divergences).
-- ADRs: `0001-module-architecture`, `0002-toolchain-and-repo`.
+- Specs: 18 files, including `firmware-ota.md`; the crate graph and ports are reconciled by
+  ADR-0003 and `docs/spec/interface-register.md`.
+- ADRs: `0001`–`0004`.
 - Research: paired datasets, plugin architectures, ESP32-as-SDR, ESP32-C5 dual-band, node backhaul.
-- Plan: map and tickets are generated from this spec set (see `docs/plan/`).
+- Plan: v1 wayfinder map (#1) and tickets published at https://github.com/belikh/aquila/issues;
+  `docs/plan/` mirrors them (`docs/plan/issues.md` maps plan numbers to issue numbers).
+- Firmware OTA is specified and ticketed: #13 (control channel + core image store), #14 (ESP32-S3
+  OTA agent), #15 (Home Assistant `update` entity).
