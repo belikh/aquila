@@ -476,6 +476,87 @@ fn sequence_empty_is_empty() {
     assert!(validate_sequence(&[]).is_empty());
 }
 
+// --- vitals ----------------------------------------------------------------
+
+/// A deterministic uniform draw in `[-0.5, 0.5)` from a splitmix-style step.
+fn noise(seed: &mut u64) -> f32 {
+    *seed = seed
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    ((*seed >> 40) as f32 / (1u64 << 24) as f32) - 0.5
+}
+
+/// A sampled sinusoid at `rate_hz` plus deterministic noise.
+fn tone_with_noise(n: usize, fs: f32, rate_hz: f32, amplitude: f32) -> Vec<f32> {
+    let mut seed = 0x1234_5678_u64;
+    (0..n)
+        .map(|i| {
+            let t = i as f32 / fs;
+            amplitude * (core::f32::consts::TAU * rate_hz * t).sin() + 0.05 * noise(&mut seed)
+        })
+        .collect()
+}
+
+#[test]
+fn vitals_estimates_a_known_breathing_rate() {
+    let cfg = Config::default_reference(SubcarrierLayout::ht20());
+    let series = tone_with_noise(20 * 20, 20.0, 0.25, 1.0);
+    let estimate = estimate_vitals(&series, &cfg.vitals_config()).breathing;
+    assert!(estimate.is_ok(), "status {:?}", estimate.status);
+    let brpm = estimate.rate_per_min;
+    assert!(
+        (brpm - 15.0).abs() <= 2.0,
+        "breathing {brpm} brpm is outside 2 brpm of 15"
+    );
+    assert!(estimate.confidence > 0.0 && estimate.confidence <= 1.0);
+}
+
+#[test]
+fn vitals_estimates_a_known_heart_rate() {
+    let cfg = Config::default_reference(SubcarrierLayout::ht20());
+    let series = tone_with_noise(20 * 30, 20.0, 1.2, 1.0);
+    let estimate = estimate_vitals(&series, &cfg.vitals_config()).heart;
+    assert!(estimate.is_ok(), "status {:?}", estimate.status);
+    let bpm = estimate.rate_per_min;
+    assert!(
+        (bpm - 72.0).abs() <= 6.0,
+        "heart {bpm} bpm is outside 6 bpm of 72"
+    );
+}
+
+#[test]
+fn vitals_is_deterministic() {
+    let cfg = Config::default_reference(SubcarrierLayout::ht20());
+    let series = tone_with_noise(400, 20.0, 0.3, 0.8);
+    let first = estimate_vitals(&series, &cfg.vitals_config());
+    let second = estimate_vitals(&series, &cfg.vitals_config());
+    assert_eq!(first, second);
+}
+
+#[test]
+fn vitals_claims_nothing_on_a_short_series() {
+    let cfg = Config::default_reference(SubcarrierLayout::ht20());
+    let series = vec![0.0_f32; 3];
+    let estimates = estimate_vitals(&series, &cfg.vitals_config());
+    assert!(!estimates.breathing.is_ok());
+    assert!(!estimates.heart.is_ok());
+    assert_eq!(estimates.breathing.rate_hz, 0.0);
+    assert_eq!(estimates.breathing.confidence, 0.0);
+    assert_eq!(
+        estimates.breathing.status,
+        aquila_types::VitalsStatus::InsufficientSignal
+    );
+}
+
+#[test]
+fn vitals_claims_nothing_on_silence() {
+    let cfg = Config::default_reference(SubcarrierLayout::ht20());
+    let series = vec![0.0_f32; 400];
+    let estimates = estimate_vitals(&series, &cfg.vitals_config());
+    assert!(!estimates.breathing.is_ok());
+    assert!(!estimates.heart.is_ok());
+}
+
 // --- process determinism ---------------------------------------------------
 
 #[test]

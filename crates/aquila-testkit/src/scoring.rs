@@ -153,6 +153,63 @@ pub fn count_mae(events: &[Event], ground_truth: &[GroundTruthRecord], hop_ms: i
     }
 }
 
+/// The reference value for a vitals metric: the mean of its ground-truth
+/// records. This is honest only for a reference that is constant over the
+/// scored span (a steady-rate fixture); a varying reference needs per-window
+/// pairing, which this helper does not pretend to do.
+#[must_use]
+pub fn vitals_reference(ground_truth: &[GroundTruthRecord], metric: &str) -> Option<f32> {
+    let mut total = 0.0_f64;
+    let mut n = 0u64;
+    for record in ground_truth {
+        if let EventPayload::Vitals {
+            metric: name,
+            value,
+            ..
+        } = &record.payload
+        {
+            if name == metric && value.is_finite() {
+                total += f64::from(*value);
+                n += 1;
+            }
+        }
+    }
+    if n == 0 {
+        None
+    } else {
+        Some((total / n as f64) as f32)
+    }
+}
+
+/// The mean absolute error of a vitals metric's emitted events against one
+/// reference value, with the paired sample count.
+///
+/// Returns `(0.0, 0)` when no event carries the metric, so a caller can tell
+/// "not measured" from "measured with no error".
+#[must_use]
+pub fn vitals_mae(events: &[Event], metric: &str, reference: f32) -> (f64, usize) {
+    let mut total = 0.0_f64;
+    let mut n = 0usize;
+    for event in events {
+        if let EventPayload::Vitals {
+            metric: name,
+            value,
+            ..
+        } = &event.payload
+        {
+            if name == metric && value.is_finite() {
+                total += f64::from((*value - reference).abs());
+                n += 1;
+            }
+        }
+    }
+    if n == 0 {
+        (0.0, 0)
+    } else {
+        (total / n as f64, n)
+    }
+}
+
 /// Group presence-change events by window, in deterministic event order.
 fn presence_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(RoomId, bool)>> {
     let mut sorted: Vec<&Event> = events

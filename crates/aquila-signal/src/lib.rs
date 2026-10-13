@@ -51,6 +51,7 @@ mod process;
 mod resample;
 mod selection;
 mod spectrogram;
+mod vitals;
 
 #[cfg(test)]
 mod tests;
@@ -68,3 +69,6 @@ pub use process::{process, validate_sequence, Config, Features, NodeFeatures, Se
 pub use resample::resample_uniform;
 pub use selection::{select_subcarriers, SubcarrierFeatureMatrix, SubcarrierMask};
 pub use spectrogram::{bvp_track, stft, BvpSample, Spectrogram, StftConfig};
+pub use vitals::{
+    estimate_band, estimate_vitals, VitalEstimate, VitalsConfig, VitalsEstimates, VitalsParams,
+};

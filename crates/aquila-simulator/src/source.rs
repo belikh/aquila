@@ -23,8 +23,8 @@ use std::f64::consts::TAU;
 use aquila_session::{Manifest, SessionWriter};
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
-    BuildId, CsiEnvelope, CsiFrame, EventPayload, EventScope, GroundTruthRecord, GroundTruthRef,
-    GtKind, PhyFlags, RoomId, Session, SessionId, CONTRACT_VERSION,
+    Band, BuildId, CsiEnvelope, CsiFrame, EventPayload, EventScope, GroundTruthRecord,
+    GroundTruthRef, GtKind, PhyFlags, RoomId, Session, SessionId, CONTRACT_VERSION,
 };
 use aquila_wire::{decode_datagram, encode_datagram};
 
@@ -228,22 +228,35 @@ impl SimulatorSource {
     }
 
     /// Synthesise one CSI frame.
+    ///
+    /// The scatterer phase uses each subcarrier's **absolute RF frequency**
+    /// (`f_rf = centre + offset`), not its offset from the band centre: the
+    /// spec's `f_k` is "the k-th subcarrier frequency" and the modulation
+    /// `Δφ_k = 2π·f_k·Δd/c` is only physical when `f_k` is the RF frequency
+    /// (`capture-and-firmware.md` §7.2). Using the offset alone understates the
+    /// phase modulation by ~`f_c/Δf` (~244× at 2.4 GHz with 312.5 kHz spacing),
+    /// which buries the breathing and heart rhythms below the noise floor and
+    /// makes them unrecoverable. This is a correction, not a tuning: the
+    /// dynamics are unchanged and determinism (`§7.1`) still holds, because the
+    /// centre is a pure function of `(band, channel)`.
     fn synth_frame(&self, node_index: usize, tick: usize) -> CsiFrame {
         let node = &self.script.nodes[node_index];
         let t = tick as f64 / self.script.tick_hz;
         let n = self.script.subcarriers;
+        let centre_hz = centre_freq_hz(self.script.band, self.script.channel);
         let mut amplitude = Vec::with_capacity(n);
         let mut phase = Vec::with_capacity(n);
 
         for k in 0..n {
-            let f_k = (k as f64 - n as f64 / 2.0) * self.script.subcarrier_spacing_hz;
+            let f_rf = centre_hz
+                + (k as f64 - n as f64 / 2.0) * self.script.subcarrier_spacing_hz;
             let (mut re, mut im) = self.baseline(node_index, k);
             for actor in &self.script.actors {
                 if actor.room != node.room || !actor.present(t) {
                     continue;
                 }
                 let d = actor.path_length_m(node.pos_m, t);
-                let theta = -TAU * f_k * d / SPEED_OF_LIGHT_MPS;
+                let theta = -TAU * f_rf * d / SPEED_OF_LIGHT_MPS;
                 re += ACTOR_SCATTER * theta.cos();
                 im += ACTOR_SCATTER * theta.sin();
             }
@@ -327,6 +340,20 @@ impl CsiSource for SimulatorSource {
     fn shutdown(&mut self) {
         self.stopped = true;
     }
+}
+
+/// The nominal centre frequency of a channel, in hertz.
+///
+/// This is the RF reference the scatterer phase is measured against, so the
+/// synthesised CSI carries the physical `2π·f·Δd/c` sensitivity. It mirrors the
+/// transport seam's band/channel mapping.
+fn centre_freq_hz(band: Band, channel: u8) -> f64 {
+    let mhz = match band {
+        Band::B2G4 => 2_407.0 + f64::from(channel) * 5.0,
+        Band::B5G => 5_000.0 + f64::from(channel) * 5.0,
+        Band::Unknown => 0.0,
+    };
+    mhz * 1e6
 }
 
 /// The number of ticks a scene covers.

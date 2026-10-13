@@ -46,12 +46,16 @@ pub struct SensingConfig {
     pub grid_slots: u32,
     /// The minimum contributing frames a node needs before it can vote.
     pub min_frames_per_node: usize,
-    /// The per-node presence-energy threshold. A node's mean amplitude at this
-    /// value is odds 1:1; above it the node votes present.
-    pub presence_threshold: f64,
-    /// The log-odds scale of the presence energy: one unit of energy above the
-    /// threshold adds `1 / presence_scale` logits.
-    pub presence_scale: f64,
+    /// The per-node presence-motion threshold: the temporal standard deviation
+    /// of the window's amplitude (averaged over subcarriers) at which a node's
+    /// evidence is odds 1:1. A person's motion and breathing make the CSI
+    /// amplitude fluctuate above the static multipath, so that variability is
+    /// the presence cue; a raw mean-amplitude threshold is not scale-robust.
+    pub presence_motion_threshold: f64,
+    /// The log-odds scale of the presence motion: one unit of amplitude
+    /// standard deviation above the threshold adds `1 / presence_motion_scale`
+    /// logits.
+    pub presence_motion_scale: f64,
     /// The pooled prior log-odds for an uncalibrated room; `0` means `p = 0.5`
     /// ("unknown"), never "absent" (`fusion-sync.md` §2.2).
     pub prior_logit: f64,
@@ -71,6 +75,14 @@ pub struct SensingConfig {
     pub max_count: u8,
     /// The base fusion weight of a healthy node.
     pub node_weight: f64,
+    /// Whether the core estimates vitals (breathing and heart rate) per window
+    /// (slice 2). Off by default, so slice 1 emits presence and count only.
+    pub vitals_enabled: bool,
+    /// The accumulation span of one vitals estimate, in nanoseconds. Vital-rate
+    /// estimation needs several respiratory cycles, so this is longer than the
+    /// presence window hop. Vitals are computed from the same frames as
+    /// presence, accumulated over this span.
+    pub vitals_window_ns: u64,
     /// The provenance recorded on each measurement.
     pub measurement: MeasurementConfig,
 }
@@ -82,12 +94,15 @@ impl Default for SensingConfig {
             grid_interval_ns: 50_000_000,
             grid_slots: 20,
             min_frames_per_node: 3,
-            // The thresholds are tuned to the deterministic simulator's
-            // amplitude scale and reported in the slice-1 write-up; they are a
-            // starting point, not a claim. Global calibration (slice 3) removes
-            // the need for an absolute per-home level.
-            presence_threshold: 1.2,
-            presence_scale: 0.06,
+            // The motion threshold is tuned to the deterministic simulator's
+            // amplitude scale; it is a starting point, not a claim. The cue is
+            // the window's amplitude variability: a moving occupant measures
+            // ~0.22 and an empty room ~0.03 (the physical simulator of
+            // `capture-and-firmware.md` §7.2), so 0.10 sits between them.
+            // Global calibration (slice 3) removes the need for an absolute
+            // per-home level.
+            presence_motion_threshold: 0.10,
+            presence_motion_scale: 0.03,
             prior_logit: 0.0,
             logit_clamp: 4.0,
             p_lo: 0.2,
@@ -95,6 +110,10 @@ impl Default for SensingConfig {
             t_hold: 1,
             max_count: aquila_types::MAX_COUNT_V1,
             node_weight: 1.0,
+            vitals_enabled: false,
+            // Fifteen seconds is ~3.7 respiratory cycles at 0.25 Hz: enough to
+            // resolve the rate, and short enough to track it.
+            vitals_window_ns: 15_000_000_000,
             measurement: MeasurementConfig::default(),
         }
     }
@@ -122,8 +141,8 @@ impl SensingConfig {
             return Err(bad("min_frames_per_node must be at least 1"));
         }
         for (name, value) in [
-            ("presence_threshold", self.presence_threshold),
-            ("presence_scale", self.presence_scale),
+            ("presence_motion_threshold", self.presence_motion_threshold),
+            ("presence_motion_scale", self.presence_motion_scale),
             ("prior_logit", self.prior_logit),
             ("logit_clamp", self.logit_clamp),
             ("p_lo", self.p_lo),
@@ -134,8 +153,8 @@ impl SensingConfig {
                 return Err(bad(&format!("{name} must be finite")));
             }
         }
-        if self.presence_scale <= 0.0 {
-            return Err(bad("presence_scale must be positive"));
+        if self.presence_motion_scale <= 0.0 {
+            return Err(bad("presence_motion_scale must be positive"));
         }
         if self.logit_clamp <= 0.0 {
             return Err(bad("logit_clamp must be positive"));
@@ -151,6 +170,11 @@ impl SensingConfig {
         }
         if self.max_count == 0 || self.max_count > aquila_types::MAX_COUNT_V1 {
             return Err(bad("max_count must lie in 1..=MAX_COUNT_V1"));
+        }
+        if self.vitals_enabled && self.vitals_window_ns == 0 {
+            return Err(bad(
+                "vitals_window_ns must be non-zero when vitals are enabled",
+            ));
         }
         if self.measurement.commit.len() != 40
             || !self

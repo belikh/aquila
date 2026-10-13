@@ -7,7 +7,7 @@
 //! deterministically to the chunk's motion energies so the reference path stays
 //! self-contained.
 
-use aquila_types::NodeId;
+use aquila_types::{NodeId, VitalsStatus};
 
 use crate::decode::{CsiFrame, SubcarrierLayout};
 use crate::error::{ConfigError, SignalError};
@@ -19,6 +19,9 @@ use crate::phase::{sanitise_phase, unwrap_phase};
 use crate::resample::resample_uniform;
 use crate::selection::{select_subcarriers, SubcarrierFeatureMatrix};
 use crate::spectrogram::{bvp_track, stft, BvpSample, StftConfig};
+use crate::vitals::{
+    estimate_vitals, VitalEstimate, VitalsConfig, VitalsEstimates, VitalsParams,
+};
 
 /// A sequence anomaly surfaced from the transport, never enforced destructively
 /// (`signal.md` §4.2).
@@ -108,6 +111,8 @@ pub struct Config {
     pub stft_hop: usize,
     /// The number of subcarriers to select.
     pub select_k: usize,
+    /// The vitals-estimation parameters (bands, search step, SNR floor).
+    pub vitals: VitalsParams,
 }
 
 impl Config {
@@ -123,6 +128,18 @@ impl Config {
             stft_window: 32,
             stft_hop: 8,
             select_k: 8,
+            vitals: VitalsParams::default(),
+        }
+    }
+
+    /// The resolved vitals-estimation configuration for this pipeline.
+    #[must_use]
+    pub fn vitals_config(&self) -> VitalsConfig {
+        VitalsConfig {
+            band_breathing: self.band_breathing,
+            band_heart: self.band_heart,
+            fs_hz: self.uniform_fs_hz,
+            params: self.vitals,
         }
     }
 
@@ -140,6 +157,17 @@ impl Config {
             band.validate(self.uniform_fs_hz)?;
             // Build the section once so an unstable filter is rejected here.
             let _ = BiquadCoeffs::bandpass(band.lo_hz, band.hi_hz, self.uniform_fs_hz)?;
+        }
+        if !self.vitals.search_step_hz.is_finite()
+            || self.vitals.search_step_hz <= 0.0
+            || self.vitals.min_samples == 0
+            || !self.vitals.min_snr_db.is_finite()
+            || !self.vitals.confidence_scale_db.is_finite()
+            || self.vitals.confidence_scale_db <= 0.0
+            || self.vitals.stft_window == 0
+            || self.vitals.stft_hop == 0
+        {
+            return Err(ConfigError::BadVitalsParams);
         }
         Ok(())
     }
@@ -160,6 +188,8 @@ pub struct NodeFeatures {
     pub breathing: Vec<BvpSample>,
     /// Heart-rate candidates over time.
     pub heart: Vec<BvpSample>,
+    /// The deterministic breathing and heart rate estimates for the chunk.
+    pub vitals: VitalsEstimates,
 }
 
 /// The assembled features for a chunk.
@@ -198,6 +228,8 @@ impl Features {
             push_f32s(&mut out, &node.motion_energy);
             push_bvp(&mut out, &node.breathing);
             push_bvp(&mut out, &node.heart);
+            push_vital(&mut out, &node.vitals.breathing);
+            push_vital(&mut out, &node.vitals.heart);
         }
         push_len(&mut out, self.anomalies.len());
         for anomaly in &self.anomalies {
@@ -235,6 +267,25 @@ fn push_f32s(out: &mut Vec<u8>, values: &[f32]) {
     push_len(out, values.len());
     for &v in values {
         out.extend_from_slice(&v.to_bits().to_le_bytes());
+    }
+}
+
+fn push_vital(out: &mut Vec<u8>, estimate: &VitalEstimate) {
+    out.extend_from_slice(&estimate.rate_hz.to_bits().to_le_bytes());
+    out.extend_from_slice(&estimate.rate_per_min.to_bits().to_le_bytes());
+    out.extend_from_slice(&estimate.confidence.to_bits().to_le_bytes());
+    out.extend_from_slice(&estimate.snr_db.to_bits().to_le_bytes());
+    out.push(status_code(estimate.status));
+}
+
+fn status_code(status: VitalsStatus) -> u8 {
+    match status {
+        VitalsStatus::Ok => 0,
+        VitalsStatus::InsufficientSignal => 1,
+        VitalsStatus::MotionArtifact => 2,
+        VitalsStatus::NoSubject => 3,
+        VitalsStatus::CalibrationStale => 4,
+        VitalsStatus::Unknown => 255,
     }
 }
 
@@ -299,6 +350,7 @@ pub fn process(
         hop: cfg.stft_hop,
         fs_hz: cfg.uniform_fs_hz,
     };
+    let vitals_cfg = cfg.vitals_config();
 
     // Group by node, preserving first-appearance order.
     let mut groups: Vec<(NodeId, Vec<&CsiFrame>)> = Vec::new();
@@ -362,8 +414,12 @@ pub fn process(
         let selected = select_subcarriers(&matrix, cfg.select_k).selected;
 
         // Mean motion series across the selected bins, band-limited per band.
-        let (breathing, heart) = if selected.is_empty() {
-            (Vec::new(), Vec::new())
+        let (breathing, heart, vitals) = if selected.is_empty() {
+            (
+                Vec::new(),
+                Vec::new(),
+                estimate_vitals(&[], &vitals_cfg),
+            )
         } else {
             let grid_len = motion_series
                 .first()
@@ -388,6 +444,7 @@ pub fn process(
             (
                 bvp_track(&breath_spec, cfg.band_breathing),
                 bvp_track(&heart_spec, cfg.band_heart),
+                estimate_vitals(&mean_series, &vitals_cfg),
             )
         };
 
@@ -398,6 +455,7 @@ pub fn process(
             motion_energy,
             breathing,
             heart,
+            vitals,
         });
     }
 

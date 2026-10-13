@@ -26,8 +26,8 @@ use aquila_metrics::{
 use aquila_signal::{Calibration as SignalCalibration, Config as SignalConfig};
 use aquila_sources::{CsiSource, FrameOrEnd};
 use aquila_types::{
-    Clock, Event, EventKind, EventPayload, EventScope, RoomId, SensingScope,
-    Topology as ContractTopology, Witness,
+    Clock, CsiEnvelope, Estimate, Event, EventKind, EventPayload, EventScope, RoomId, SensingScope,
+    TimeSpan, Topology as ContractTopology, VitalsReading, VitalsStatus, Witness,
 };
 
 use crate::calibration::CalibrationReport;
@@ -80,6 +80,14 @@ pub struct Sensing {
     signal_cal: SignalCalibration,
     rooms: Vec<RoomId>,
     previous: BTreeMap<RoomId, RoomState>,
+    /// Per-room rolling buffers of the envelopes vitals are accumulated over.
+    vitals_buffers: BTreeMap<RoomId, Vec<CsiEnvelope>>,
+    /// The core time at which each room's vitals buffer first saw a frame, so
+    /// readiness is measured from the start of accumulation, not from the
+    /// (trimmed) buffer head.
+    vitals_first_seen: BTreeMap<RoomId, u64>,
+    /// The number of vitals windows estimated so far.
+    vitals_windows: usize,
     windows_processed: usize,
     finished: bool,
 }
@@ -92,6 +100,12 @@ impl Sensing {
     /// [`aquila_geometry::Topology`] itself, so a caller needs no geometry
     /// dependency. `pose` and `vitals` are optional because slice 1 only decides
     /// presence and count.
+    ///
+    /// When [`SensingConfig::vitals_enabled`] is set the slice-2 v1 path uses
+    /// the deterministic DSP estimator in `aquila-signal` directly, so the
+    /// supplied `vitals` model is not consulted yet: the [`VitalsModel`] seam
+    /// is retained for learned models that will replace the estimator without
+    /// changing this interface.
     ///
     /// # Errors
     ///
@@ -137,6 +151,9 @@ impl Sensing {
             signal_cal: SignalCalibration::default(),
             rooms,
             previous: BTreeMap::new(),
+            vitals_buffers: BTreeMap::new(),
+            vitals_first_seen: BTreeMap::new(),
+            vitals_windows: 0,
             windows_processed: 0,
             finished: false,
         })
@@ -238,6 +255,12 @@ impl Sensing {
         self.windows_processed
     }
 
+    /// The number of vitals windows estimated so far.
+    #[must_use]
+    pub const fn vitals_windows(&self) -> usize {
+        self.vitals_windows
+    }
+
     /// The optional pose model.
     #[must_use]
     pub const fn pose_model(&self) -> Option<&Arc<dyn PoseModel>> {
@@ -287,8 +310,8 @@ impl Sensing {
             if sensing_frame.frames.len() < self.config.min_frames_per_node {
                 continue;
             }
-            let logit = (feature.presence_energy - self.config.presence_threshold)
-                / self.config.presence_scale;
+            let logit = (feature.amplitude_std - self.config.presence_motion_threshold)
+                / self.config.presence_motion_scale;
             let presence_probability = fusion::sigmoid(logit);
             let weight = self.config.node_weight.clamp(0.0, 1.0) * self.sync.weight(node);
             let count_pmf = fusion::node_count_pmf(presence_probability, max_count);
@@ -415,7 +438,236 @@ impl Sensing {
             stamp,
         )?;
 
+        if self.config.vitals_enabled {
+            emitted += self.process_vitals(batch, stamp)?;
+        }
+
         Ok(emitted)
+    }
+
+    /// Accumulate this window's frames and, once a room has a full vitals span,
+    /// estimate breathing and heart rate from exactly those frames.
+    ///
+    /// Vitals ride the same [`WindowBatch`] as presence: the envelopes appended
+    /// here are the same [`CsiEnvelope`]s the presence loop consumes, on the
+    /// same core clock, so vitals are not a parallel path
+    /// (`roadmap.md`, Slice 2). Each room's estimate is computed by
+    /// [`aquila_signal::process`] over the accumulated buffer, then the
+    /// highest-confidence node estimate per band is reported. A reading with a
+    /// non-`Ok` status carries no value; only `Ok` readings are emitted
+    /// (`data-contracts.md` §5).
+    fn process_vitals(
+        &mut self,
+        batch: &WindowBatch,
+        stamp: Timestamp,
+    ) -> Result<usize, SensingError> {
+        let window_ns = self.config.vitals_window_ns;
+        let cutoff = batch.end.0.saturating_sub(window_ns);
+
+        // Append this window's per-node envelopes, grouped by room, and note
+        // which rooms saw frames (so a silent room is not re-estimated).
+        let mut touched: std::collections::BTreeSet<RoomId> = std::collections::BTreeSet::new();
+        for sensing_frame in &batch.frames {
+            let SensingScope::Node(node) = sensing_frame.scope else {
+                continue;
+            };
+            let Some(room) = self.topology.room_of(node).value.cloned() else {
+                continue;
+            };
+            touched.insert(room.clone());
+            self.vitals_first_seen.entry(room.clone()).or_insert(
+                sensing_frame
+                    .frames
+                    .first()
+                    .map_or(batch.end.0, |env| env.host_rx_mono_ns),
+            );
+            let buffer = self.vitals_buffers.entry(room).or_default();
+            buffer.extend(sensing_frame.frames.iter().cloned());
+        }
+
+        let mut emitted = 0usize;
+        for room in touched {
+            // Trim the buffer to the trailing vitals span.
+            if let Some(buffer) = self.vitals_buffers.get_mut(&room) {
+                let keep_from = buffer
+                    .iter()
+                    .position(|env| env.host_rx_mono_ns >= cutoff)
+                    .unwrap_or(buffer.len());
+                buffer.drain(0..keep_from);
+            }
+            let Some(first_seen) = self.vitals_first_seen.get(&room).copied() else {
+                continue;
+            };
+            // Ready once a full span has been observed since accumulation
+            // began; a trimmed buffer spans slightly less than the window.
+            if batch.end.0.saturating_sub(first_seen) < window_ns {
+                continue;
+            }
+            let buffer = match self.vitals_buffers.get(&room) {
+                Some(buffer) if buffer.len() >= 2 => buffer.clone(),
+                _ => continue,
+            };
+            let start_ns = buffer.first().map_or(0, |env| env.host_rx_mono_ns);
+            let end_ns = buffer.last().map_or(0, |env| env.host_rx_mono_ns);
+            if end_ns <= start_ns {
+                continue;
+            }
+
+            // The same signal pipeline as presence, over the accumulated span.
+            let chunk = crate::bridge::to_signal_chunk(&buffer);
+            let Ok(features) =
+                aquila_signal::process(&chunk, &self.signal_cal, &self.signal_config)
+            else {
+                continue;
+            };
+
+            // Highest-confidence node estimate per band.
+            let mut best_breathing: Option<aquila_signal::VitalEstimate> = None;
+            let mut best_heart: Option<aquila_signal::VitalEstimate> = None;
+            for node_features in &features.nodes {
+                let breathing = node_features.vitals.breathing;
+                if breathing.is_ok()
+                    && best_breathing.is_none_or(|best| breathing.confidence > best.confidence)
+                {
+                    best_breathing = Some(breathing);
+                }
+                let heart = node_features.vitals.heart;
+                if heart.is_ok() && best_heart.is_none_or(|best| heart.confidence > best.confidence)
+                {
+                    best_heart = Some(heart);
+                }
+            }
+
+            let breathing = best_breathing
+                .filter(|estimate| (4.0..=60.0).contains(&estimate.rate_per_min))
+                .map(|estimate| Estimate {
+                    value: estimate.rate_per_min,
+                    confidence: estimate.confidence,
+                });
+            let heart_rate = best_heart
+                .filter(|estimate| (30.0..=220.0).contains(&estimate.rate_per_min))
+                .map(|estimate| Estimate {
+                    value: estimate.rate_per_min,
+                    confidence: estimate.confidence,
+                });
+            let status = if breathing.is_some() || heart_rate.is_some() {
+                VitalsStatus::Ok
+            } else {
+                VitalsStatus::InsufficientSignal
+            };
+
+            let reading = VitalsReading {
+                subject: None,
+                room: room.clone(),
+                span: TimeSpan {
+                    start_mono_ns: start_ns,
+                    end_mono_ns: end_ns,
+                    start_unix_ms: (start_ns / 1_000_000) as i64,
+                    end_unix_ms: (end_ns / 1_000_000) as i64,
+                },
+                breathing,
+                heart_rate,
+                status,
+                witness: Witness::Measured,
+            };
+            reading.validate()?;
+
+            self.vitals_windows += 1;
+            self.record(
+                "vitals.window.count",
+                MeasurementValue::Count(self.vitals_windows as u64),
+                "count",
+                Grade::Deterministic,
+                stamp,
+            )?;
+            self.record(
+                "vitals.window.frames",
+                MeasurementValue::Count(buffer.len() as u64),
+                "count",
+                Grade::Deterministic,
+                stamp,
+            )?;
+
+            let t_ms = (batch.end.0 / 1_000_000) as i64;
+            if let Some(estimate) = &reading.breathing {
+                self.emit_vital(&room, "breathing_rate", estimate.value, "brpm", t_ms)?;
+                emitted += 1;
+                self.record(
+                    "vitals.breathing.brpm",
+                    MeasurementValue::Scalar(f64::from(estimate.value)),
+                    "brpm",
+                    Grade::Statistical,
+                    stamp,
+                )?;
+                self.record(
+                    "vitals.breathing.confidence",
+                    MeasurementValue::Scalar(f64::from(estimate.confidence)),
+                    "ratio",
+                    Grade::Statistical,
+                    stamp,
+                )?;
+            }
+            if let Some(estimate) = &reading.heart_rate {
+                self.emit_vital(&room, "heart_rate", estimate.value, "bpm", t_ms)?;
+                emitted += 1;
+                self.record(
+                    "vitals.heart.bpm",
+                    MeasurementValue::Scalar(f64::from(estimate.value)),
+                    "bpm",
+                    Grade::Statistical,
+                    stamp,
+                )?;
+                self.record(
+                    "vitals.heart.confidence",
+                    MeasurementValue::Scalar(f64::from(estimate.confidence)),
+                    "ratio",
+                    Grade::Statistical,
+                    stamp,
+                )?;
+            }
+        }
+
+        Ok(emitted)
+    }
+
+    /// Emit one vitals event carrying a measured rate.
+    fn emit_vital(
+        &mut self,
+        room: &RoomId,
+        metric: &str,
+        value: f32,
+        unit: &str,
+        t_ms: i64,
+    ) -> Result<(), SensingError> {
+        let home = self.topology.home().id.clone();
+        let event = Event {
+            id: format!(
+                "{}:vital:{}:{}:{}",
+                home.as_str(),
+                room.as_str(),
+                metric,
+                t_ms
+            ),
+            home,
+            t_unix_ms: t_ms,
+            dedup_key: format!(
+                "{}:vital:{}:{}",
+                self.topology.home().id.as_str(),
+                room.as_str(),
+                metric
+            ),
+            scope: EventScope::Room(room.clone()),
+            kind: EventKind::VitalAlert,
+            payload: EventPayload::Vitals {
+                metric: metric.to_string(),
+                value,
+                unit: unit.to_string(),
+            },
+            witness: Witness::Measured,
+        };
+        event.validate()?;
+        self.output.emit(&event)?;
+        Ok(())
     }
 
     /// Build and emit one edge-triggered event.

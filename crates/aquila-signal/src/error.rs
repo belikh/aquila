@@ -105,6 +105,10 @@ pub enum ConfigError {
     /// The STFT window and hop must both be non-zero.
     #[error("stft window and hop must both be non-zero")]
     BadStftShape,
+    /// A vitals-estimation parameter is invalid: a zero sample floor, a
+    /// non-positive confidence scale, or a non-finite SNR floor.
+    #[error("vitals-estimation parameters are invalid")]
+    BadVitalsParams,
     /// A section's poles are not strictly inside the unit circle.
     #[error("filter poles are not strictly inside the unit circle")]
     UnstableFilter,
