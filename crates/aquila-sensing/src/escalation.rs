@@ -20,12 +20,27 @@
 //!   band across the floor's rooms — never a coherent phase combination
 //!   (§2.2, §3). A band with no estimate above the confidence floor is absent.
 //!
+//! Slice 6 closes the hierarchy floor → home (`roadmap.md`, Slice 6):
+//! [`aggregate_home`] composes the floor summaries the same way, so the whole
+//! home is presence, count and coarse location across floors with cross-floor
+//! fusion intact. The rules are the same shape, one tier up:
+//!
+//! - **Home presence** is a **soft-OR** over floors,
+//!   `p_home = 1 − Π_floors (1 − p_floor)` (§2.5).
+//! - **Home count** is the **convolution** of the floor count PMFs, then MAP +
+//!   confidence. Any floor whose count is Unknown makes the home count Unknown,
+//!   never fabricated (§2.5).
+//! - **Whole-home location** is the attributed floor, and the room within it
+//!   when that floor's own attribution is confident; it is withheld when two
+//!   strongest floors are ambiguous ([`Conflict::AmbiguousFloors`]).
+//!
 //! # Unknown is first-class
 //!
 //! A room with no usable evidence is [`RoomCoverage::Uncovered`]: its presence
 //! and count are Unknown, never `Absent`/`0`, and an uncovered room forces the
-//! floor count to Unknown with a coverage note (`fusion-sync.md` §2.5). Absence
-//! and unknown are never conflated.
+//! floor count to Unknown with a coverage note (`fusion-sync.md` §2.5). A
+//! floor with no covered room forces the home count to Unknown the same way.
+//! Absence and unknown are never conflated.
 //!
 //! # Attribution is reported, not guessed
 //!
@@ -37,6 +52,10 @@
 //! unaffected, because they do not depend on attributing presence to a single
 //! room: the ambiguity is about *which* room, not *whether* the floor is
 //! occupied.
+//!
+//! The same rule holds at home scope: when two floors are near-tied, the
+//! whole-home location is withheld ([`Conflict::AmbiguousFloors`]) while the
+//! home's presence and count still report.
 
 use std::cmp::Ordering;
 
@@ -118,6 +137,16 @@ pub enum Conflict {
         /// Each contending room and its pooled presence probability, in
         /// canonical room-id order.
         candidates: Vec<(RoomId, f64)>,
+    },
+    /// Whole-home location is ambiguous: the two strongest floor presence
+    /// probabilities lie within the home ambiguity margin, so naming a single
+    /// floor would be a false confident claim (`fusion-sync.md` §2.4.1,
+    /// `geometry-calibration.md` §4 staging). The home's aggregate presence and
+    /// convolved count are unaffected.
+    AmbiguousFloors {
+        /// Each contending floor and its soft-OR presence probability, in
+        /// canonical floor-id order.
+        candidates: Vec<(FloorId, f64)>,
     },
 }
 
@@ -270,6 +299,154 @@ pub fn aggregate_floor(
         count_confidence,
         count_pmf,
         rooms: ordered,
+        attribution,
+        conflicts,
+    }
+}
+
+/// A confidently attributed whole-home coarse location: the floor, and the room
+/// within it when that floor's own room attribution is confident
+/// (`fusion-sync.md` §2.5, home).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HomeLocation {
+    /// The attributed floor.
+    pub floor: FloorId,
+    /// The room within the attributed floor, or `None` when the floor's own
+    /// attribution is ambiguous (floor-level accuracy only) — never a false
+    /// confident room (`fusion-sync.md` §2.4.1).
+    pub room: Option<RoomId>,
+}
+
+/// The aggregated state of the whole home for one window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HomeSummary {
+    /// The soft-OR presence probability across the floors' soft-OR
+    /// probabilities; `None` when no floor has usable evidence
+    /// (`Occupancy::Unknown`, never `Absent`).
+    pub presence_probability: Option<f64>,
+    /// The MAP home count from the floor-PMF convolution, or `None` when the
+    /// home count is Unknown (any floor unknown, or no floors).
+    pub count: Option<u8>,
+    /// The convolved home count PMF's MAP probability; `0.0` when Unknown.
+    pub count_confidence: f64,
+    /// The convolved home count PMF, or `None` when Unknown.
+    pub count_pmf: Option<CountPmf>,
+    /// The floor summaries, canonical floor-id order.
+    pub floors: Vec<FloorSummary>,
+    /// The confidently attributed whole-home location, or `None` when the home
+    /// is unoccupied or the attribution is ambiguous.
+    pub attribution: Option<HomeLocation>,
+    /// Every conflict raised at home scope this window.
+    pub conflicts: Vec<Conflict>,
+}
+
+/// Aggregate the whole home from its floor summaries (`fusion-sync.md` §2.5).
+///
+/// Home presence soft-ORs the floors; home count convolves the floor count
+/// PMFs; home location attributes the strongest occupied floor, and that
+/// floor's confident room when it has one. `floor_gap` is the cross-floor
+/// attribution ambiguity margin; `presence_threshold` is the floor presence
+/// probability above which a floor counts as occupied for attribution (`p_hi`);
+/// `max_count` bounds the convolved PMF.
+///
+/// Determinism: floors are processed in canonical floor-id order, so the result
+/// is independent of the order `floors` is supplied in. An unknown floor count
+/// makes the home count Unknown, never a fabricated `0` (§2.5, §2.6).
+#[must_use]
+pub fn aggregate_home(
+    floors: &[FloorSummary],
+    floor_gap: f64,
+    presence_threshold: f64,
+    max_count: usize,
+) -> HomeSummary {
+    let mut ordered: Vec<FloorSummary> = floors.to_vec();
+    ordered.sort_by(|a, b| a.floor.cmp(&b.floor));
+
+    // Presence: soft-OR over the floors that carry a known probability.
+    let probabilities: Vec<f64> = ordered
+        .iter()
+        .filter_map(|floor| floor.presence_probability)
+        .collect();
+    let presence_probability = if probabilities.is_empty() {
+        None
+    } else {
+        Some(home_presence_probability(&probabilities))
+    };
+
+    // Count: convolution over the floors. Any floor whose count is Unknown
+    // forces the home count to Unknown rather than treating a broad,
+    // uninformative factor as evidence (`fusion-sync.md` §2.5).
+    let mut acc: Option<CountPmf> = None;
+    let mut all_known = !ordered.is_empty();
+    for floor in &ordered {
+        match &floor.count_pmf {
+            Some(pmf) => {
+                acc = Some(match acc {
+                    None => pmf.clone(),
+                    Some(previous) => convolve(&previous, pmf, max_count),
+                });
+            }
+            None => {
+                all_known = false;
+                break;
+            }
+        }
+    }
+    let count_pmf = if all_known { acc } else { None };
+    let (count, count_confidence) = match &count_pmf {
+        Some(pmf) => {
+            let (count, confidence) = pmf.map();
+            (Some(count), confidence)
+        }
+        None => (None, 0.0),
+    };
+
+    // Attribution: the strongest occupied floor, or an ambiguity conflict. The
+    // attributed floor contributes its own confident room when it has one.
+    let mut present: Vec<(FloorId, f64)> = ordered
+        .iter()
+        .filter_map(|floor| {
+            floor
+                .presence_probability
+                .filter(|p| *p >= presence_threshold)
+                .map(|p| (floor.floor.clone(), p))
+        })
+        .collect();
+    present.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    let mut attribution = None;
+    let mut conflicts = Vec::new();
+    if let Some((top_floor, top_probability)) = present.first() {
+        let mut candidates: Vec<(FloorId, f64)> = present
+            .iter()
+            .filter(|(_, p)| top_probability - p < floor_gap)
+            .map(|(floor, p)| (floor.clone(), *p))
+            .collect();
+        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        if candidates.len() >= 2 {
+            conflicts.push(Conflict::AmbiguousFloors { candidates });
+        } else {
+            let room = ordered
+                .iter()
+                .find(|floor| &floor.floor == top_floor)
+                .and_then(|floor| floor.attribution.clone());
+            attribution = Some(HomeLocation {
+                floor: top_floor.clone(),
+                room,
+            });
+        }
+    }
+
+    HomeSummary {
+        presence_probability,
+        count,
+        count_confidence,
+        count_pmf,
+        floors: ordered,
         attribution,
         conflicts,
     }

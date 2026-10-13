@@ -86,6 +86,13 @@ pub struct SensingConfig {
     /// [`Conflict::AmbiguousRooms`](crate::Conflict) is raised rather than
     /// naming a false confident room.
     pub room_gap: f64,
+    /// The whole-home attribution ambiguity margin (`fusion-sync.md` §2.4.1,
+    /// Slice 6): when the home is occupied and the two strongest floor presence
+    /// probabilities differ by less than this, the home's floor attribution is
+    /// withheld and a
+    /// [`Conflict::AmbiguousFloors`](crate::Conflict) is raised rather than
+    /// naming a false confident floor.
+    pub home_gap: f64,
     /// The v1 cap on a people count.
     pub max_count: u8,
     /// The base fusion weight of a healthy node.
@@ -156,6 +163,7 @@ impl Default for SensingConfig {
             p_hi: 0.8,
             t_hold: 1,
             room_gap: 0.15,
+            home_gap: 0.15,
             max_count: aquila_types::MAX_COUNT_V1,
             node_weight: 1.0,
             vitals_enabled: false,
@@ -230,6 +238,9 @@ impl SensingConfig {
         }
         if !(0.0..=1.0).contains(&self.room_gap) {
             return Err(bad("room_gap must lie in [0, 1]"));
+        }
+        if !(0.0..=1.0).contains(&self.home_gap) {
+            return Err(bad("home_gap must lie in [0, 1]"));
         }
         if !(0.0..=1.0).contains(&self.vitals_floor_min_confidence) {
             return Err(bad("vitals_floor_min_confidence must lie in [0, 1]"));

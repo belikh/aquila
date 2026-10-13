@@ -69,12 +69,12 @@ pub use calibration::{
 };
 pub use clock::{ManualClock, SystemClock};
 pub use config::{MeasurementConfig, SensingConfig};
-pub use engine::{FloorWindow, Sensing, StepReport};
+pub use engine::{FloorWindow, HomeWindow, Sensing, StepReport};
 pub use error::{CalibrationError, InvalidationReason, SensingError, SinkError};
 pub use escalation::{
-    aggregate_floor, aggregate_floor_vitals, convolve, floor_presence_probability,
-    home_presence_probability, Conflict, FloorSummary, FloorVitals, RoomCoverage, RoomSummary,
-    RoomVitals,
+    aggregate_floor, aggregate_floor_vitals, aggregate_home, convolve,
+    floor_presence_probability, home_presence_probability, Conflict, FloorSummary, FloorVitals,
+    HomeLocation, HomeSummary, RoomCoverage, RoomSummary, RoomVitals,
 };
 pub use fusion::{
     clamp_logit, fuse_torso_ranges, mix_count_pmf, node_count_pmf, node_fusion_weight,

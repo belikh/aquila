@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use aquila_sensing::FloorWindow;
+use aquila_sensing::{FloorWindow, HomeWindow};
 use aquila_types::{
     Event, EventKind, EventPayload, EventScope, FloorId, GroundTruthRecord, KeypointId, Pose, RoomId,
 };
@@ -718,4 +718,186 @@ fn nearest_reference<'a>(
         }
     }
     best
+}
+
+// ---------------------------------------------------------------------------
+// Whole-home scoring (`roadmap.md`, Slice 6)
+// ---------------------------------------------------------------------------
+
+/// The per-window whole-home presence truth: the home is occupied when any room
+/// is.
+fn home_presence_truth(
+    ground_truth: &[GroundTruthRecord],
+    hop_ms: i64,
+) -> BTreeMap<i64, bool> {
+    room_presence_truth(ground_truth, hop_ms)
+        .into_iter()
+        .map(|(window, rooms)| (window, rooms.values().any(|occupied| *occupied)))
+        .collect()
+}
+
+/// The per-window whole-home count truth: the sum of the home's room counts.
+fn home_count_truth(ground_truth: &[GroundTruthRecord], hop_ms: i64) -> BTreeMap<i64, u8> {
+    room_count_truth(ground_truth, hop_ms)
+        .into_iter()
+        .map(|(window, rooms)| {
+            let sum: u16 = rooms.values().map(|count| u16::from(*count)).sum();
+            (window, sum.min(u16::from(u8::MAX)) as u8)
+        })
+        .collect()
+}
+
+/// The whole-home presence changes, keyed by window, in deterministic event
+/// order. The last change in a window wins, so replay is order-canonical.
+fn home_presence_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, bool> {
+    let mut sorted: Vec<&Event> = events
+        .iter()
+        .filter(|e| e.kind == EventKind::PresenceChanged)
+        .collect();
+    sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
+    let mut changes: BTreeMap<i64, bool> = BTreeMap::new();
+    for event in sorted {
+        if let (EventScope::Home, EventPayload::Presence { occupied, .. }) =
+            (&event.scope, &event.payload)
+        {
+            changes.insert(window_index(event.t_unix_ms, hop_ms), *occupied);
+        }
+    }
+    changes
+}
+
+/// The whole-home count changes, keyed by window, in deterministic event order.
+fn home_count_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, u8> {
+    let mut sorted: Vec<&Event> = events
+        .iter()
+        .filter(|e| e.kind == EventKind::CountChanged)
+        .collect();
+    sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
+    let mut changes: BTreeMap<i64, u8> = BTreeMap::new();
+    for event in sorted {
+        if let (EventScope::Home, EventPayload::Count { people }) = (&event.scope, &event.payload) {
+            changes.insert(window_index(event.t_unix_ms, hop_ms), *people);
+        }
+    }
+    changes
+}
+
+/// Replay a scalar edge-triggered signal across the given window axis.
+fn replay_scalar<T: Clone>(
+    changes: &BTreeMap<i64, T>,
+    windows: impl Iterator<Item = i64>,
+    initial: T,
+) -> BTreeMap<i64, T> {
+    let change_windows: Vec<i64> = changes.keys().copied().collect();
+    let mut cursor = 0usize;
+    let mut state = initial;
+    let mut out: BTreeMap<i64, T> = BTreeMap::new();
+    for window in windows {
+        while cursor < change_windows.len() && change_windows[cursor] <= window {
+            state = changes[&change_windows[cursor]].clone();
+            cursor += 1;
+        }
+        out.insert(window, state.clone());
+    }
+    out
+}
+
+/// Score whole-home presence against the union of the home's room ground truth
+/// (`roadmap.md`, Slice 6; `presence.f1.home`). Home predictions come from the
+/// core's home-scoped presence events.
+#[must_use]
+pub fn home_presence_f1(
+    events: &[Event],
+    ground_truth: &[GroundTruthRecord],
+    hop_ms: i64,
+) -> PresenceScore {
+    let truth = home_presence_truth(ground_truth, hop_ms);
+    let changes = home_presence_changes(events, hop_ms);
+    let predicted = replay_scalar(&changes, truth.keys().copied(), false);
+
+    let (mut tp, mut fp, mut fn_, mut tn) = (0u64, 0u64, 0u64, 0u64);
+    for (window, actual) in &truth {
+        let guess = predicted.get(window).copied().unwrap_or(false);
+        match (guess, *actual) {
+            (true, true) => tp += 1,
+            (true, false) => fp += 1,
+            (false, true) => fn_ += 1,
+            (false, false) => tn += 1,
+        }
+    }
+    PresenceScore::from_counts(tp, fp, fn_, tn)
+}
+
+/// The mean absolute error of the whole-home count timeline against the summed
+/// room ground truth, with its paired sample count (`roadmap.md`, Slice 6;
+/// `count.mae.home`).
+#[must_use]
+pub fn home_count_mae(
+    events: &[Event],
+    ground_truth: &[GroundTruthRecord],
+    hop_ms: i64,
+) -> (f64, u64) {
+    let truth = home_count_truth(ground_truth, hop_ms);
+    let changes = home_count_changes(events, hop_ms);
+    let predicted = replay_scalar(&changes, truth.keys().copied(), 0u8);
+
+    let mut total = 0.0_f64;
+    let mut n = 0u64;
+    for (window, actual) in &truth {
+        let guess = predicted.get(window).copied().unwrap_or(0);
+        total += f64::from(actual.abs_diff(guess));
+        n += 1;
+    }
+    if n == 0 {
+        (0.0, 0)
+    } else {
+        (total / n as f64, n)
+    }
+}
+
+/// The accuracy of the core's whole-home floor attribution, over the windows
+/// where exactly one floor is truly occupied (`roadmap.md`, Slice 6).
+///
+/// Windows with zero or more than one truly-occupied floor are excluded: there
+/// is no single correct floor to attribute, so they are not scoreable and must
+/// not inflate or deflate the number. Returns `(accuracy, paired_windows)`.
+#[must_use]
+pub fn home_floor_attribution_accuracy(
+    history: &[HomeWindow],
+    ground_truth: &[GroundTruthRecord],
+    floor_rooms: &FloorRooms,
+    hop_ms: i64,
+) -> (f64, u64) {
+    let room_truth = room_presence_truth(ground_truth, hop_ms);
+
+    let mut correct = 0u64;
+    let mut total = 0u64;
+    for window in history {
+        let window_index = window_index(window.t_ms, hop_ms);
+        let Some(rooms) = room_truth.get(&window_index) else {
+            continue;
+        };
+        let mut occupied_floors: Vec<&FloorId> = floor_rooms
+            .iter()
+            .filter(|(_, ids)| ids.iter().any(|room| rooms.get(room).copied().unwrap_or(false)))
+            .map(|(floor, _)| floor)
+            .collect();
+        if occupied_floors.len() != 1 {
+            continue;
+        }
+        total += 1;
+        let attributed = window
+            .home
+            .attribution
+            .as_ref()
+            .map(|location| &location.floor);
+        if attributed == Some(occupied_floors.remove(0)) {
+            correct += 1;
+        }
+    }
+    if total == 0 {
+        (0.0, 0)
+    } else {
+        (correct as f64 / total as f64, total)
+    }
 }

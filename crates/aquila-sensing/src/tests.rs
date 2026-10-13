@@ -556,3 +556,90 @@ fn floor_vitals_take_the_highest_confidence() {
     assert!(filtered.breathing.is_none());
     assert!(filtered.heart_rate.is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Home escalation (Slice 6)
+// ---------------------------------------------------------------------------
+
+use crate::escalation::{aggregate_home, aggregate_floor, Conflict, FloorSummary, RoomSummary};
+
+/// Aggregate a floor of one-room-per-entry presence probabilities.
+fn home_test_floor(floor: &str, rooms: &[(&str, f64)]) -> FloorSummary {
+    let summaries: Vec<RoomSummary> = rooms
+        .iter()
+        .map(|(room, p)| {
+            RoomSummary::covered(Slug((*room).into()), *p, fusion::node_count_pmf(*p, 8))
+        })
+        .collect();
+    aggregate_floor(Slug(floor.into()), &summaries, 0.15, 0.8, 8)
+}
+
+#[test]
+fn home_presence_is_a_soft_or_over_floors() {
+    let ground = home_test_floor("ground", &[("kitchen", 0.5)]);
+    let first = home_test_floor("first", &[("study", 0.5)]);
+    let home = aggregate_home(&[ground, first], 0.15, 0.8, 8);
+    // 1 - (1 - 0.5)(1 - 0.5) = 0.75.
+    assert!((home.presence_probability.unwrap_or(0.0) - 0.75).abs() < 1e-12);
+}
+
+#[test]
+fn home_count_is_the_convolution_of_floor_pmfs() {
+    let ground = home_test_floor("ground", &[("kitchen", 0.999), ("lounge", 0.999)]);
+    let first = home_test_floor("first", &[("study", 0.999)]);
+    let home = aggregate_home(&[ground, first], 0.15, 0.8, 8);
+    // Two people on the ground floor convolve with one upstairs to three.
+    assert_eq!(home.count, Some(3));
+    assert!(home.presence_probability.unwrap_or(0.0) > 0.99);
+}
+
+#[test]
+fn ambiguous_floors_withhold_home_attribution() {
+    let ground = home_test_floor("ground", &[("kitchen", 0.9)]);
+    let first = home_test_floor("first", &[("study", 0.9)]);
+    let home = aggregate_home(&[ground, first], 0.15, 0.8, 8);
+    assert!(
+        home.attribution.is_none(),
+        "a near-tie must not name a false confident floor"
+    );
+    assert!(matches!(
+        home.conflicts.as_slice(),
+        [Conflict::AmbiguousFloors { .. }]
+    ));
+    // The home's presence and count are still reported.
+    assert!(home.presence_probability.unwrap_or(0.0) > 0.9);
+    assert_eq!(home.count, Some(2));
+
+    // A clear winner is attributed, with its confident room.
+    let ground = home_test_floor("ground", &[("kitchen", 0.99)]);
+    let first = home_test_floor("first", &[("study", 0.1)]);
+    let clear = aggregate_home(&[ground, first], 0.15, 0.8, 8);
+    let location = clear.attribution.expect("a confident floor");
+    assert_eq!(location.floor, Slug("ground".into()));
+    assert_eq!(location.room, Some(Slug("kitchen".into())));
+    assert!(clear.conflicts.is_empty());
+}
+
+#[test]
+fn unknown_floor_forces_unknown_home_count() {
+    let covered = home_test_floor("ground", &[("kitchen", 0.99)]);
+    let uncovered = aggregate_floor(
+        Slug("first".into()),
+        &[RoomSummary::uncovered(Slug("study".into()), 8)],
+        0.15,
+        0.8,
+        8,
+    );
+    let home = aggregate_home(&[covered, uncovered], 0.15, 0.8, 8);
+    assert_eq!(home.count, None, "an unknown floor must not be counted as zero");
+    // Presence is still the soft-OR over the covered floor.
+    assert!(home.presence_probability.unwrap_or(0.0) > 0.9);
+}
+
+#[test]
+fn home_with_no_floors_is_unknown_not_absent() {
+    let home = aggregate_home(&[], 0.15, 0.8, 8);
+    assert!(home.presence_probability.is_none());
+    assert!(home.count.is_none());
+    assert!(home.attribution.is_none());
+}

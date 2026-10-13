@@ -38,7 +38,8 @@ use crate::calibration::{
 use crate::config::SensingConfig;
 use crate::error::SensingError;
 use crate::escalation::{
-    aggregate_floor, aggregate_floor_vitals, Conflict, FloorSummary, RoomSummary, RoomVitals,
+    aggregate_floor, aggregate_floor_vitals, aggregate_home, Conflict, FloorSummary, HomeSummary,
+    RoomSummary, RoomVitals,
 };
 use crate::features::extract_motion;
 use crate::fusion::{self, NodeEvidence};
@@ -63,6 +64,9 @@ pub struct StepReport {
     /// Floor summaries aggregated in this step's window (0 when no window was
     /// processed), one per floor in the topology.
     pub floors_summarised: usize,
+    /// Whether the whole-home summary was aggregated in this step's window:
+    /// `1` when a window was processed, `0` otherwise (Slice 6).
+    pub home_summarised: usize,
     /// Whether the source reached end-of-stream.
     pub ended: bool,
 }
@@ -75,6 +79,16 @@ pub struct FloorWindow {
     pub t_ms: i64,
     /// The floor summaries for that window, in canonical floor order.
     pub floors: Vec<FloorSummary>,
+}
+
+/// One window's whole-home summary, retained for scoring and inspection
+/// (`roadmap.md`, Slice 6).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HomeWindow {
+    /// The window's start on the core clock, in milliseconds.
+    pub t_ms: i64,
+    /// The whole-home summary for that window.
+    pub home: HomeSummary,
 }
 
 /// The per-unit state carried between windows for hysteresis. Reused for both
@@ -114,6 +128,10 @@ pub struct Sensing {
     floor_previous: BTreeMap<FloorId, RoomState>,
     /// The per-window floor summaries, in processing order (Slice 5).
     floor_history: Vec<FloorWindow>,
+    /// The whole-home hysteresis state (Slice 6).
+    home_previous: RoomState,
+    /// The per-window whole-home summaries, in processing order (Slice 6).
+    home_history: Vec<HomeWindow>,
     /// Per-room rolling buffers of the envelopes vitals are accumulated over.
     vitals_buffers: BTreeMap<RoomId, Vec<CsiEnvelope>>,
     /// The core time at which each room's vitals buffer first saw a frame, so
@@ -210,6 +228,8 @@ impl Sensing {
             floor_rooms,
             floor_previous: BTreeMap::new(),
             floor_history: Vec::new(),
+            home_previous: RoomState::default(),
+            home_history: Vec::new(),
             vitals_buffers: BTreeMap::new(),
             vitals_first_seen: BTreeMap::new(),
             vitals_windows: 0,
@@ -250,6 +270,7 @@ impl Sensing {
                     report.windows_emitted = 1;
                     report.events_emitted = self.process_batch(&batch)?;
                     report.floors_summarised = self.floor_history.last().map_or(0, |w| w.floors.len());
+                    report.home_summarised = 1;
                 }
                 self.finished = true;
                 Ok(report)
@@ -267,6 +288,7 @@ impl Sensing {
                     report.windows_emitted = 1;
                     report.events_emitted = self.process_batch(&batch)?;
                     report.floors_summarised = self.floor_history.last().map_or(0, |w| w.floors.len());
+                    report.home_summarised = 1;
                 }
                 Ok(report)
             }
@@ -490,6 +512,20 @@ impl Sensing {
         &self.floor_history
     }
 
+    /// The whole-home summary for the most recently processed window. `None`
+    /// before the first window closes.
+    #[must_use]
+    pub fn home(&self) -> Option<&HomeSummary> {
+        self.home_history.last().map(|window| &window.home)
+    }
+
+    /// The per-window whole-home-summary history, in processing order
+    /// (Slice 6).
+    #[must_use]
+    pub fn home_history(&self) -> &[HomeWindow] {
+        &self.home_history
+    }
+
     /// The optional pose model.
     #[must_use]
     pub const fn pose_model(&self) -> Option<&Arc<dyn PoseModel>> {
@@ -629,6 +665,14 @@ impl Sensing {
 
         // 3. Floor escalation: rooms compose into floors (Slice 5).
         emitted += self.process_floors(&room_summaries, t_ms, stamp, max_count)?;
+
+        // 4. Home escalation: floors compose into the whole home (Slice 6).
+        let floor_summaries = self
+            .floor_history
+            .last()
+            .map(|window| window.floors.clone())
+            .unwrap_or_default();
+        emitted += self.process_home(&floor_summaries, t_ms, stamp, max_count)?;
 
         self.record(
             "window.frames",
@@ -834,9 +878,151 @@ impl Sensing {
                         stamp,
                     )?;
                 }
+                // A whole-home ambiguity is reported at home scope, not here.
+                Conflict::AmbiguousFloors { .. } => {}
             }
         }
         Ok(emitted)
+    }
+
+    /// Aggregate this window's floor summaries into the whole home, apply home
+    /// hysteresis, emit home-scoped events, and record home and whole-home
+    /// attribution measurements (`fusion-sync.md` §2.5; `roadmap.md`, Slice 6).
+    ///
+    /// Home presence soft-ORs the floors, home count convolves the floor count
+    /// PMFs, and the whole-home location names the strongest occupied floor (and
+    /// its confident room), withheld when two floors are ambiguous. The
+    /// hierarchy is read from the topology, so this is data-driven with no
+    /// per-floor special case. Cross-floor results are reported and labelled,
+    /// never gated (`evaluation.md` §5.3).
+    fn process_home(
+        &mut self,
+        floors: &[FloorSummary],
+        t_ms: i64,
+        stamp: Timestamp,
+        max_count: usize,
+    ) -> Result<usize, SensingError> {
+        let summary = aggregate_home(floors, self.config.home_gap, self.config.p_hi, max_count);
+        let mut emitted = 0usize;
+
+        let (occupied_changed, count_changed, occupied, count, probability) = {
+            let state = &mut self.home_previous;
+            let mut occupied_changed = false;
+            if let Some(p) = summary.presence_probability {
+                state.presence_probability = p;
+                let desired_occupied = if state.occupied {
+                    p >= self.config.p_lo
+                } else {
+                    p >= self.config.p_hi
+                };
+                occupied_changed = debounce_occupied(state, desired_occupied, self.config.t_hold);
+            }
+            let mut count_changed = false;
+            if let Some(c) = summary.count {
+                let desired_count = if state.occupied { c } else { 0 };
+                count_changed = debounce_count(state, desired_count, self.config.t_hold);
+            }
+            (
+                occupied_changed,
+                count_changed,
+                state.occupied,
+                state.count,
+                summary.presence_probability,
+            )
+        };
+
+        if occupied_changed {
+            if let Some(p) = probability {
+                self.emit_home(
+                    EventKind::PresenceChanged,
+                    EventPayload::Presence {
+                        occupied,
+                        probability: p as f32,
+                    },
+                    t_ms,
+                )?;
+                emitted += 1;
+            }
+        }
+        if count_changed {
+            self.emit_home(
+                EventKind::CountChanged,
+                EventPayload::Count { people: count },
+                t_ms,
+            )?;
+            emitted += 1;
+        }
+
+        if let Some(p) = summary.presence_probability {
+            self.record(
+                "home.presence",
+                MeasurementValue::Scalar(p),
+                "ratio",
+                Grade::Statistical,
+                stamp,
+            )?;
+        }
+        if let Some(count) = summary.count {
+            self.record(
+                "home.count",
+                MeasurementValue::Count(u64::from(count)),
+                "count",
+                Grade::Statistical,
+                stamp,
+            )?;
+            self.record(
+                "home.count.confidence",
+                MeasurementValue::Scalar(summary.count_confidence),
+                "ratio",
+                Grade::Statistical,
+                stamp,
+            )?;
+        }
+        self.record(
+            "home.attribution",
+            MeasurementValue::Flag(summary.attribution.is_some()),
+            "flag",
+            Grade::Deterministic,
+            stamp,
+        )?;
+        for conflict in &summary.conflicts {
+            if let Conflict::AmbiguousFloors { candidates } = conflict {
+                self.record(
+                    "home.conflict.ambiguous_floors",
+                    MeasurementValue::Count(candidates.len() as u64),
+                    "count",
+                    Grade::Deterministic,
+                    stamp,
+                )?;
+            }
+        }
+
+        self.home_history.push(HomeWindow { t_ms, home: summary });
+        Ok(emitted)
+    }
+
+    /// Build and emit one edge-triggered whole-home-scoped event.
+    fn emit_home(
+        &mut self,
+        kind: EventKind,
+        payload: EventPayload,
+        t_ms: i64,
+    ) -> Result<(), SensingError> {
+        let home = self.topology.home().id.clone();
+        let kind_label = format!("{kind:?}");
+        let event = Event {
+            id: format!("{}:{kind_label}:home:{t_ms}", home.as_str()),
+            home: home.clone(),
+            t_unix_ms: t_ms,
+            dedup_key: format!("{}:{kind_label}:home", home.as_str()),
+            scope: EventScope::Home,
+            kind,
+            payload,
+            witness: Witness::Measured,
+        };
+        event.validate()?;
+        self.output.emit(&event)?;
+        Ok(())
     }
 
     /// The floor a room belongs to, from the topology. `None` for a room that

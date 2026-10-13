@@ -26,12 +26,12 @@ mod tests;
 
 pub use clock::FakeClock;
 pub use fixture::{Fixture, FixtureError};
-pub use generator::{topology_for, DeterministicCsiGenerator};
+pub use generator::{topology_for, topology_for_floors, DeterministicCsiGenerator, FloorPlan};
 pub use metrics::RecordingMetricSink;
 pub use models::{FakePoseModel, FakeVitalsModel};
 pub use scoring::{
-    count_mae, floor_count_mae, floor_presence_f1, presence_f1, room_attribution_accuracy,
-    torso_pck20, torso_span, vitals_mae, vitals_reference, window_index, FloorRooms, PckScore,
-    PresenceScore, TorsoPoint,
+    count_mae, floor_count_mae, floor_presence_f1, home_count_mae, home_floor_attribution_accuracy,
+    home_presence_f1, presence_f1, room_attribution_accuracy, torso_pck20, torso_span, vitals_mae,
+    vitals_reference, window_index, FloorRooms, PckScore, PresenceScore, TorsoPoint,
 };
 pub use sink::CollectorSink;

@@ -16,15 +16,17 @@ use aquila_metrics::{
 };
 use aquila_sensing::{
     calibrate, topology_digest, CalibrationError, CalibrationExpectation, CalibrationInputs,
-    CalibrationRequest, CalibrationStore, InvalidationReason, Sensing, SensingConfig, Topology,
+    CalibrationRequest, CalibrationStore, HomeWindow, InvalidationReason, Sensing, SensingConfig,
+    Topology,
 };
 use aquila_simulator::{Actor, Body, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SimConfig};
 use aquila_types::{Band, CsiEnvelope, Event, FloorId, GroundTruthRecord, NodeId, RoomId, Slug};
 
 use crate::{
-    count_mae, floor_count_mae, floor_presence_f1, presence_f1, room_attribution_accuracy,
-    torso_pck20, topology_for, vitals_mae, vitals_reference, CollectorSink, DeterministicCsiGenerator,
-    FakeClock, Fixture, RecordingMetricSink,
+    count_mae, floor_count_mae, floor_presence_f1, home_count_mae, home_floor_attribution_accuracy,
+    home_presence_f1, presence_f1, room_attribution_accuracy, torso_pck20, topology_for,
+    topology_for_floors, vitals_mae, vitals_reference, CollectorSink, DeterministicCsiGenerator,
+    FakeClock, Fixture, FloorPlan, RecordingMetricSink,
 };
 
 /// The window hop used to align predictions with ground truth, in milliseconds.
@@ -1353,5 +1355,314 @@ fn floor_measurements_are_recorded() {
         measurement
             .validate()
             .expect("recorded measurement is valid");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 6 — cross-floor / whole-home (`roadmap.md`, Slice 6)
+// ---------------------------------------------------------------------------
+
+/// The clock step between replayed whole-home frames, in nanoseconds.
+///
+/// Twelve nodes share each 20 Hz simulation tick, so one tick spans ~50 ms of
+/// core time (`12 × 4_166_666 ns`), which keeps the core's one-second windows
+/// aligned with the simulator's ground-truth grid.
+const HOME_STEP_NS: u64 = 4_166_666;
+
+/// A deterministic three-floor scene, two rooms per floor and two nodes per
+/// room (twelve nodes, the reference ~9+ scale). Three actors walk through one
+/// room on each floor on disjoint spans, so the home is occupied on one floor
+/// at a time, unambiguous for floor attribution, with truly-empty gaps.
+fn home_scene() -> SceneScript {
+    let kitchen: Slug = Slug("kitchen".to_string());
+    let lounge: Slug = Slug("lounge".to_string());
+    let study: Slug = Slug("study".to_string());
+    let bedroom: Slug = Slug("bedroom".to_string());
+    let loft: Slug = Slug("loft".to_string());
+    let landing: Slug = Slug("landing".to_string());
+
+    let node = |id: u16, room: &Slug, x: f64| NodeSpec {
+        id: NodeId(id),
+        room: room.clone(),
+        pos_m: [x, 0.0, 2.4],
+        skew_ppm: 0.0,
+        noise_scale: 1.0,
+    };
+    let walk = Motion::Walk {
+        axis: [1.0, 0.0, 0.0],
+        amplitude_m: 0.5,
+        period_s: 2.0,
+        phase_rad: 0.0,
+    };
+    let breath = Rhythm {
+        amplitude_m: 0.005,
+        rate_hz: 0.25,
+        phase_rad: 0.0,
+    };
+    let actor = |room: &Slug, from: f64, to: f64| Actor {
+        room: room.clone(),
+        position_m: [1.5, 0.0, 0.0],
+        active_from_s: from,
+        active_to_s: to,
+        motion: walk,
+        breathing: Some(breath),
+        heart: None,
+        body: None,
+    };
+
+    SceneScript {
+        name: "slice6-home".to_string(),
+        home: Slug("slice6-home".to_string()),
+        nodes: vec![
+            node(1, &kitchen, 0.3),
+            node(2, &kitchen, 3.7),
+            node(3, &lounge, 0.3),
+            node(4, &lounge, 3.7),
+            node(5, &study, 0.3),
+            node(6, &study, 3.7),
+            node(7, &bedroom, 0.3),
+            node(8, &bedroom, 3.7),
+            node(9, &loft, 0.3),
+            node(10, &loft, 3.7),
+            node(11, &landing, 0.3),
+            node(12, &landing, 3.7),
+        ],
+        actors: vec![
+            actor(&kitchen, 0.0, 6.0),
+            actor(&study, 8.0, 14.0),
+            actor(&loft, 16.0, 22.0),
+        ],
+        band: Band::B2G4,
+        channel: 6,
+        bandwidth_mhz: 20,
+        subcarriers: 64,
+        subcarrier_spacing_hz: 312_500.0,
+        tick_hz: 20.0,
+        duration_s: 24.0,
+        noise_amplitude: 0.05,
+        impairments: Impairments::default(),
+    }
+}
+
+/// The three-floor plan for [`home_scene`]: ground/first/second, two rooms each.
+fn home_floor_plans() -> Vec<FloorPlan> {
+    vec![
+        FloorPlan {
+            id: Slug("ground".to_string()),
+            name: "Ground".to_string(),
+            level: 0,
+            elevation_m: 0.0,
+            rooms: vec![
+                Slug("kitchen".to_string()),
+                Slug("lounge".to_string()),
+            ],
+        },
+        FloorPlan {
+            id: Slug("first".to_string()),
+            name: "First".to_string(),
+            level: 1,
+            elevation_m: 3.0,
+            rooms: vec![Slug("study".to_string()), Slug("bedroom".to_string())],
+        },
+        FloorPlan {
+            id: Slug("second".to_string()),
+            name: "Second".to_string(),
+            level: 2,
+            elevation_m: 6.0,
+            rooms: vec![Slug("loft".to_string()), Slug("landing".to_string())],
+        },
+    ]
+}
+
+/// The floor → rooms grouping of a scene, read from its multi-floor topology.
+fn home_floor_rooms(script: &SceneScript) -> Vec<(FloorId, Vec<RoomId>)> {
+    let topology = topology_for_floors(script, &home_floor_plans());
+    let mut map: std::collections::BTreeMap<FloorId, Vec<RoomId>> =
+        std::collections::BTreeMap::new();
+    for room in &topology.rooms {
+        map.entry(room.floor.clone()).or_default().push(room.id.clone());
+    }
+    map.into_iter().collect()
+}
+
+/// The observable result of one slice-6 whole-home run.
+struct HomeRun {
+    events: Vec<Event>,
+    measurements: Vec<Measurement>,
+    home_history: Vec<HomeWindow>,
+    ground_truth: Vec<GroundTruthRecord>,
+}
+
+/// Replay the three-floor scene through the sensing core and collect its
+/// whole-home output.
+fn run_home_tracer() -> HomeRun {
+    let script = home_scene();
+    let sim_config = SimConfig::new(2026, Slug("slice6-home".to_string()), 0, 0);
+    let generator =
+        DeterministicCsiGenerator::new(script.clone(), sim_config).expect("valid scene");
+    let fixture = Fixture::load(&generator).expect("fixture");
+
+    let clock = Arc::new(FakeClock::new(0));
+    let source = fixture.replay_source(clock.clone()).expect("replay source");
+    let collector = CollectorSink::new();
+    let metrics = RecordingMetricSink::new();
+    let event_handle = collector.handle();
+    let record_handle = metrics.handle();
+
+    let mut sensing = Sensing::new(
+        Box::new(source),
+        clock.clone(),
+        Box::new(collector),
+        Box::new(metrics),
+        None,
+        None,
+        topology_for_floors(&script, &home_floor_plans()),
+        SensingConfig::default(),
+    )
+    .expect("valid core");
+
+    loop {
+        clock.advance(HOME_STEP_NS);
+        if sensing.step().expect("step").ended {
+            break;
+        }
+    }
+    sensing.sink().expect("flush");
+
+    HomeRun {
+        events: snapshot(&event_handle),
+        measurements: snapshot(&record_handle),
+        home_history: sensing.home_history().to_vec(),
+        ground_truth: fixture.ground_truth,
+    }
+}
+
+#[test]
+fn whole_home_presence_count_and_attribution_meet_the_slice6_bars() {
+    let script = home_scene();
+    let run = run_home_tracer();
+    let floor_rooms = home_floor_rooms(&script);
+
+    let presence = home_presence_f1(&run.events, &run.ground_truth, HOP_MS);
+    let (count_mae_home, count_n) = home_count_mae(&run.events, &run.ground_truth, HOP_MS);
+    let (attribution, attribution_n) =
+        home_floor_attribution_accuracy(&run.home_history, &run.ground_truth, &floor_rooms, HOP_MS);
+
+    eprintln!(
+        "slice6 home: TP={} FP={} FN={} TN={} precision={:.3} recall={:.3} F1={:.3}; \
+home count MAE={:.3} over {} windows; floor attribution={:.3} over {} windows; events={} measurements={}",
+        presence.true_positive,
+        presence.false_positive,
+        presence.false_negative,
+        presence.true_negative,
+        presence.precision,
+        presence.recall,
+        presence.f1,
+        count_mae_home,
+        count_n,
+        attribution,
+        attribution_n,
+        run.events.len(),
+        run.measurements.len(),
+    );
+
+    // The three-floor entry criterion: at least two rooms on each of three
+    // floors, read from the topology (data, not hard-coded).
+    assert_eq!(floor_rooms.len(), 3, "the home must span three floors");
+    assert!(
+        floor_rooms.iter().all(|(_, rooms)| rooms.len() >= 2),
+        "every floor must hold at least two rooms"
+    );
+    assert_eq!(script.nodes.len(), 12, "the reference ~9+ node scale");
+
+    // The home presence gate: F1 ≥ 0.90 at reference scale.
+    assert!(
+        presence.f1 >= 0.90,
+        "whole-home presence F1 {:.3} is below the v1 bar of 0.90",
+        presence.f1
+    );
+    // Count is recorded and within the settled band (not gated further).
+    assert!(
+        count_mae_home <= 0.5,
+        "whole-home count MAE {count_mae_home:.3} exceeds the band of 0.5"
+    );
+    // Floor attribution is correct when exactly one floor is truly occupied.
+    assert!(
+        attribution_n > 0,
+        "no window had exactly one truly-occupied floor, so attribution is unscoreable"
+    );
+    assert!(
+        attribution >= 0.90,
+        "whole-home floor attribution {attribution:.3} is below 0.90"
+    );
+
+    // The home must have produced a summary each window, with a convolved count.
+    assert!(run.home_history.iter().all(|w| w.home.count.is_some()));
+
+    // The slice-6 ledger rows; this test is the reproducer.
+    let ledger = Mutex::new(Vec::new());
+    record_ledger(&ledger, "presence.f1.home", presence.f1, "score", count_n.max(1));
+    record_ledger(&ledger, "count.mae.home", count_mae_home, "people", count_n.max(1));
+    record_ledger(
+        &ledger,
+        "attribution.accuracy.floor",
+        attribution,
+        "score",
+        attribution_n.max(1),
+    );
+    let ledger = ledger.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    for name in ["presence.f1.home", "count.mae.home", "attribution.accuracy.floor"] {
+        assert!(
+            ledger.iter().any(|m| m.name.as_str() == name),
+            "the ledger must carry the {name} row"
+        );
+    }
+}
+
+#[test]
+fn home_replay_is_deterministic() {
+    let first = run_home_tracer();
+    let second = run_home_tracer();
+    assert_eq!(
+        first.events, second.events,
+        "same scene and seed must emit byte-identical whole-home events"
+    );
+    assert_eq!(first.measurements, second.measurements);
+    assert_eq!(
+        first.home_history, second.home_history,
+        "same scene and seed must produce byte-identical whole-home summaries"
+    );
+}
+
+#[test]
+fn home_measurements_are_recorded() {
+    let run = run_home_tracer();
+    assert!(
+        !run.home_history.is_empty(),
+        "at least one window must summarise the whole home"
+    );
+    for name in [
+        "sensing.home.presence",
+        "sensing.home.count",
+        "sensing.home.attribution",
+    ] {
+        assert!(
+            run.measurements.iter().any(|m| m.name.as_str() == name),
+            "the core must record the {name} Measurement row"
+        );
+    }
+    assert!(
+        run.events
+            .iter()
+            .any(|e| matches!(&e.scope, aquila_types::EventScope::Home)),
+        "the core must emit at least one home-scoped event"
+    );
+    for measurement in &run.measurements {
+        measurement
+            .validate()
+            .expect("recorded measurement is valid");
+    }
+    for window in &run.home_history {
+        assert!(window.home.count.is_some());
     }
 }
