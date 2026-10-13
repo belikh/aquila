@@ -5,6 +5,20 @@ tidy, measurable, test-driven pipeline.
 
 Prose (docs, comments, issues, commit messages) uses Australian English spelling.
 
+## Documentation layout
+
+All reference material lives under `docs/`. Read `docs/README.md` for the full map.
+
+- `CONTEXT.md` — the domain glossary. Read first; use its vocabulary exactly.
+- `docs/spec/` — the specification. Index at `docs/spec/README.md`.
+- `docs/adr/` — decisions; immutable once accepted.
+- `docs/research/` — investigations. Advisory and out-of-band; they never define scope.
+- `docs/reference/` — external resources (datasets, papers, tools, licences). `sources.json` is machine-readable.
+- `docs/plan/` — the wayfinder map and tickets.
+- `docs/agents/` — skill configuration (tracker, triage labels, domain rules).
+
+Every spec claim cites `docs/reference/`; research never overrides an ADR — surface the conflict.
+
 ## Agent skills
 
 ### Issue tracker
