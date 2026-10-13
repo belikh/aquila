@@ -25,7 +25,7 @@ strictly lower level); layer is the six-layer name from `architecture.md`.
 | `aquila-inference` | 2 | L2 ingestion & models | The `PoseModel`/`VitalsModel` seam and the ONNX adapters. | `PoseModel::infer`, `VitalsModel::infer`, `ModelError`; `PoseRequest`/`PoseOutcome`. | `aquila-types` | `inference-models.md` |
 | `aquila-sources` | 3 | L2 ingestion & models | The core↔node seam: upstream CSI and downstream control, both directions. | `CsiSource::recv/shutdown`, `NodeControl::send`; `ReplaySource`, `UdpLiveSource`, `FanInSource`. | `aquila-types`, `aquila-wire`, `aquila-session` | `capture-and-firmware.md` §3–4, §6 |
 | `aquila-simulator` | 4 | L2 ingestion & models | Deterministic, hardware-free CSI synthesis; implements `CsiSource`. | `SimulatorSource`; scene script load; synthesised `GroundTruth`. | `aquila-types`, `aquila-wire`, `aquila-session`, `aquila-sources` | `capture-and-firmware.md` §7 |
-| `aquila-sensing` | 5 | L3 core | The single stateful core: time, calibration, windows, fusion, escalation. | `Sensing::new/step/calibrate/sink`; owns the `Clock` and `Sink` seams; internal `time`/`calibration`/`window`/`fusion`/`escalation` modules. | `aquila-types`, `aquila-geometry`, `aquila-signal`, `aquila-sources`, `aquila-inference` | `architecture.md` §4, `geometry-calibration.md`, `fusion-sync.md` |
+| `aquila-sensing` | 5 | L3 core | The single stateful core: time, calibration, windows, fusion, escalation. | `Sensing::new/step/calibrate/sink`; owns the `Clock` and `Sink` seams; internal `time`/`calibration`/`window`/`fusion`/`escalation` modules. | `aquila-types`, `aquila-geometry`, `aquila-signal`, `aquila-sources`, `aquila-inference`, `aquila-metrics` | `architecture.md` §4, `geometry-calibration.md`, `fusion-sync.md` |
 | `aquila-evaluation` | 6 | L4 edges | The `GroundTruth` seam, replay/sim harness, and scoring. | `GroundTruth::label/coverage/kind/provenance`; `Harness::run`; `CollectorSink`. | `aquila-types`, `aquila-sources`, `aquila-sensing`, `aquila-metrics`, `aquila-simulator` | `evaluation.md` |
 | `aquila-ha` | 6 | L4 edges | Map observations to Home Assistant entities; transports nothing. | `HaSink: Sink`; `EntityModel`. | `aquila-types`, `aquila-geometry`, `aquila-sensing` | `home-assistant.md` |
 | `aquila-api` | 7 | L4 edges | The private loopback HTTP+WS control plane and node-command relay. | `Server::bind/handle`; `Handle::publish`; `ChannelSink`. | `aquila-types`, `aquila-geometry`, `aquila-sensing`, `aquila-sources`, `aquila-ha` | `core-api.md` |
@@ -80,7 +80,9 @@ aquila-inference  -> aquila-types
 aquila-sources    -> aquila-types, aquila-wire, aquila-session
 aquila-simulator  -> aquila-types, aquila-wire, aquila-session, aquila-sources
 aquila-sensing    -> aquila-types, aquila-geometry, aquila-signal,
-                     aquila-sources, aquila-inference
+                     aquila-sources, aquila-inference, aquila-metrics
+                     (aquila-metrics added at implementation: the core records
+                      per-step Measurement rows through the MetricSink seam.)
 aquila-evaluation -> aquila-types, aquila-sources, aquila-sensing,
                      aquila-metrics, aquila-simulator
 aquila-ha         -> aquila-types, aquila-geometry, aquila-sensing

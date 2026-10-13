@@ -59,6 +59,7 @@ version = "0.0.0"
 dependencies = [
  "aquila-geometry",
  "aquila-inference",
+ "aquila-metrics",
  "aquila-signal",
  "aquila-sources",
  "aquila-types",

@@ -11,6 +11,7 @@ aquila-geometry = { path = "../aquila-geometry" }
 aquila-signal = { path = "../aquila-signal" }
 aquila-sources = { path = "../aquila-sources" }
 aquila-inference = { path = "../aquila-inference" }
+aquila-metrics = { path = "../aquila-metrics" }
 
 [lints]
 workspace = true
