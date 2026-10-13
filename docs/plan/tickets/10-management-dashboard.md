@@ -1,7 +1,7 @@
-# 09 — Management dashboard
+# 10 — Management dashboard
 
 - Type: task
-- Blocked by: 07
+- Blocked by: #8
 - Status: open
 
 ## Goal

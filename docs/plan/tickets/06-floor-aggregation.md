@@ -1,7 +1,7 @@
-# 05 — Floor aggregation: room → floor
+# 06 — Floor aggregation: room → floor
 
 - Type: task
-- Blocked by: 04
+- Blocked by: #5
 - Status: open
 
 ## Goal

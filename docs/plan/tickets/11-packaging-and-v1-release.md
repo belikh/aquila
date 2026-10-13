@@ -1,7 +1,7 @@
-# 10 — Packaging and v1 release
+# 11 — Packaging and v1 release
 
 - Type: task
-- Blocked by: 08, 09
+- Blocked by: #9, #10
 - Status: open
 
 ## Goal

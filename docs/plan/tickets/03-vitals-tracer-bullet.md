@@ -1,7 +1,7 @@
-# 02 — Vitals tracer bullet: breathing and heart rate on the same pipeline
+# 03 — Vitals tracer bullet: breathing and heart rate on the same pipeline
 
 - Type: task
-- Blocked by: 01
+- Blocked by: #2
 - Status: open
 
 ## Goal

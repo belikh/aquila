@@ -1,7 +1,7 @@
-# 08 — HACS integration
+# 09 — HACS integration
 
 - Type: task
-- Blocked by: 07
+- Blocked by: #8
 - Status: open
 
 ## Goal

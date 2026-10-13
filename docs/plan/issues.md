@@ -1,32 +1,40 @@
 # Plan — published issues
 
-The v1 plan is published on GitHub at `belikh/aquila`. The in-repo files under
-`docs/plan/tickets/` are the source drafts and use plan numbers (01–14); the table below maps
-them to issue numbers. Blocking edges are recorded as native GitHub issue dependencies; work the
-frontier (the first open, unblocked, unassigned ticket in map order).
+The v1 plan is published on GitHub at `belikh/aquila`. Files under
+`docs/plan/tickets/` are named by — and mirror — the GitHub **issue number**, so
+there is a **single number everywhere**: the map is #1, tickets are #2–#15.
+Blocking edges are recorded as native GitHub issue dependencies.
 
-| Plan file | Issue | Title | Blocked by |
+| Issue | File | Title | Blocked by |
 | --- | --- | --- | --- |
-| map | #1 | Aquila v1 — wayfinder map | — |
-| 11-interface-reconciliation | #12 | Interface reconciliation | none (frontier) |
-| 01-spine-presence-tracer-bullet | #2 | Spine tracer bullet | #12 |
-| 02-vitals-tracer-bullet | #3 | Vitals tracer bullet | #2 |
-| 03-global-whole-home-calibration | #4 | Global whole-home calibration | #3 |
-| 04-multi-node-single-room | #5 | Multi-node single room | #4 |
-| 05-floor-aggregation | #6 | Floor aggregation | #5 |
-| 06-cross-floor-whole-home | #7 | Cross-floor / whole-home | #6 |
-| 07-live-nodes-and-node-control | #8 | Live nodes and node control | #7 |
-| 08-hacs-integration | #9 | HACS integration | #8 |
-| 09-management-dashboard | #10 | Management dashboard | #8 |
-| 10-packaging-and-v1-release | #11 | Packaging and v1 release | #9, #10 |
-| 12-ota-control-and-core-image-store | #13 | OTA control channel and core image store | #8 |
-| 13-firmware-ota-agent | #14 | ESP32-S3 firmware OTA agent | #8, #13 |
-| 14-ha-firmware-update-entity | #15 | Home Assistant firmware update entity | #9, #13 |
+| #1 | `map.md` | Aquila v1 — wayfinder map | — |
+| #2 | `02-spine-presence-tracer-bullet.md` | Spine tracer bullet | #12 |
+| #3 | `03-vitals-tracer-bullet.md` | Vitals tracer bullet | #2 |
+| #4 | `04-global-whole-home-calibration.md` | Global whole-home calibration | #3 |
+| #5 | `05-multi-node-single-room.md` | Multi-node single room | #4 |
+| #6 | `06-floor-aggregation.md` | Floor aggregation | #5 |
+| #7 | `07-cross-floor-whole-home.md` | Cross-floor / whole-home | #6 |
+| #8 | `08-live-nodes-and-node-control.md` | Live nodes and node control | #7 |
+| #9 | `09-hacs-integration.md` | HACS integration | #8 |
+| #10 | `10-management-dashboard.md` | Management dashboard | #8 |
+| #11 | `11-packaging-and-v1-release.md` | Packaging and v1 release | #9, #10 |
+| #12 | `12-interface-reconciliation.md` | Interface reconciliation | none |
+| #13 | `13-ota-control-and-core-image-store.md` | OTA control channel and core image store | #8 |
+| #14 | `14-firmware-ota-agent.md` | ESP32-S3 firmware OTA agent | #8, #13 |
+| #15 | `15-ha-firmware-update-entity.md` | Home Assistant firmware update entity | #9, #13 |
+
+## Status (verify with `gh issue list --state all`)
+
+- Closed (done): **#2 #3 #4 #5 #6 #7 #8 #12**.
+- Open: **#9 #10 #11 #13 #14 #15**.
 
 ## Working the plan
 
 1. Read the map (#1), `docs/plan/map.md`, and `CONTEXT.md`.
-2. Find the frontier: open, unblocked, unassigned, lowest plan number.
-3. Claim it (`gh issue edit <n> --add-assignee @me`), then read the ticket and the spec/ADR files it names.
+2. Frontier = the first **open, unblocked, unassigned** issue, lowest number first
+   (leftmost eligible row above).
+3. Claim it (`gh issue edit <n> --add-assignee @me`), then read the ticket and the
+   spec/ADR files it names.
 4. Implement test-first; cite `docs/reference/sources.json` ids for any external claim.
-5. Close with a comment linking the change and the ledger evidence.
+5. Close it with a comment linking the change and the ledger evidence, and let the
+   next dependent issue become the frontier.

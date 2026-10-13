@@ -1,7 +1,7 @@
-# 13 — ESP32-S3 firmware OTA agent
+# 14 — ESP32-S3 firmware OTA agent
 
 - Type: task
-- Blocked by: 07, 12
+- Blocked by: #8, #13
 - Status: open
 
 ## Goal

@@ -1,7 +1,7 @@
-# 12 — OTA control channel and core image store
+# 13 — OTA control channel and core image store
 
 - Type: task
-- Blocked by: 07
+- Blocked by: #8
 - Status: open
 
 ## Goal

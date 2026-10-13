@@ -1,7 +1,7 @@
-# 14 — Home Assistant firmware update entity
+# 15 — Home Assistant firmware update entity
 
 - Type: task
-- Blocked by: 08, 12
+- Blocked by: #9, #13
 - Status: open
 
 ## Goal

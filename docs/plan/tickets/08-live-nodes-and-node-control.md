@@ -1,7 +1,7 @@
-# 07 — Live nodes and node control
+# 08 — Live nodes and node control
 
 - Type: task
-- Blocked by: 06
+- Blocked by: #7
 - Status: open
 
 ## Goal

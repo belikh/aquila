@@ -1,7 +1,7 @@
-# 06 — Cross-floor / whole-home
+# 07 — Cross-floor / whole-home
 
 - Type: task
-- Blocked by: 05
+- Blocked by: #6
 - Status: open
 
 ## Goal

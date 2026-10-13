@@ -1,7 +1,7 @@
-# 03 — Global whole-home calibration
+# 04 — Global whole-home calibration
 
 - Type: task
-- Blocked by: 02
+- Blocked by: #3
 - Status: open
 
 ## Goal

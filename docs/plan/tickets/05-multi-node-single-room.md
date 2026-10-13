@@ -1,7 +1,7 @@
-# 04 — Multi-node single room: fusion and coarse pose
+# 05 — Multi-node single room: fusion and coarse pose
 
 - Type: task
-- Blocked by: 03
+- Blocked by: #4
 - Status: open
 
 ## Goal

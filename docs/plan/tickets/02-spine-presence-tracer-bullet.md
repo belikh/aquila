@@ -1,7 +1,7 @@
-# 01 — Spine tracer bullet: recorded CsiSource → signal → presence + count
+# 02 — Spine tracer bullet: recorded CsiSource → signal → presence + count
 
 - Type: task
-- Blocked by: 11
+- Blocked by: #12
 - Status: open
 
 ## Goal
