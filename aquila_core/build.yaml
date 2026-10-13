@@ -1,0 +1,20 @@
+# Local-build fallback for the Aquila Core add-on.
+#
+# The default distribution path is prebuilt multi-arch images on GHCR
+# (`image:` in config.yaml), built with `docker buildx` plus QEMU. This
+# build.yaml only drives a local `docker build` of aquila_core/Dockerfile when
+# a user opts into a local build; it is not the default because the Rust + ONNX
+# toolchain is heavy.
+build_from:
+  amd64: ghcr.io/home-assistant/amd64-base-debian:bookworm
+  aarch64: ghcr.io/home-assistant/aarch64-base-debian:bookworm
+
+labels:
+  org.opencontainers.image.title: Aquila Core
+  org.opencontainers.image.description: WiFi CSI sensing core for Aquila
+  org.opencontainers.image.source: https://github.com/belikh/aquila
+  org.opencontainers.image.url: https://github.com/belikh/aquila
+  org.opencontainers.image.licenses: GPL-3.0-only
+
+args:
+  AQUILA_VERSION: "0.1.0"

@@ -1,0 +1,116 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Aquila",
+        "description": "Connect to the Aquila Core add-on. The default URL resolves the add-on over the Home Assistant add-on network.",
+        "data": {
+          "url": "Core URL",
+          "token": "API token (optional)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Aquila",
+        "description": "Enter a new API token for the Aquila core.",
+        "data": {
+          "token": "API token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the Aquila core.",
+      "invalid_auth": "The Aquila core rejected the credentials.",
+      "unsupported_version": "The Aquila core API version is incompatible with this component.",
+      "invalid_response": "The Aquila core health response was not understood.",
+      "already_configured": "This Aquila core is already configured.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Aquila core is already configured.",
+      "reauth_successful": "Reauthentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Aquila options",
+        "data": {
+          "update_interval": "Reconciliation interval (seconds)",
+          "expose_floors": "Expose floor presence",
+          "expose_room_vitals": "Expose per-room vitals"
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "occupancy": {
+        "name": "Occupancy"
+      },
+      "presence": {
+        "name": "Presence"
+      },
+      "core_connected": {
+        "name": "Core connected"
+      },
+      "self_test": {
+        "name": "Self-test"
+      }
+    },
+    "sensor": {
+      "person_count": {
+        "name": "Person count"
+      },
+      "breathing_rate": {
+        "name": "Breathing rate"
+      },
+      "heart_rate": {
+        "name": "Heart rate"
+      },
+      "nodes_online": {
+        "name": "Nodes online"
+      },
+      "nodes_total": {
+        "name": "Nodes total"
+      },
+      "calibration_state": {
+        "name": "Calibration state"
+      },
+      "clock_drift": {
+        "name": "Clock drift"
+      },
+      "last_csi_packet": {
+        "name": "Last CSI packet"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
+    }
+  },
+  "services": {
+    "install_firmware": {
+      "name": "Install node firmware",
+      "description": "Begin a firmware OTA for an Aquila node.",
+      "fields": {
+        "node": {
+          "name": "Node",
+          "description": "Node MAC address."
+        },
+        "image_id": {
+          "name": "Image id",
+          "description": "Firmware image id from the store manifest."
+        },
+        "version": {
+          "name": "Version",
+          "description": "Firmware version to install (alternative to image id)."
+        },
+        "force": {
+          "name": "Force",
+          "description": "Install even if it is a downgrade."
+        }
+      }
+    }
+  }
+}
