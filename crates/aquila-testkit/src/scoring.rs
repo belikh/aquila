@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use aquila_types::{Event, EventKind, EventPayload, EventScope, GroundTruthRecord, RoomId};
+use aquila_types::{Event, EventKind, EventPayload, EventScope, GroundTruthRecord, KeypointId, Pose, RoomId};
 
 /// A binary-classification confusion matrix and its derived scores.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -272,4 +272,202 @@ fn replay<T: Clone>(
         out.insert(window, state.clone());
     }
     out
+}
+
+/// One of the six torso points torso-PCK@20 scores (`evaluation.md` §4.1): the
+/// four COCO-17 shoulder and hip keypoints plus the derived neck (the shoulder
+/// midpoint) and pelvis (the hip midpoint).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TorsoPoint {
+    /// The left shoulder, COCO-17.
+    LeftShoulder,
+    /// The right shoulder, COCO-17.
+    RightShoulder,
+    /// The left hip, COCO-17.
+    LeftHip,
+    /// The right hip, COCO-17.
+    RightHip,
+    /// The neck, derived as the shoulder midpoint.
+    Neck,
+    /// The pelvis, derived as the hip midpoint.
+    Pelvis,
+}
+
+impl TorsoPoint {
+    /// The six torso points, in reporting order.
+    pub const ALL: [TorsoPoint; 6] = [
+        TorsoPoint::LeftShoulder,
+        TorsoPoint::RightShoulder,
+        TorsoPoint::LeftHip,
+        TorsoPoint::RightHip,
+        TorsoPoint::Neck,
+        TorsoPoint::Pelvis,
+    ];
+
+    /// A stable label for per-keypoint reporting.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            TorsoPoint::LeftShoulder => "left_shoulder",
+            TorsoPoint::RightShoulder => "right_shoulder",
+            TorsoPoint::LeftHip => "left_hip",
+            TorsoPoint::RightHip => "right_hip",
+            TorsoPoint::Neck => "neck",
+            TorsoPoint::Pelvis => "pelvis",
+        }
+    }
+
+    /// The point's estimated planar position in `pose`, or `None` when the
+    /// pose carries no usable estimate for it.
+    #[must_use]
+    pub fn position(self, pose: &Pose) -> Option<[f64; 2]> {
+        match self {
+            TorsoPoint::LeftShoulder => keypoint(pose, KeypointId::LeftShoulder),
+            TorsoPoint::RightShoulder => keypoint(pose, KeypointId::RightShoulder),
+            TorsoPoint::LeftHip => keypoint(pose, KeypointId::LeftHip),
+            TorsoPoint::RightHip => keypoint(pose, KeypointId::RightHip),
+            TorsoPoint::Neck => midpoint(
+                keypoint(pose, KeypointId::LeftShoulder),
+                keypoint(pose, KeypointId::RightShoulder),
+            ),
+            TorsoPoint::Pelvis => midpoint(
+                keypoint(pose, KeypointId::LeftHip),
+                keypoint(pose, KeypointId::RightHip),
+            ),
+        }
+    }
+}
+
+/// A keypoint's position, or `None` when it is honestly absent.
+fn keypoint(pose: &Pose, id: KeypointId) -> Option<[f64; 2]> {
+    let key = &pose.keys[id as usize];
+    if key.confidence > 0.0 && key.x_m.is_finite() && key.y_m.is_finite() {
+        Some([f64::from(key.x_m), f64::from(key.y_m)])
+    } else {
+        None
+    }
+}
+
+/// The midpoint of two optional points.
+fn midpoint(a: Option<[f64; 2]>, b: Option<[f64; 2]>) -> Option<[f64; 2]> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])]),
+        _ => None,
+    }
+}
+
+/// The torso span of a reference pose: the neck-to-pelvis distance, the
+/// per-sample normaliser of torso-PCK@20 (`evaluation.md` §4.1). `None` when the
+/// pose cannot yield a usable span.
+#[must_use]
+pub fn torso_span(pose: &Pose) -> Option<f64> {
+    let neck = TorsoPoint::Neck.position(pose)?;
+    let pelvis = TorsoPoint::Pelvis.position(pose)?;
+    let dx = neck[0] - pelvis[0];
+    let dy = neck[1] - pelvis[1];
+    let span = (dx * dx + dy * dy).sqrt();
+    (span.is_finite() && span > 1e-6).then_some(span)
+}
+
+/// The result of torso-PCK@20 scoring.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PckScore {
+    /// Correct torso keypoints.
+    pub correct: u64,
+    /// Scored torso keypoints (`6 × matched poses`).
+    pub total: u64,
+    /// `correct / total`, or `0.0` when nothing was scored.
+    pub pck: f64,
+    /// The mean reference torso span, in metres.
+    pub torso_span_m: f64,
+    /// Predictions paired with a reference pose.
+    pub matched_poses: u64,
+    /// Predictions with no reference within tolerance (never silently ignored).
+    pub unmatched_predictions: u64,
+}
+
+/// Score predictions against reference poses with torso-PCK@20.
+///
+/// Each prediction is paired with the same room's nearest reference in time
+/// within `max_match_ms`; pairing is by key and proximity, never by
+/// interpolation. A torso keypoint is correct when its estimated position lies
+/// within `tolerance_fraction` (0.20 for PCK@20) of the reference torso span of
+/// its paired reference. An absent estimate is scored incorrect, never skipped,
+/// so a missing keypoint cannot inflate the score.
+#[must_use]
+pub fn torso_pck20(
+    predictions: &[Pose],
+    references: &[Pose],
+    tolerance_fraction: f64,
+    max_match_ms: i64,
+) -> PckScore {
+    let (mut correct, mut total) = (0u64, 0u64);
+    let (mut matched, mut unmatched) = (0u64, 0u64);
+    let mut span_sum = 0.0_f64;
+
+    for prediction in predictions {
+        let Some(reference) = nearest_reference(prediction, references, max_match_ms) else {
+            unmatched += 1;
+            continue;
+        };
+        let Some(span) = torso_span(reference) else {
+            unmatched += 1;
+            continue;
+        };
+        matched += 1;
+        span_sum += span;
+        let threshold = tolerance_fraction * span;
+        for point in TorsoPoint::ALL {
+            total += 1;
+            if let (Some(estimate), Some(actual)) =
+                (point.position(prediction), point.position(reference))
+            {
+                let dx = estimate[0] - actual[0];
+                let dy = estimate[1] - actual[1];
+                let distance = (dx * dx + dy * dy).sqrt();
+                if distance.is_finite() && distance <= threshold {
+                    correct += 1;
+                }
+            }
+        }
+    }
+
+    PckScore {
+        correct,
+        total,
+        pck: if total == 0 {
+            0.0
+        } else {
+            correct as f64 / total as f64
+        },
+        torso_span_m: if matched == 0 {
+            0.0
+        } else {
+            span_sum / matched as f64
+        },
+        matched_poses: matched,
+        unmatched_predictions: unmatched,
+    }
+}
+
+/// The reference pose of the same room nearest in time to `prediction`, within
+/// `max_match_ms`; ties break by earliest reference, so pairing is deterministic.
+fn nearest_reference<'a>(
+    prediction: &Pose,
+    references: &'a [Pose],
+    max_match_ms: i64,
+) -> Option<&'a Pose> {
+    let mut best: Option<&Pose> = None;
+    let mut best_delta = i64::MAX;
+    for reference in references {
+        if reference.room != prediction.room {
+            continue;
+        }
+        let delta = (reference.t_unix_ms - prediction.t_unix_ms).abs();
+        if delta <= max_match_ms && delta < best_delta {
+            best_delta = delta;
+            best = Some(reference);
+        }
+    }
+    best
 }

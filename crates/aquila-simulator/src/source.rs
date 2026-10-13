@@ -24,7 +24,8 @@ use aquila_session::{Manifest, SessionWriter};
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
     Band, BuildId, CsiEnvelope, CsiFrame, EventPayload, EventScope, GroundTruthRecord,
-    GroundTruthRef, GtKind, PhyFlags, RoomId, Session, SessionId, CONTRACT_VERSION,
+    GroundTruthRef, GtKind, Keypoint, KeypointId, PhyFlags, Pose, RoomId, Session, SessionId,
+    SubjectId, Witness, CONTRACT_VERSION, KEYPOINT_COUNT,
 };
 use aquila_wire::{decode_datagram, encode_datagram};
 
@@ -34,6 +35,11 @@ use crate::scene::{SceneScript, SPEED_OF_LIGHT_MPS};
 
 /// The scattering strength of each dynamic term (torso/limbs).
 const ACTOR_SCATTER: f64 = 0.7;
+
+/// The scattering strength of one torso keypoint scatterer of a body-carrying
+/// actor. A body distributes its scattering over the torso keypoints, so each
+/// single point is weaker than the point-actor [`ACTOR_SCATTER`].
+const ACTOR_TORSO_SCATTER: f64 = 0.5;
 
 // Stream tags keep independent draws independent.
 const TAG_LOSS: u64 = 11;
@@ -136,6 +142,17 @@ impl SimulatorSource {
     #[must_use]
     pub fn ground_truth(&self) -> Vec<(u64, GroundTruthRecord)> {
         synthesise_ground_truth(&self.script, &self.config)
+    }
+
+    /// The synthesised coarse-pose ground truth for the whole scene.
+    ///
+    /// One [`Pose`] per simulation tick per present body-carrying actor, with
+    /// the four physical torso keypoints filled and the remaining COCO-17
+    /// keypoints honestly absent (`confidence == 0.0`). Research-only, and a
+    /// pure function of the scene and config.
+    #[must_use]
+    pub fn pose_ground_truth(&self) -> Vec<Pose> {
+        synthesise_pose_ground_truth(&self.script, &self.config)
     }
 
     /// Whether a frame at `(node_index, tick)` is dropped by loss.
@@ -253,6 +270,17 @@ impl SimulatorSource {
             let (mut re, mut im) = self.baseline(node_index, k);
             for actor in &self.script.actors {
                 if actor.room != node.room || !actor.present(t) {
+                    continue;
+                }
+                if let Some(paths) = actor.torso_scatter_path_lengths_m(node.pos_m, t) {
+                    // A body-carrying actor scatters from its four torso
+                    // keypoints, each with its own radial dither, so the CSI
+                    // carries a pose-correlated signature.
+                    for d in paths {
+                        let theta = -TAU * f_rf * d / SPEED_OF_LIGHT_MPS;
+                        re += ACTOR_TORSO_SCATTER * theta.cos();
+                        im += ACTOR_TORSO_SCATTER * theta.sin();
+                    }
                     continue;
                 }
                 let d = actor.path_length_m(node.pos_m, t);
@@ -429,6 +457,91 @@ pub fn synthesise_ground_truth(
                     });
                 }
             }
+        }
+    }
+    out
+}
+
+/// The COCO-17 keypoint order, so a synthesised pose's keypoint array is
+/// self-consistent (`data-contracts.md` §4).
+const KEYPOINT_ORDER: [KeypointId; KEYPOINT_COUNT] = [
+    KeypointId::Nose,
+    KeypointId::LeftEye,
+    KeypointId::RightEye,
+    KeypointId::LeftEar,
+    KeypointId::RightEar,
+    KeypointId::LeftShoulder,
+    KeypointId::RightShoulder,
+    KeypointId::LeftElbow,
+    KeypointId::RightElbow,
+    KeypointId::LeftWrist,
+    KeypointId::RightWrist,
+    KeypointId::LeftHip,
+    KeypointId::RightHip,
+    KeypointId::LeftKnee,
+    KeypointId::RightKnee,
+    KeypointId::LeftAnkle,
+    KeypointId::RightAnkle,
+];
+
+/// A COCO-17 keypoint array with every keypoint honestly absent.
+fn blank_keypoints() -> [Keypoint; KEYPOINT_COUNT] {
+    let mut keys = [Keypoint {
+        id: KeypointId::Nose,
+        x_m: f32::NAN,
+        y_m: f32::NAN,
+        z_m: None,
+        confidence: 0.0,
+    }; KEYPOINT_COUNT];
+    for (key, id) in keys.iter_mut().zip(KEYPOINT_ORDER) {
+        key.id = id;
+    }
+    keys
+}
+
+/// Synthesise the per-tick coarse-pose ground truth for a scene (§7.3).
+///
+/// One [`Pose`] per present body-carrying actor per tick. The four physical
+/// torso scatterers (left/right shoulder, left/right hip) are the drifted
+/// nominal keypoints; the neck and pelvis used by torso-PCK are derived by the
+/// scorer as the shoulder and hip midpoints, so they need not be stored.
+#[must_use]
+pub fn synthesise_pose_ground_truth(script: &SceneScript, config: &SimConfig) -> Vec<Pose> {
+    let ticks = total_ticks(script);
+    let mut out = Vec::new();
+    for tick in 0..ticks {
+        let t = tick as f64 / script.tick_hz;
+        let t_unix_ms = config.start_unix_ms + (t * 1_000.0).round() as i64;
+        for (index, actor) in script.actors.iter().enumerate() {
+            if !actor.present(t) {
+                continue;
+            }
+            let Some(keypoints) = actor.torso_keypoints_m(t) else {
+                continue;
+            };
+            let mut keys = blank_keypoints();
+            for (slot, id) in [
+                (0usize, KeypointId::LeftShoulder),
+                (1, KeypointId::RightShoulder),
+                (2, KeypointId::LeftHip),
+                (3, KeypointId::RightHip),
+            ] {
+                keys[id as usize] = Keypoint {
+                    id,
+                    x_m: keypoints[slot][0] as f32,
+                    y_m: keypoints[slot][1] as f32,
+                    z_m: None,
+                    confidence: 1.0,
+                };
+            }
+            out.push(Pose {
+                subject: SubjectId::new(index as u32),
+                room: actor.room.clone(),
+                t_unix_ms,
+                keys,
+                score: 1.0,
+                witness: Witness::Claimed,
+            });
         }
     }
     out

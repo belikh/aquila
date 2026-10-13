@@ -86,6 +86,111 @@ pub struct Actor {
     pub breathing: Option<Rhythm>,
     /// The heart displacement, if modelled.
     pub heart: Option<Rhythm>,
+    /// The actor's rigid coarse-pose body model, when the scene carries a
+    /// pose-correlated signature. `None` preserves the single-scatterer
+    /// behaviour used by the presence and vitals fixtures.
+    #[serde(default)]
+    pub body: Option<Body>,
+}
+
+/// The number of torso scatterer keypoints the synthetic coarse-pose model
+/// places.
+pub const TORSO_SCATTER_COUNT: usize = 4;
+
+/// The default per-keypoint dither frequencies, in hertz, in torso scatterer
+/// order (left shoulder, right shoulder, left hip, right hip).
+///
+/// These are the **pose signature**: each torso scatterer micro-moves radially
+/// at its own distinct frequency, so a per-node delay-profile estimator can
+/// separate the four keypoints from one CSI stream. They are chosen as integer
+/// hertz on the one-second analysis grid so the estimator's correlators are
+/// mutually orthogonal.
+pub const TORSO_DITHER_HZ: [f64; TORSO_SCATTER_COUNT] = [3.0, 5.0, 7.0, 9.0];
+
+/// The default radial dither amplitude, in metres, of each torso scatterer.
+pub const TORSO_DITHER_AMPLITUDE_M: f64 = 0.02;
+
+/// A rigid, planar, coarse-pose torso model attached to an actor
+/// (`evaluation.md` §4.1, "coarse pose").
+///
+/// The torso is modelled **in the room's horizontal plane** — a top-down coarse
+/// skeleton — so the torso span (the neck-to-pelvis separation) is a real
+/// horizontal distance and torso-PCK@20 is a meaningful, scale-invariant score.
+/// This is a deliberate synthetic-fixture convention, not a claim about
+/// real-world pose. The four scattered keypoints are the left and right
+/// shoulder and the left and right hip; the neck and pelvis used by the torso
+/// metric are derived as the midpoints of the shoulders and hips respectively,
+/// so the four physical scatterers determine all six scored points.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Body {
+    /// Half the shoulder-to-shoulder width, in metres.
+    pub shoulder_half_width_m: f64,
+    /// Half the hip-to-hip width, in metres.
+    pub hip_half_width_m: f64,
+    /// The neck-to-pelvis torso span, in metres.
+    pub torso_length_m: f64,
+    /// The body's facing yaw in the room frame, in radians.
+    pub yaw_rad: f64,
+    /// The radial dither amplitude of each torso scatterer, in metres.
+    pub dither_amplitude_m: f64,
+    /// The radial dither frequency of each torso scatterer, in hertz.
+    pub dither_hz: [f64; TORSO_SCATTER_COUNT],
+}
+
+impl Body {
+    /// A default adult torso facing the given yaw, with the standard pose
+    /// dither signature.
+    #[must_use]
+    pub fn default_torso(yaw_rad: f64) -> Self {
+        Self {
+            shoulder_half_width_m: 0.20,
+            hip_half_width_m: 0.12,
+            torso_length_m: 0.50,
+            yaw_rad,
+            dither_amplitude_m: TORSO_DITHER_AMPLITUDE_M,
+            dither_hz: TORSO_DITHER_HZ,
+        }
+    }
+
+    /// The four torso scatterer keypoint positions, in room-local metres, for a
+    /// body whose pelvis is at `base_m`.
+    ///
+    /// Order is left shoulder, right shoulder, left hip, right hip. All share
+    /// the base's elevation, so the model is planar.
+    #[must_use]
+    pub fn keypoint_positions_m(&self, base_m: [f64; 3]) -> [[f64; 3]; TORSO_SCATTER_COUNT] {
+        let (sin_y, cos_y) = self.yaw_rad.sin_cos();
+        // Forward and left unit vectors in the room plane.
+        let forward = [cos_y, sin_y];
+        let left = [-sin_y, cos_y];
+        let neck = [
+            base_m[0] + forward[0] * self.torso_length_m,
+            base_m[1] + forward[1] * self.torso_length_m,
+            base_m[2],
+        ];
+        let offset = |origin: [f64; 3], side: f64, half: f64| {
+            [
+                origin[0] + left[0] * side * half,
+                origin[1] + left[1] * side * half,
+                origin[2],
+            ]
+        };
+        [
+            offset(neck, 1.0, self.shoulder_half_width_m),
+            offset(neck, -1.0, self.shoulder_half_width_m),
+            offset(base_m, 1.0, self.hip_half_width_m),
+            offset(base_m, -1.0, self.hip_half_width_m),
+        ]
+    }
+
+    /// The radial dither displacement of torso scatterer `index` at time `t`
+    /// seconds, in metres.
+    #[must_use]
+    pub fn dither_m(&self, index: usize, t: f64) -> f64 {
+        self.dither_hz
+            .get(index)
+            .map_or(0.0, |f| self.dither_amplitude_m * (TAU * f * t).sin())
+    }
 }
 
 /// A sinusoidal displacement: breathing or heart.
@@ -233,6 +338,7 @@ impl SceneScript {
                     rate_hz: 1.2,
                     phase_rad: 0.0,
                 }),
+                body: None,
             }],
             band: Band::B2G4,
             channel: 6,
@@ -318,6 +424,36 @@ impl SceneScript {
                     "actor active window must be finite".into(),
                 ));
             }
+            if let Some(body) = &actor.body {
+                for (name, value) in [
+                    ("shoulder_half_width_m", body.shoulder_half_width_m),
+                    ("hip_half_width_m", body.hip_half_width_m),
+                    ("torso_length_m", body.torso_length_m),
+                    ("yaw_rad", body.yaw_rad),
+                    ("dither_amplitude_m", body.dither_amplitude_m),
+                ] {
+                    if !value.is_finite() {
+                        return Err(SimError::Config(format!("body {name} must be finite")));
+                    }
+                }
+                if body.torso_length_m <= 0.0 {
+                    return Err(SimError::Config(
+                        "body torso_length_m must be positive".into(),
+                    ));
+                }
+                if body.dither_amplitude_m < 0.0 {
+                    return Err(SimError::Config(
+                        "body dither_amplitude_m must be non-negative".into(),
+                    ));
+                }
+                for (j, f) in body.dither_hz.iter().enumerate() {
+                    if !f.is_finite() || *f <= 0.0 {
+                        return Err(SimError::Config(format!(
+                            "body dither_hz[{j}] must be finite and positive"
+                        )));
+                    }
+                }
+            }
         }
         let p = &self.impairments;
         for (name, value) in [
@@ -378,5 +514,49 @@ impl Actor {
             d += heart.displacement_m(t);
         }
         d.max(0.0)
+    }
+
+    /// The four torso keypoint positions of this actor's body, in room-local
+    /// metres, at time `t`. `None` when the actor carries no body model.
+    ///
+    /// The positions are the drift-free nominal keypoints: the reference used
+    /// for pose ground truth, without the estimator's dither signature.
+    #[must_use]
+    pub fn torso_keypoints_m(&self, t: f64) -> Option<[[f64; 3]; TORSO_SCATTER_COUNT]> {
+        self.body
+            .as_ref()
+            .map(|body| body.keypoint_positions_m(self.position_at(t)))
+    }
+
+    /// The four torso scatterer path lengths from `node_pos`, in metres, at time
+    /// `t`, each carrying its own radial pose dither. `None` when the actor
+    /// carries no body model.
+    ///
+    /// `d_j(t) = |node − keypoint_j(t)| + A·sin(2π f_j t) + breath(t) + heart(t)`.
+    /// The per-keypoint dither is the pose-correlated signature the estimator
+    /// recovers; the common-mode breathing and heart terms are shared with the
+    /// single-scatterer model.
+    #[must_use]
+    pub fn torso_scatter_path_lengths_m(
+        &self,
+        node_pos: [f64; 3],
+        t: f64,
+    ) -> Option<[f64; TORSO_SCATTER_COUNT]> {
+        let body = self.body.as_ref()?;
+        let keypoints = body.keypoint_positions_m(self.position_at(t));
+        let common = self
+            .breathing
+            .as_ref()
+            .map_or(0.0, |rhythm| rhythm.displacement_m(t))
+            + self
+                .heart
+                .as_ref()
+                .map_or(0.0, |rhythm| rhythm.displacement_m(t));
+        let mut out = [0.0; TORSO_SCATTER_COUNT];
+        for (j, keypoint) in keypoints.iter().enumerate() {
+            let d = SceneScript::distance_m(node_pos, *keypoint) + body.dither_m(j, t) + common;
+            out[j] = d.max(0.0);
+        }
+        Some(out)
     }
 }

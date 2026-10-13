@@ -12,6 +12,8 @@
 //! floor on the calibrated logit scale.
 
 use crate::calibration::CalibrationArtifact;
+use crate::fusion::{TorsoGeometry, TORSO_KEYPOINT_SCATTERS};
+use crate::pose::DEFAULT_TORSO_DITHER_HZ;
 
 /// Provenance recorded on every [`Measurement`](aquila_metrics::Measurement) the
 /// core writes.
@@ -101,6 +103,23 @@ pub struct SensingConfig {
     /// The floor on the calibrated logit scale, in dB per logit, so a tiny
     /// learned zone threshold cannot amplify noise without bound.
     pub calibration_scale_floor_db: f64,
+    /// Whether the core estimates coarse pose per room (Slice 4). Off by
+    /// default, so a configuration that does not opt in emits no pose.
+    pub pose_enabled: bool,
+    /// The minimum contributing frames per node before a pose is attempted.
+    pub pose_min_frames: usize,
+    /// The per-scatterer pose-dither frequencies, in hertz, in torso scatterer
+    /// order (left shoulder, right shoulder, left hip, right hip). They must
+    /// match the synthetic signature the observed CSI carries.
+    pub pose_dither_hz: [f64; TORSO_KEYPOINT_SCATTERS],
+    /// The rigid torso geometry the coarse-pose combination fits.
+    pub pose_geometry: TorsoGeometry,
+    /// The calibration quality `q_n` attributed to a node that carries no
+    /// per-node calibration quality, that is, when no calibration artefact is
+    /// applied. The default `0.0` enforces `fusion-sync.md` §2.3's restraint
+    /// (an uncalibrated node contributes no pose); a synthetic in-domain
+    /// fixture that treats its nodes as calibrated opts in explicitly.
+    pub pose_uncalibrated_quality: f64,
     /// The provenance recorded on each measurement.
     pub measurement: MeasurementConfig,
 }
@@ -134,6 +153,11 @@ impl Default for SensingConfig {
             vitals_window_ns: 15_000_000_000,
             calibration: None,
             calibration_scale_floor_db: 1.0,
+            pose_enabled: false,
+            pose_min_frames: 8,
+            pose_dither_hz: DEFAULT_TORSO_DITHER_HZ,
+            pose_geometry: TorsoGeometry::adult(),
+            pose_uncalibrated_quality: 0.0,
             measurement: MeasurementConfig::default(),
         }
     }
@@ -199,6 +223,33 @@ impl SensingConfig {
             return Err(bad(
                 "vitals_window_ns must be non-zero when vitals are enabled",
             ));
+        }
+        if self.pose_enabled {
+            if self.pose_min_frames < 4 {
+                return Err(bad("pose_min_frames must be at least 4"));
+            }
+            for (j, frequency) in self.pose_dither_hz.iter().enumerate() {
+                if !frequency.is_finite() || *frequency <= 0.0 {
+                    return Err(bad(&format!(
+                        "pose_dither_hz[{j}] must be finite and positive"
+                    )));
+                }
+            }
+            let geometry = &self.pose_geometry;
+            for (name, value) in [
+                ("pose_geometry.shoulder_half_width_m", geometry.shoulder_half_width_m),
+                ("pose_geometry.hip_half_width_m", geometry.hip_half_width_m),
+                ("pose_geometry.torso_length_m", geometry.torso_length_m),
+            ] {
+                if !value.is_finite() || value <= 0.0 {
+                    return Err(bad(&format!("{name} must be finite and positive")));
+                }
+            }
+            if !self.pose_uncalibrated_quality.is_finite()
+                || !(0.0..=1.0).contains(&self.pose_uncalibrated_quality)
+            {
+                return Err(bad("pose_uncalibrated_quality must lie in [0, 1]"));
+            }
         }
         if self.measurement.commit.len() != 40
             || !self

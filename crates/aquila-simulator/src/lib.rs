@@ -43,6 +43,10 @@ mod tests;
 
 pub use error::SimError;
 pub use scene::{
-    Actor, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SPEED_OF_LIGHT_MPS,
+    Actor, Body, Impairments, Motion, NodeSpec, Rhythm, SceneScript, TORSO_DITHER_AMPLITUDE_M,
+    TORSO_DITHER_HZ, TORSO_SCATTER_COUNT, SPEED_OF_LIGHT_MPS,
 };
-pub use source::{synthesise_ground_truth, synthesise_session, SimConfig, SimulatorSource};
+pub use source::{
+    synthesise_ground_truth, synthesise_pose_ground_truth, synthesise_session, SimConfig,
+    SimulatorSource,
+};

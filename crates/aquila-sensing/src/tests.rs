@@ -186,10 +186,68 @@ fn count_mixture_is_a_distribution() {
     assert!(map <= 8);
 }
 
+#[test]
+fn fusion_weight_folds_calibration_quality_and_clock_health() {
+    assert_eq!(fusion::node_fusion_weight(0.0, 1.0), 0.0);
+    assert_eq!(fusion::node_fusion_weight(1.0, 0.0), 0.0);
+    assert!((fusion::node_fusion_weight(0.8, 0.5) - 0.4).abs() < 1e-12);
+    // Non-finite inputs are no evidence, never a NaN weight.
+    assert_eq!(fusion::node_fusion_weight(f64::NAN, 1.0), 0.0);
+    assert_eq!(fusion::node_fusion_weight(1.0, f64::NAN), 0.0);
+}
+
+#[test]
+fn torso_fusion_with_one_node_is_unknown_not_a_pose() {
+    let geometry = fusion::TorsoGeometry::adult();
+    let single = [fusion::NodeTorsoRanges {
+        node: NodeId(1),
+        position_m: [0.0, 0.0],
+        ranges_m: [1.0, 1.2, 0.9, 1.1],
+        weight: 1.0,
+    }];
+    assert!(
+        fusion::fuse_torso_ranges(&single, &geometry).is_none(),
+        "a single view cannot place a torso; no pose may be fabricated"
+    );
+}
+
+#[test]
+fn torso_fusion_recovers_an_exact_torso() {
+    let geometry = fusion::TorsoGeometry::adult();
+    let centre = [2.0_f64, 1.5];
+    let yaw = 0.4_f64;
+    let keypoints = geometry.keypoints_m(centre, yaw);
+    let node_positions = [[0.3_f64, 0.3], [0.3, 3.7]];
+    let nodes: Vec<fusion::NodeTorsoRanges> = node_positions
+        .iter()
+        .enumerate()
+        .map(|(i, node)| {
+            let ranges = keypoints.map(|kp| {
+                let dx = kp[0] - node[0];
+                let dy = kp[1] - node[1];
+                (dx * dx + dy * dy).sqrt()
+            });
+            fusion::NodeTorsoRanges {
+                node: NodeId(i as u16 + 1),
+                position_m: *node,
+                ranges_m: ranges,
+                weight: 1.0,
+            }
+        })
+        .collect();
+    let estimate = fusion::fuse_torso_ranges(&nodes, &geometry).expect("a fit");
+    let centre_error = ((estimate.centre_m[0] - centre[0]).powi(2)
+        + (estimate.centre_m[1] - centre[1]).powi(2))
+    .sqrt();
+    assert!(centre_error < 0.05, "centre error {centre_error} m");
+    let yaw_error = (estimate.yaw_rad - yaw).abs();
+    assert!(yaw_error < 0.1, "yaw error {yaw_error} rad");
+    assert!(estimate.residual_rms_m < 0.01);
+}
+
 // ---------------------------------------------------------------------------
 // Window assembly
 // ---------------------------------------------------------------------------
-
 #[test]
 fn assembler_closes_a_window_on_the_boundary() {
     let cfg = SensingConfig::default();

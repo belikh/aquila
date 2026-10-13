@@ -51,6 +51,7 @@ mod error;
 mod escalation;
 mod features;
 mod fusion;
+mod pose;
 mod sha256;
 mod sink;
 mod time;
@@ -72,8 +73,12 @@ pub use engine::{Sensing, StepReport};
 pub use error::{CalibrationError, InvalidationReason, SensingError, SinkError};
 pub use escalation::{floor_presence_probability, home_presence_probability, RoomSummary};
 pub use fusion::{
-    clamp_logit, mix_count_pmf, node_count_pmf, pool_presence_logit, pooled_presence_probability,
-    sigmoid, CountPmf, NodeEvidence,
+    clamp_logit, fuse_torso_ranges, mix_count_pmf, node_count_pmf, node_fusion_weight,
+    pool_presence_logit, pooled_presence_probability, sigmoid, CountPmf, NodeEvidence,
+    NodeTorsoRanges, TorsoEstimate, TorsoGeometry, TORSO_KEYPOINT_SCATTERS,
+};
+pub use pose::{
+    estimate_room_pose, extract_torso_ranges, PoseNodeInput, DEFAULT_TORSO_DITHER_HZ,
 };
 pub use sink::Sink;
 pub use time::{NodeClockFit, TimeSync};

@@ -26,8 +26,9 @@ use aquila_metrics::{
 use aquila_signal::{Calibration as SignalCalibration, Config as SignalConfig};
 use aquila_sources::{CsiSource, FrameOrEnd};
 use aquila_types::{
-    Clock, CsiEnvelope, Estimate, Event, EventKind, EventPayload, EventScope, NodeId, RoomId,
-    SensingScope, TimeSpan, Topology as ContractTopology, VitalsReading, VitalsStatus, Witness,
+    Clock, CsiEnvelope, Estimate, Event, EventKind, EventPayload, EventScope, NodeId, Pose, RoomId,
+    SensingScope, SubjectId, TimeSpan, Topology as ContractTopology, VitalsReading, VitalsStatus,
+    Witness,
 };
 
 use crate::calibration::{
@@ -38,9 +39,14 @@ use crate::config::SensingConfig;
 use crate::error::SensingError;
 use crate::features::extract_motion;
 use crate::fusion::{self, NodeEvidence};
+use crate::pose::{self, PoseNodeInput};
 use crate::sink::Sink;
 use crate::time::{NodeClockFit, TimeSync};
 use crate::window::{WindowAssembler, WindowBatch};
+
+/// One room's pose input for a window: the node, its planar position, its
+/// fusion weight, and this window's envelopes from that node.
+type RoomPoseEntry<'a> = (NodeId, [f64; 2], f64, &'a [CsiEnvelope]);
 
 /// What one call to [`Sensing::step`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,6 +97,10 @@ pub struct Sensing {
     vitals_first_seen: BTreeMap<RoomId, u64>,
     /// The number of vitals windows estimated so far.
     vitals_windows: usize,
+    /// The coarse poses emitted so far, in emission order (`roadmap.md`,
+    /// Slice 4). Poses are not edge-triggered events: they are per-window
+    /// estimates and are retained here for scoring and for the room state.
+    recorded_poses: Vec<Pose>,
     windows_processed: usize,
     finished: bool,
 }
@@ -157,6 +167,7 @@ impl Sensing {
             vitals_buffers: BTreeMap::new(),
             vitals_first_seen: BTreeMap::new(),
             vitals_windows: 0,
+            recorded_poses: Vec::new(),
             windows_processed: 0,
             finished: false,
         };
@@ -410,6 +421,12 @@ impl Sensing {
         self.vitals_windows
     }
 
+    /// The coarse poses emitted so far, in emission order.
+    #[must_use]
+    pub fn poses(&self) -> &[Pose] {
+        &self.recorded_poses
+    }
+
     /// The optional pose model.
     #[must_use]
     pub const fn pose_model(&self) -> Option<&Arc<dyn PoseModel>> {
@@ -586,11 +603,119 @@ impl Sensing {
             stamp,
         )?;
 
+        if self.config.pose_enabled {
+            emitted += self.process_pose(batch, stamp)?;
+        }
+
         if self.config.vitals_enabled {
             emitted += self.process_vitals(batch, stamp)?;
         }
 
         Ok(emitted)
+    }
+
+    /// Estimate one coarse pose per room from the window's per-node CSI.
+    ///
+    /// This is feature-level, within-room fusion (`fusion-sync.md` §2): each
+    /// node contributes scalar torso-scatterer ranges derived from its own CSI,
+    /// weighted by its calibration quality and clock health, and
+    /// [`crate::pose::estimate_room_pose`] combines them into a rigid torso. No
+    /// cross-node raw phase is combined (§3). A room with fewer than two nodes
+    /// — or one that cannot form a torso — yields no pose, never a fabricated
+    /// one.
+    fn process_pose(
+        &mut self,
+        batch: &WindowBatch,
+        stamp: Timestamp,
+    ) -> Result<usize, SensingError> {
+        // Group this window's node envelopes by room, carrying each node's
+        // position and fusion weight.
+        let mut by_room: BTreeMap<RoomId, Vec<RoomPoseEntry<'_>>> = BTreeMap::new();
+        for sensing_frame in &batch.frames {
+            let SensingScope::Node(node) = sensing_frame.scope else {
+                continue;
+            };
+            let Some(room) = self.topology.room_of(node).value.cloned() else {
+                continue;
+            };
+            let Some(position) = self.topology.position(node).value else {
+                continue;
+            };
+            let quality = self.node_calibration_quality(node);
+            let weight = fusion::node_fusion_weight(quality, self.sync.weight(node));
+            by_room.entry(room).or_default().push((
+                node,
+                [f64::from(position[0]), f64::from(position[1])],
+                weight,
+                &sensing_frame.frames,
+            ));
+        }
+
+        let t_ms = (batch.start.0 / 1_000_000) as i64;
+        let mut emitted = 0usize;
+        for (room, entries) in &by_room {
+            let inputs: Vec<PoseNodeInput<'_>> = entries
+                .iter()
+                .map(|(node, position_m, weight, envelopes)| PoseNodeInput {
+                    node: *node,
+                    position_m: *position_m,
+                    weight: *weight,
+                    envelopes,
+                })
+                .collect();
+            let Some(pose) = pose::estimate_room_pose(
+                room,
+                SubjectId::new(0),
+                t_ms,
+                &inputs,
+                &self.config.pose_geometry,
+                &self.config.pose_dither_hz,
+                self.config.pose_min_frames,
+            ) else {
+                continue;
+            };
+            self.record(
+                "pose.confidence",
+                MeasurementValue::Scalar(f64::from(pose.score)),
+                "ratio",
+                Grade::Statistical,
+                stamp,
+            )?;
+            self.recorded_poses.push(pose);
+            emitted += 1;
+        }
+        if emitted > 0 {
+            self.record(
+                "pose.windows",
+                MeasurementValue::Count(self.recorded_poses.len() as u64),
+                "count",
+                Grade::Deterministic,
+                stamp,
+            )?;
+        }
+        Ok(emitted)
+    }
+
+    /// The calibration quality `q_n` of a node (`fusion-sync.md` §2.3).
+    ///
+    /// When a valid calibration artefact is applied, its per-node gain-drift
+    /// confidence (falling back to the global link coverage) supplies `q_n`;
+    /// otherwise the configured [`SensingConfig::pose_uncalibrated_quality`]
+    /// applies, whose `0.0` default withholds an uncalibrated node from pose.
+    fn node_calibration_quality(&self, node: NodeId) -> f64 {
+        if let Some(artifact) = self.config.calibration.as_ref() {
+            if let Some(calibrated) = artifact.nodes.iter().find(|n| n.node_id == node.0) {
+                let q = f64::from(calibrated.gain_drift.confidence);
+                if q.is_finite() && q > 0.0 {
+                    return q.clamp(0.0, 1.0);
+                }
+            }
+            let q = artifact.quality.metrics.link_coverage;
+            if q.is_finite() {
+                return q.clamp(0.0, 1.0);
+            }
+        }
+        self.config.pose_uncalibrated_quality
     }
 
     /// Accumulate this window's frames and, once a room has a full vitals span,

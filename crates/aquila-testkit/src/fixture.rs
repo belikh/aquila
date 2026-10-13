@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use aquila_sources::{ReplayMode, ReplaySource, SourceError};
-use aquila_types::{Clock, CsiEnvelope, GroundTruthRecord};
+use aquila_types::{Clock, CsiEnvelope, GroundTruthRecord, Pose};
 
 use crate::generator::DeterministicCsiGenerator;
 
@@ -66,6 +66,8 @@ pub struct Fixture {
     pub frames: Vec<CsiEnvelope>,
     /// The synthesised ground-truth records.
     pub ground_truth: Vec<GroundTruthRecord>,
+    /// The synthesised coarse-pose ground truth, when the scene carries bodies.
+    pub pose_truth: Vec<Pose>,
 }
 
 impl Fixture {
@@ -89,6 +91,7 @@ impl Fixture {
             session,
             frames,
             ground_truth,
+            pose_truth: generator.pose_ground_truth(),
         })
     }
 

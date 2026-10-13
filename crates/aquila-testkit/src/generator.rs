@@ -9,7 +9,7 @@
 use aquila_simulator::{synthesise_session, SceneScript, SimConfig, SimError, SimulatorSource};
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
-    CsiEnvelope, DeviceType, FirmwareRef, Floor, GroundTruthRecord, Home, MacAddr, Node, Room,
+    CsiEnvelope, DeviceType, FirmwareRef, Floor, GroundTruthRecord, Home, MacAddr, Node, Pose, Room,
     RoomId, RoomKind, Slug, Topology, CONTRACT_VERSION,
 };
 
@@ -76,6 +76,15 @@ impl DeterministicCsiGenerator {
     pub fn ground_truth(&self) -> Vec<(u64, GroundTruthRecord)> {
         SimulatorSource::new(self.script.clone(), self.config.clone())
             .map(|source| source.ground_truth())
+            .unwrap_or_default()
+    }
+
+    /// The synthesised coarse-pose ground-truth stream (research-only; never a
+    /// runtime input).
+    #[must_use]
+    pub fn pose_ground_truth(&self) -> Vec<Pose> {
+        SimulatorSource::new(self.script.clone(), self.config.clone())
+            .map(|source| source.pose_ground_truth())
             .unwrap_or_default()
     }
 }

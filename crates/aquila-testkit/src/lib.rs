@@ -30,6 +30,7 @@ pub use generator::{topology_for, DeterministicCsiGenerator};
 pub use metrics::RecordingMetricSink;
 pub use models::{FakePoseModel, FakeVitalsModel};
 pub use scoring::{
-    count_mae, presence_f1, vitals_mae, vitals_reference, window_index, PresenceScore,
+    count_mae, presence_f1, torso_pck20, torso_span, vitals_mae, vitals_reference, window_index,
+    PckScore, PresenceScore, TorsoPoint,
 };
 pub use sink::CollectorSink;

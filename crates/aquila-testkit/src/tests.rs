@@ -18,11 +18,11 @@ use aquila_sensing::{
     calibrate, topology_digest, CalibrationError, CalibrationExpectation, CalibrationInputs,
     CalibrationRequest, CalibrationStore, InvalidationReason, Sensing, SensingConfig, Topology,
 };
-use aquila_simulator::{Actor, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SimConfig};
+use aquila_simulator::{Actor, Body, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SimConfig};
 use aquila_types::{Band, CsiEnvelope, Event, GroundTruthRecord, NodeId, RoomId, Slug};
 
 use crate::{
-    count_mae, presence_f1, topology_for, vitals_mae, vitals_reference, CollectorSink,
+    count_mae, presence_f1, torso_pck20, topology_for, vitals_mae, vitals_reference, CollectorSink,
     DeterministicCsiGenerator, FakeClock, Fixture, RecordingMetricSink,
 };
 
@@ -77,6 +77,7 @@ fn tracer_scene() -> SceneScript {
                     phase_rad: 0.0,
                 }),
                 heart: None,
+                body: None,
             },
             Actor {
                 room: lounge,
@@ -95,6 +96,7 @@ fn tracer_scene() -> SceneScript {
                     phase_rad: 0.0,
                 }),
                 heart: None,
+                body: None,
             },
         ],
         band: Band::B2G4,
@@ -210,6 +212,7 @@ fn vitals_scene() -> SceneScript {
                 rate_hz: 1.2,
                 phase_rad: 0.0,
             }),
+            body: None,
         }],
         band: Band::B2G4,
         channel: 6,
@@ -548,6 +551,7 @@ fn calibration_walk_scene(room: &RoomId) -> SceneScript {
             phase_rad: 0.0,
         }),
         heart: None,
+        body: None,
     }];
     scene
 }
@@ -867,4 +871,231 @@ fn a_stale_calibration_is_never_silently_reused() {
         outcome.is_err(),
         "a stale calibration must be refused, never silently reused"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Slice 4 — multi-node single room: fusion and coarse pose (`roadmap.md`,
+// Slice 4)
+// ---------------------------------------------------------------------------
+
+/// A deterministic, one-room, two-node scene whose single actor carries a rigid
+/// coarse-pose body. Both nodes observe the actor's four torso scatterers, each
+/// micro-moving at its own pose-dither frequency, so the CSP carries a
+/// pose-correlated signature a principle estimator can recover.
+fn pose_scene() -> SceneScript {
+    let study: Slug = Slug("study".to_string());
+    SceneScript {
+        name: "slice4-pose".to_string(),
+        home: Slug("slice4-home".to_string()),
+        nodes: vec![
+            NodeSpec {
+                id: NodeId(1),
+                room: study.clone(),
+                pos_m: [0.3, 0.3, 0.0],
+                skew_ppm: 8.0,
+                noise_scale: 1.0,
+            },
+            NodeSpec {
+                id: NodeId(2),
+                room: study.clone(),
+                pos_m: [0.3, 3.7, 0.0],
+                skew_ppm: -6.0,
+                noise_scale: 1.0,
+            },
+        ],
+        actors: vec![Actor {
+            room: study,
+            position_m: [2.0, 2.0, 0.0],
+            active_from_s: 0.0,
+            active_to_s: 12.0,
+            motion: Motion::Stationary,
+            breathing: Some(Rhythm {
+                amplitude_m: 0.005,
+                rate_hz: 0.25,
+                phase_rad: 0.0,
+            }),
+            heart: None,
+            body: Some(Body::default_torso(0.0)),
+        }],
+        band: Band::B2G4,
+        channel: 6,
+        bandwidth_mhz: 20,
+        subcarriers: 64,
+        subcarrier_spacing_hz: 312_500.0,
+        tick_hz: 20.0,
+        duration_s: 12.0,
+        noise_amplitude: 0.05,
+        impairments: Impairments::default(),
+    }
+}
+
+/// The observable result of one slice-4 pose run.
+struct PoseRun {
+    events: Vec<Event>,
+    measurements: Vec<Measurement>,
+    poses: Vec<aquila_types::Pose>,
+    ground_truth: Vec<GroundTruthRecord>,
+    pose_truth: Vec<aquila_types::Pose>,
+}
+
+/// Replay the two-node pose scene through the sensing core with coarse pose
+/// enabled, and collect everything it emits.
+fn run_pose_tracer() -> PoseRun {
+    let script = pose_scene();
+    let sim_config = SimConfig::new(2026, Slug("slice4-pose".to_string()), 0, 0);
+    let generator =
+        DeterministicCsiGenerator::new(script.clone(), sim_config).expect("valid scene");
+    let fixture = Fixture::load(&generator).expect("fixture");
+
+    let clock = Arc::new(FakeClock::new(0));
+    let source = fixture.replay_source(clock.clone()).expect("replay source");
+    let collector = CollectorSink::new();
+    let metrics = RecordingMetricSink::new();
+    let event_handle = collector.handle();
+    let record_handle = metrics.handle();
+
+    let config = SensingConfig {
+        pose_enabled: true,
+        // The synthetic in-domain fixture supplies no calibration artefact, so
+        // the nodes are explicitly treated as calibrated here. A real
+        // deployment supplies per-node calibration quality through the applied
+        // artefact, and `q_n = 0` withholds pose (`fusion-sync.md` §2.3).
+        pose_uncalibrated_quality: 1.0,
+        ..SensingConfig::default()
+    };
+
+    let mut sensing = Sensing::new(
+        Box::new(source),
+        clock.clone(),
+        Box::new(collector),
+        Box::new(metrics),
+        None,
+        None,
+        topology_for(&script),
+        config,
+    )
+    .expect("valid core");
+
+    loop {
+        clock.advance(STEP_NS);
+        if sensing.step().expect("step").ended {
+            break;
+        }
+    }
+    sensing.sink().expect("flush");
+
+    PoseRun {
+        events: snapshot(&event_handle),
+        measurements: snapshot(&record_handle),
+        poses: sensing.poses().to_vec(),
+        ground_truth: fixture.ground_truth,
+        pose_truth: fixture.pose_truth,
+    }
+}
+
+#[test]
+fn coarse_pose_meets_the_torso_pck20_bar() {
+    let run = run_pose_tracer();
+    assert!(
+        !run.pose_truth.is_empty(),
+        "the scene must synthesise coarse-pose ground truth"
+    );
+
+    let score = torso_pck20(&run.poses, &run.pose_truth, 0.20, 1_000);
+    let presence = presence_f1(&run.events, &run.ground_truth, HOP_MS);
+    eprintln!(
+        "slice4 pose: poses={} matched={} unmatched={} torso_pck20={:.3} (correct {}/{}) \
+mean torso span {:.3} m; presence F1={:.3}, events={}, measurements={}",
+        run.poses.len(),
+        score.matched_poses,
+        score.unmatched_predictions,
+        score.pck,
+        score.correct,
+        score.total,
+        score.torso_span_m,
+        presence.f1,
+        run.events.len(),
+        run.measurements.len(),
+    );
+
+    assert!(
+        score.total > 0,
+        "at least one pose must be paired with a reference torso"
+    );
+    assert!(
+        score.pck >= 0.65,
+        "torso-PCK@20 {:.3} is below the v1 bar of 0.65",
+        score.pck
+    );
+
+    // Presence must hold against the single-node baseline bar.
+    assert!(
+        presence.f1 >= 0.90,
+        "fused presence F1 {:.3} is below the v1 bar of 0.90",
+        presence.f1
+    );
+
+    // Record the slice-4 ledger row; this test is the reproducer.
+    let ledger = Mutex::new(Vec::new());
+    record_ledger(&ledger, "pose.pck20.torso", score.pck, "score", score.total);
+    record_ledger(&ledger, "presence.f1.room", presence.f1, "score", 1);
+    let ledger = ledger.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(ledger.iter().any(|m| m.name.as_str() == "pose.pck20.torso"));
+    assert!(ledger.iter().any(|m| m.name.as_str() == "presence.f1.room"));
+}
+
+/// Whether two poses are bit-identical, treating a `NaN` coordinate as equal to
+/// the same `NaN` bit pattern (the contract uses `NaN` for an absent keypoint,
+/// and `NaN != NaN` under the derived `PartialEq`).
+fn pose_bit_equal(a: &aquila_types::Pose, b: &aquila_types::Pose) -> bool {
+    a.subject == b.subject
+        && a.room == b.room
+        && a.t_unix_ms == b.t_unix_ms
+        && a.score.to_bits() == b.score.to_bits()
+        && a.witness == b.witness
+        && a.keys.iter().zip(&b.keys).all(|(x, y)| {
+            x.id == y.id
+                && x.x_m.to_bits() == y.x_m.to_bits()
+                && x.y_m.to_bits() == y.y_m.to_bits()
+                && x.confidence.to_bits() == y.confidence.to_bits()
+                && match (x.z_m, y.z_m) {
+                    (Some(zx), Some(zy)) => zx.to_bits() == zy.to_bits(),
+                    (None, None) => true,
+                    _ => false,
+                }
+        })
+}
+
+/// Whether two pose sequences are bit-identical.
+fn poses_bit_equal(a: &[aquila_types::Pose], b: &[aquila_types::Pose]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| pose_bit_equal(x, y))
+}
+
+#[test]
+fn pose_replay_is_deterministic() {
+    let first = run_pose_tracer();
+    let second = run_pose_tracer();
+    assert!(
+        poses_bit_equal(&first.poses, &second.poses),
+        "same scene and seed must emit bit-identical coarse poses"
+    );
+    assert_eq!(first.events, second.events);
+    assert_eq!(first.measurements.len(), second.measurements.len());
+}
+
+#[test]
+fn pose_rows_are_recorded() {
+    let run = run_pose_tracer();
+    assert!(
+        run.measurements
+            .iter()
+            .any(|m| m.name.as_str() == "sensing.pose.windows"),
+        "the core must record a pose Measurement row"
+    );
+    for measurement in &run.measurements {
+        measurement.validate().expect("recorded measurement is valid");
+    }
+    for pose in &run.poses {
+        pose.validate().expect("emitted pose is valid");
+    }
 }
