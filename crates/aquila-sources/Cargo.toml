@@ -9,6 +9,7 @@ publish.workspace = true
 aquila-types = { path = "../aquila-types" }
 aquila-wire = { path = "../aquila-wire" }
 aquila-session = { path = "../aquila-session" }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

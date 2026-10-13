@@ -70,6 +70,9 @@ version = "0.0.0"
 dependencies = [
  "aquila-types",
  "aquila-wire",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -90,6 +93,9 @@ dependencies = [
  "aquila-sources",
  "aquila-types",
  "aquila-wire",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -99,6 +105,7 @@ dependencies = [
  "aquila-session",
  "aquila-types",
  "aquila-wire",
+ "thiserror",
 ]
 
 [[package]]

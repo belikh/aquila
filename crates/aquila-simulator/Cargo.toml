@@ -10,6 +10,9 @@ aquila-types = { path = "../aquila-types" }
 aquila-wire = { path = "../aquila-wire" }
 aquila-session = { path = "../aquila-session" }
 aquila-sources = { path = "../aquila-sources" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
