@@ -1,0 +1,16 @@
+# Rust
+/target
+**/target
+
+# Nix
+/result
+/result-*
+
+# Agent scaffolding (repo policy: never committed)
+.claude/
+.claude-flow/
+.swarm/
+
+# OS / editor
+.DS_Store
+*.swp

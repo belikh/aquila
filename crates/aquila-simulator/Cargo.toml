@@ -1,0 +1,15 @@
+[package]
+name = "aquila-simulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+aquila-types = { path = "../aquila-types" }
+aquila-wire = { path = "../aquila-wire" }
+aquila-session = { path = "../aquila-session" }
+aquila-sources = { path = "../aquila-sources" }
+
+[lints]
+workspace = true

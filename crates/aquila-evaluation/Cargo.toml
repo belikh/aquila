@@ -1,0 +1,16 @@
+[package]
+name = "aquila-evaluation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+aquila-types = { path = "../aquila-types" }
+aquila-sources = { path = "../aquila-sources" }
+aquila-sensing = { path = "../aquila-sensing" }
+aquila-metrics = { path = "../aquila-metrics" }
+aquila-simulator = { path = "../aquila-simulator" }
+
+[lints]
+workspace = true
