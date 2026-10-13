@@ -319,7 +319,7 @@ fn engine_steps_and_emits_measurements() {
 }
 
 #[test]
-fn calibrate_is_an_honest_stub() {
+fn calibrate_refuses_empty_inputs_honestly() {
     let source = Box::new(VecSource::new(vec![]));
     let clock = Arc::new(ManualClock::new(0));
     let sink = Box::new(CountingSink::default());
@@ -335,8 +335,16 @@ fn calibrate_is_an_honest_stub() {
         SensingConfig::default(),
     )
     .unwrap();
-    let report = sensing.calibrate().unwrap();
+    let request = crate::calibration::CalibrationRequest::new(
+        "0".repeat(40),
+        "cal-test",
+        "2026-10-14T00:00:00Z",
+    );
+    let report = sensing
+        .calibrate(&request, &crate::calibration::CalibrationInputs::default())
+        .unwrap();
     assert!(!report.calibrated);
+    assert!(report.artifact.is_none());
 }
 
 #[test]

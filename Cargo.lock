@@ -63,6 +63,8 @@ dependencies = [
  "aquila-signal",
  "aquila-sources",
  "aquila-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

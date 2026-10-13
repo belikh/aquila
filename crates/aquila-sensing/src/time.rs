@@ -101,6 +101,17 @@ impl TimeSync {
         }
     }
 
+    /// Install a calibrated fit for a node, overriding an unseeded fit until
+    /// enough live observations refine it.
+    ///
+    /// This is how a whole-home calibration (slice 3) supplies per-node clock
+    /// correction: the artefact's affine model seeds the same fit the core uses
+    /// at ingest, so drift correction is calibrated from the first frame rather
+    /// than from a cold start (`geometry-calibration.md` §7, L1).
+    pub fn seed(&mut self, fit: NodeClockFit) {
+        self.fits.insert(fit.node, fit);
+    }
+
     /// The current fit for a node, if it has enough accepted samples.
     #[must_use]
     pub fn model(&self, node: NodeId) -> Option<&NodeClockFit> {

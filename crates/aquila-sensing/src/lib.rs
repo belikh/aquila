@@ -51,6 +51,7 @@ mod error;
 mod escalation;
 mod features;
 mod fusion;
+mod sha256;
 mod sink;
 mod time;
 mod window;
@@ -58,11 +59,17 @@ mod window;
 #[cfg(test)]
 mod tests;
 
-pub use calibration::CalibrationReport;
+pub use calibration::{
+    calibrate, topology_digest, CalibrationArtifact, CalibrationExpectation, CalibrationIndex,
+    CalibrationIndexEntry, CalibrationInputs, CalibrationQuality, CalibrationReport,
+    CalibrationRequest, CalibrationStore, Gate, QualityMetrics, QualityStatus, ZoneCalibration,
+    ZoneDetection, CALIBRATION_SCHEMA_MAJOR, CALIBRATION_SCHEMA_VERSION,
+    CALIBRATION_SEMANTICS_VERSION, DEFAULT_STALE_AFTER_DAYS,
+};
 pub use clock::{ManualClock, SystemClock};
 pub use config::{MeasurementConfig, SensingConfig};
 pub use engine::{Sensing, StepReport};
-pub use error::{SensingError, SinkError};
+pub use error::{CalibrationError, InvalidationReason, SensingError, SinkError};
 pub use escalation::{floor_presence_probability, home_presence_probability, RoomSummary};
 pub use fusion::{
     clamp_logit, mix_count_pmf, node_count_pmf, pool_presence_logit, pooled_presence_probability,

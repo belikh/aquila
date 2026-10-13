@@ -69,19 +69,23 @@ pub fn extract_motion(
 }
 
 /// The per-subcarrier amplitude statistics of a window.
-struct AmplitudeVariability {
+pub(crate) struct AmplitudeVariability {
     /// Mean over subcarriers of the temporal coefficient of variation.
-    cv: f64,
+    pub(crate) cv: f64,
     /// Mean over subcarriers of the temporal standard deviation.
-    std: f64,
+    pub(crate) std: f64,
     /// Mean over subcarriers of the mean amplitude.
-    mean: f64,
+    pub(crate) mean: f64,
 }
 
 /// The mean over subcarriers of the temporal coefficient of variation, the
 /// absolute temporal standard deviation and the mean amplitude, all accumulated
 /// in `f64`.
-fn amplitude_variability(frames: &[CsiEnvelope]) -> AmplitudeVariability {
+///
+/// This is the same variability the presence detector consumes, exposed to the
+/// calibration module so a learned threshold is expressed in exactly the units
+/// the detector measures (`geometry-calibration.md` §7, L3).
+pub(crate) fn amplitude_variability(frames: &[CsiEnvelope]) -> AmplitudeVariability {
     if frames.is_empty() {
         return AmplitudeVariability {
             cv: 0.0,

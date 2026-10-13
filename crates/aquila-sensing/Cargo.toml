@@ -12,6 +12,8 @@ aquila-signal = { path = "../aquila-signal" }
 aquila-sources = { path = "../aquila-sources" }
 aquila-inference = { path = "../aquila-inference" }
 aquila-metrics = { path = "../aquila-metrics" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

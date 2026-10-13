@@ -26,17 +26,20 @@ use aquila_metrics::{
 use aquila_signal::{Calibration as SignalCalibration, Config as SignalConfig};
 use aquila_sources::{CsiSource, FrameOrEnd};
 use aquila_types::{
-    Clock, CsiEnvelope, Estimate, Event, EventKind, EventPayload, EventScope, RoomId, SensingScope,
-    TimeSpan, Topology as ContractTopology, VitalsReading, VitalsStatus, Witness,
+    Clock, CsiEnvelope, Estimate, Event, EventKind, EventPayload, EventScope, NodeId, RoomId,
+    SensingScope, TimeSpan, Topology as ContractTopology, VitalsReading, VitalsStatus, Witness,
 };
 
-use crate::calibration::CalibrationReport;
+use crate::calibration::{
+    calibrate as run_calibration, calibrated_logit, CalibrationArtifact, CalibrationExpectation,
+    CalibrationInputs, CalibrationReport, CalibrationRequest,
+};
 use crate::config::SensingConfig;
 use crate::error::SensingError;
 use crate::features::extract_motion;
 use crate::fusion::{self, NodeEvidence};
 use crate::sink::Sink;
-use crate::time::TimeSync;
+use crate::time::{NodeClockFit, TimeSync};
 use crate::window::{WindowAssembler, WindowBatch};
 
 /// What one call to [`Sensing::step`] did.
@@ -136,7 +139,7 @@ impl Sensing {
             .map(|room| room.id.clone())
             .collect();
         let assembler = WindowAssembler::new(&config);
-        Ok(Self {
+        let mut sensing = Self {
             source,
             clock,
             output,
@@ -156,7 +159,14 @@ impl Sensing {
             vitals_windows: 0,
             windows_processed: 0,
             finished: false,
-        })
+        };
+        // A calibration supplied through the config is applied (and its
+        // per-node clock correction seeded) before the first frame; a stale or
+        // invalid artefact is refused rather than silently reused.
+        if let Some(artifact) = sensing.config.calibration.clone() {
+            sensing.apply_calibration(&artifact)?;
+        }
+        Ok(sensing)
     }
 
     /// Pull one frame and, when it closes a window, run fusion and emit.
@@ -204,26 +214,165 @@ impl Sensing {
         }
     }
 
-    /// Run the global calibration process.
+    /// Run the global whole-home calibration wizard over captured evidence.
     ///
-    /// This is a documented slice-1 stub: it reports honestly that no
-    /// calibration was computed and records that fact, and never fabricates a
-    /// correction ([`calibration`](crate::calibration) module).
+    /// Produces a content-addressed [`CalibrationArtifact`]
+    /// (`aquila.calibration/v1`), applies it (seeding per-node clock correction
+    /// and per-zone thresholds), records the calibration's commit-keyed quality
+    /// metrics, and reports the outcome. Empty inputs are refused honestly: no
+    /// artefact is fabricated (`geometry-calibration.md` §10).
     ///
     /// # Errors
     ///
-    /// Returns a typed [`SensingError`] if recording the stub measurement fails.
-    pub fn calibrate(&mut self) -> Result<CalibrationReport, SensingError> {
-        let report = CalibrationReport::stub(self.windows_processed);
+    /// Returns [`SensingError::Calibration`] when the artefact cannot be built,
+    /// sealed, verified or applied; or [`SensingError::Metrics`] if recording a
+    /// quality row fails.
+    pub fn calibrate(
+        &mut self,
+        request: &CalibrationRequest,
+        inputs: &CalibrationInputs,
+    ) -> Result<CalibrationReport, SensingError> {
+        let windows_observed = self.windows_processed;
         let stamp = Timestamp::now(self.clock.as_ref());
+        if !inputs.has_baseline() {
+            self.record(
+                "calibration.performed",
+                MeasurementValue::Flag(false),
+                "flag",
+                Grade::Deterministic,
+                stamp,
+            )?;
+            return Ok(CalibrationReport::uncalibrated(
+                windows_observed,
+                "no empty-home capture supplied; nothing was calibrated",
+            ));
+        }
+
+        // The artefact must be keyed to this core's commit so a later
+        // application validates against the same facts.
+        let mut request = request.clone();
+        request.core_commit = self.config.measurement.commit.clone();
+        let artifact = run_calibration(&self.topology, &self.config, &request, inputs)?;
+        self.apply_calibration(&artifact)?;
+        self.config.calibration = Some(artifact.clone());
+
+        let metrics = artifact.quality.metrics.clone();
+        let status = artifact.quality.status;
+        let valid = artifact.quality.valid;
+        let topology_digest = artifact.home.topology_digest.clone();
+        let calibration_id = artifact.calibration_id.clone();
+
+        self.record(
+            "calibration.digest",
+            MeasurementValue::Digest(calibration_id.clone()),
+            "sha256",
+            Grade::Deterministic,
+            stamp,
+        )?;
+        self.record(
+            "calibration.link_coverage",
+            MeasurementValue::Scalar(metrics.link_coverage),
+            "ratio",
+            Grade::Statistical,
+            stamp,
+        )?;
+        self.record(
+            "calibration.baseline_snr_db",
+            MeasurementValue::Scalar(metrics.baseline_snr_db),
+            "db",
+            Grade::Statistical,
+            stamp,
+        )?;
+        self.record(
+            "calibration.zone_separation",
+            MeasurementValue::Scalar(metrics.zone_separation),
+            "ratio",
+            Grade::Statistical,
+            stamp,
+        )?;
+        self.record(
+            "calibration.presence_f1",
+            MeasurementValue::Scalar(metrics.presence_f1),
+            "score",
+            Grade::Statistical,
+            stamp,
+        )?;
+        self.record(
+            "calibration.drift.per_node",
+            MeasurementValue::Scalar(metrics.drift_residual_ms),
+            "ms",
+            Grade::Deterministic,
+            stamp,
+        )?;
         self.record(
             "calibration.performed",
-            MeasurementValue::Flag(false),
+            MeasurementValue::Flag(valid),
             "flag",
             Grade::Deterministic,
             stamp,
         )?;
-        Ok(report)
+
+        Ok(CalibrationReport {
+            calibrated: valid,
+            quality: Some(status),
+            topology_digest,
+            windows_observed,
+            note: format!("calibration {calibration_id} produced with status {status:?}"),
+            artifact: Some(artifact),
+        })
+    }
+
+    /// Apply a calibration artefact: verify it, bind it to the topology, and
+    /// seed the per-node clock correction.
+    ///
+    /// A stale or invalid artefact is refused with a typed error rather than
+    /// silently reused (`geometry-calibration.md` §10).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SensingError::Calibration`] on a digest mismatch, a schema or
+    /// semantics mismatch, a topology/commit/firmware change, a failed quality
+    /// gate, or a JSON error computing the current topology digest.
+    pub fn apply_calibration(&mut self, artifact: &CalibrationArtifact) -> Result<(), SensingError> {
+        artifact.verify_digest()?;
+        let topology_digest = crate::calibration::topology_digest(self.topology.model())?;
+        let expect =
+            CalibrationExpectation::new(self.config.measurement.commit.clone(), topology_digest);
+        artifact.check(&expect)?;
+        for node in &artifact.nodes {
+            self.sync.seed(NodeClockFit {
+                node: NodeId(node.node_id),
+                slope: node.clock.slope,
+                intercept_ns: node.clock.intercept_ns,
+                samples: 0,
+                residual_rms_ns: node.clock.fit_residual_ms * 1e6,
+            });
+        }
+        Ok(())
+    }
+
+    /// The applied calibration artefact, when one is present.
+    #[must_use]
+    pub fn calibration(&self) -> Option<&CalibrationArtifact> {
+        self.config.calibration.as_ref()
+    }
+
+    /// The per-node presence logit: the calibrated zone threshold when a valid
+    /// calibration supplies one, and the uncalibrated defaults otherwise.
+    fn presence_logit(&self, room: &RoomId, node: NodeId, window_std: f64) -> f64 {
+        if let Some(calibration) = self.config.calibration.as_ref() {
+            if let (Some(zone), Some(baseline)) =
+                (calibration.zone_for_room(room), calibration.node_baseline(node))
+            {
+                return calibrated_logit(
+                    window_std,
+                    f64::from(baseline.amplitude_std_mean),
+                    f64::from(zone.detection.presence_threshold_db),
+                    self.config.calibration_scale_floor_db,
+                );
+            }
+        }
+        (window_std - self.config.presence_motion_threshold) / self.config.presence_motion_scale
     }
 
     /// Flush both output seams.
@@ -310,8 +459,7 @@ impl Sensing {
             if sensing_frame.frames.len() < self.config.min_frames_per_node {
                 continue;
             }
-            let logit = (feature.amplitude_std - self.config.presence_motion_threshold)
-                / self.config.presence_motion_scale;
+            let logit = self.presence_logit(&room, node, feature.amplitude_std);
             let presence_probability = fusion::sigmoid(logit);
             let weight = self.config.node_weight.clamp(0.0, 1.0) * self.sync.weight(node);
             let count_pmf = fusion::node_count_pmf(presence_probability, max_count);

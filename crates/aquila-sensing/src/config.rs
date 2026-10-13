@@ -5,6 +5,13 @@
 //! window assembly on a one-second hop, room-scope presence and count, and a
 //! single-window hysteresis. Later slices thicken the escalation policy without
 //! moving a constant out of this struct.
+//!
+//! Slice 3 adds the **calibrated-mode inputs**: an optional
+//! [`CalibrationArtifact`] whose per-node clock corrections and per-zone
+//! thresholds override the uncalibrated defaults when present and valid, plus a
+//! floor on the calibrated logit scale.
+
+use crate::calibration::CalibrationArtifact;
 
 /// Provenance recorded on every [`Measurement`](aquila_metrics::Measurement) the
 /// core writes.
@@ -83,6 +90,17 @@ pub struct SensingConfig {
     /// presence window hop. Vitals are computed from the same frames as
     /// presence, accumulated over this span.
     pub vitals_window_ns: u64,
+    /// The validated whole-home calibration artefact to apply, when present.
+    ///
+    /// When `Some` and valid, it supplies per-node clock correction (seeded into
+    /// the core's time sync) and per-zone presence thresholds, expressed as a
+    /// decibel rise above each node's empty-home baseline. When `None`, the
+    /// uncalibrated `presence_motion_threshold` / `presence_motion_scale`
+    /// defaults apply.
+    pub calibration: Option<CalibrationArtifact>,
+    /// The floor on the calibrated logit scale, in dB per logit, so a tiny
+    /// learned zone threshold cannot amplify noise without bound.
+    pub calibration_scale_floor_db: f64,
     /// The provenance recorded on each measurement.
     pub measurement: MeasurementConfig,
 }
@@ -114,6 +132,8 @@ impl Default for SensingConfig {
             // Fifteen seconds is ~3.7 respiratory cycles at 0.25 Hz: enough to
             // resolve the rate, and short enough to track it.
             vitals_window_ns: 15_000_000_000,
+            calibration: None,
+            calibration_scale_floor_db: 1.0,
             measurement: MeasurementConfig::default(),
         }
     }
@@ -148,10 +168,14 @@ impl SensingConfig {
             ("p_lo", self.p_lo),
             ("p_hi", self.p_hi),
             ("node_weight", self.node_weight),
+            ("calibration_scale_floor_db", self.calibration_scale_floor_db),
         ] {
             if !value.is_finite() {
                 return Err(bad(&format!("{name} must be finite")));
             }
+        }
+        if self.calibration_scale_floor_db <= 0.0 {
+            return Err(bad("calibration_scale_floor_db must be positive"));
         }
         if self.presence_motion_scale <= 0.0 {
             return Err(bad("presence_motion_scale must be positive"));

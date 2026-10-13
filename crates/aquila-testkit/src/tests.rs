@@ -14,9 +14,12 @@ use aquila_metrics::{
     Authority, CommitSha, Grade, HostFingerprint, Measurement, MeasurementValue, MetricName,
     Timestamp, ToolVersions, Unit,
 };
-use aquila_sensing::{Sensing, SensingConfig};
+use aquila_sensing::{
+    calibrate, topology_digest, CalibrationError, CalibrationExpectation, CalibrationInputs,
+    CalibrationRequest, CalibrationStore, InvalidationReason, Sensing, SensingConfig, Topology,
+};
 use aquila_simulator::{Actor, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SimConfig};
-use aquila_types::{Band, Event, GroundTruthRecord, NodeId, Slug};
+use aquila_types::{Band, CsiEnvelope, Event, GroundTruthRecord, NodeId, RoomId, Slug};
 
 use crate::{
     count_mae, presence_f1, topology_for, vitals_mae, vitals_reference, CollectorSink,
@@ -479,4 +482,389 @@ fn at_least_one_measurement_is_recorded() {
             .validate()
             .expect("recorded measurement is valid");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 3 — global whole-home calibration tracer (`roadmap.md`, Slice 3)
+// ---------------------------------------------------------------------------
+
+/// A deterministic empty-home scene with the same two-node topology as the
+/// presence tracer, so the calibrated artefact binds to the same topology
+/// digest.
+fn calibration_empty_scene() -> SceneScript {
+    let kitchen: Slug = Slug("kitchen".to_string());
+    let lounge: Slug = Slug("lounge".to_string());
+    SceneScript {
+        // The home name matches `tracer_scene` so the topology digest is shared.
+        name: "tracer".to_string(),
+        home: Slug("tracer-home".to_string()),
+        nodes: vec![
+            NodeSpec {
+                id: NodeId(1),
+                room: kitchen,
+                pos_m: [0.0, 0.0, 2.4],
+                skew_ppm: 12.0,
+                noise_scale: 1.0,
+            },
+            NodeSpec {
+                id: NodeId(2),
+                room: lounge,
+                pos_m: [0.0, 0.0, 2.4],
+                skew_ppm: -9.0,
+                noise_scale: 1.0,
+            },
+        ],
+        actors: vec![],
+        band: Band::B2G4,
+        channel: 6,
+        bandwidth_mhz: 20,
+        subcarriers: 64,
+        subcarrier_spacing_hz: 312_500.0,
+        tick_hz: 20.0,
+        duration_s: 8.0,
+        noise_amplitude: 0.05,
+        impairments: Impairments::default(),
+    }
+}
+
+/// A walk-through scene: one actor moving in `room` for the whole capture.
+fn calibration_walk_scene(room: &RoomId) -> SceneScript {
+    let mut scene = calibration_empty_scene();
+    scene.name = format!("calibration-walk-{}", room.as_str());
+    scene.actors = vec![Actor {
+        room: room.clone(),
+        position_m: [1.5, 0.0, 0.0],
+        active_from_s: 0.0,
+        active_to_s: scene.duration_s,
+        motion: Motion::Walk {
+            axis: [1.0, 0.0, 0.0],
+            amplitude_m: 0.5,
+            period_s: 2.0,
+            phase_rad: 0.0,
+        },
+        breathing: Some(Rhythm {
+            amplitude_m: 0.005,
+            rate_hz: 0.25,
+            phase_rad: 0.0,
+        }),
+        heart: None,
+    }];
+    scene
+}
+
+/// Generate a scene's decoded envelopes.
+fn generate_frames(script: &SceneScript, seed: u64) -> Vec<CsiEnvelope> {
+    let sim_config = SimConfig::new(seed, Slug(script.name.clone()), 0, 0);
+    let generator =
+        DeterministicCsiGenerator::new(script.clone(), sim_config).expect("valid scene");
+    generator.frames().expect("frames")
+}
+
+/// The empty-home and walk-through captures for the tracer calibration.
+fn calibration_inputs() -> CalibrationInputs {
+    const SEED: u64 = 2026;
+    let empty = generate_frames(&calibration_empty_scene(), SEED);
+    let walkthrough = [Slug("kitchen".to_string()), Slug("lounge".to_string())]
+        .into_iter()
+        .map(|room| {
+            let frames = generate_frames(&calibration_walk_scene(&room), SEED);
+            (room, frames)
+        })
+        .collect();
+    CalibrationInputs::new(empty, walkthrough)
+}
+
+/// A process-unique temporary directory for the calibration store.
+fn unique_temp_dir() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("aquila-cal-{}-{n}", std::process::id()))
+}
+
+#[test]
+fn calibration_tracer_calibrates_persists_and_detects() {
+    let commit = "0".repeat(40);
+    let topology = Topology::load(topology_for(&calibration_empty_scene())).expect("topology");
+    let config = SensingConfig::default();
+    let request = CalibrationRequest::new(commit.clone(), "cal-run-1", "2026-10-14T00:00:00Z");
+    let inputs = calibration_inputs();
+
+    // Calibrate from the synthetic empty-home + walk-through captures.
+    let artifact = calibrate(&topology, &config, &request, &inputs).expect("calibration");
+    eprintln!(
+        "calibration {} status {:?} valid {} metrics {:?}",
+        artifact.calibration_id, artifact.quality.status, artifact.quality.valid,
+        artifact.quality.metrics
+    );
+    assert!(
+        artifact.quality.valid,
+        "quality gates failed: {:?}",
+        artifact.quality.gates
+    );
+
+    // Reproducibility: the same fixtures reproduce the same digest.
+    let again = calibrate(&topology, &config, &request, &inputs).expect("calibration");
+    assert_eq!(
+        again.calibration_id, artifact.calibration_id,
+        "re-running on the same fixtures must reproduce the artefact digest"
+    );
+
+    // The known per-node skew injected into the fixtures is recovered and
+    // inverted: node 1 is +12 ppm and node 2 is -9 ppm.
+    let clock1 = artifact.clock_for(NodeId(1)).expect("node 1 clock");
+    let clock2 = artifact.clock_for(NodeId(2)).expect("node 2 clock");
+    assert!(
+        (clock1.skew_ppm - 12.0).abs() < 0.1,
+        "node 1 skew {:.4} ppm did not recover the injected 12 ppm",
+        clock1.skew_ppm
+    );
+    assert!(
+        (clock2.skew_ppm + 9.0).abs() < 0.1,
+        "node 2 skew {:.4} ppm did not recover the injected -9 ppm",
+        clock2.skew_ppm
+    );
+    // A device stamp ahead of the core (its clock runs faster) corrects to core
+    // time by moving earlier: the fitted slope is below 1.
+    assert!(clock1.slope < 1.0, "a fast node must fit slope < 1");
+    let device_ns = 1_000_000_000_u64;
+    let corrected = clock1.correct_core_ns(device_ns);
+    assert!(
+        (corrected - device_ns as f64).abs() < 1.0e6,
+        "the clock correction must be a small, finite adjustment"
+    );
+
+    // Persist and reload.
+    let dir = unique_temp_dir();
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = CalibrationStore::new(&dir);
+    store.write(&artifact).expect("write");
+    let reloaded = store.read_current().expect("read").expect("present");
+    // The artefact is content-addressed over its serialised body, so a
+    // round-trip must preserve identity exactly (the in-memory `f64`s may
+    // differ by a final bit, which does not change the canonical bytes).
+    reloaded.verify_digest().expect("digest verifies after reload");
+    assert_eq!(
+        reloaded.calibration_id, artifact.calibration_id,
+        "the reloaded artefact must keep its content-addressed identity"
+    );
+    assert_eq!(
+        reloaded.body_sha256, artifact.body_sha256,
+        "the reloaded artefact must keep its canonical body digest"
+    );
+    assert_eq!(
+        reloaded.to_json().expect("serialise reloaded"),
+        artifact.to_json().expect("serialise original"),
+        "the store must round-trip the canonical document byte-for-byte"
+    );
+    // Re-writing the reloaded artefact is idempotent.
+    store.write(&reloaded).expect("rewrite");
+    let again_loaded = store.read_current().expect("read").expect("present");
+    assert_eq!(again_loaded.calibration_id, artifact.calibration_id);
+    let index = store.index().expect("index");
+    assert_eq!(
+        index.current.as_deref(),
+        Some(artifact.calibration_id.as_str()),
+        "the index must point at the written artefact"
+    );
+
+    // Invalidation: a topology or commit change makes the artefact stale, and a
+    // stale artefact is never silently reused.
+    let digest = topology_digest(topology.model()).expect("digest");
+    reloaded
+        .check(&CalibrationExpectation::new(commit.clone(), digest.clone()))
+        .expect("the current artefact validates");
+    let moved = CalibrationExpectation::new(commit.clone(), "sha256:changed".to_string());
+    match reloaded.check(&moved) {
+        Err(CalibrationError::Stale(reasons)) => assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, InvalidationReason::TopologyChanged { .. })),
+            "expected TopologyChanged, got {reasons:?}"
+        ),
+        other => panic!("expected a stale topology result, got {other:?}"),
+    }
+    let commit_changed = CalibrationExpectation::new("1".repeat(40), digest.clone());
+    assert!(
+        matches!(
+            reloaded.check(&commit_changed),
+            Err(CalibrationError::Stale(_))
+        ),
+        "a commit change must invalidate the artefact"
+    );
+    let mut model_changed = CalibrationExpectation::new(commit.clone(), digest);
+    model_changed.model_versions = vec!["pose-v2".to_string()];
+    assert!(
+        matches!(
+            reloaded.check(&model_changed),
+            Err(CalibrationError::Stale(_))
+        ),
+        "a model change must invalidate the artefact"
+    );
+    let mut live_drift = std::collections::BTreeMap::new();
+    live_drift.insert(1u16, 50.0_f64);
+    assert!(
+        reloaded
+            .drift_reasons(&live_drift, 4.0, 5.0)
+            .iter()
+            .any(|r| matches!(r, InvalidationReason::DriftExceeded { .. })),
+        "drift beyond the calibrated budget must invalidate the artefact"
+    );
+    assert!(
+        store.load_current_validated(&moved).is_err(),
+        "the store must refuse to return a stale artefact"
+    );
+
+    // Detect presence in a fresh scene using the calibrated thresholds.
+    let script = tracer_scene();
+    let sim_config = SimConfig::new(2026, Slug("tracer".to_string()), 0, 0);
+    let generator = DeterministicCsiGenerator::new(script.clone(), sim_config).expect("scene");
+    let fixture = Fixture::load(&generator).expect("fixture");
+
+    let clock = Arc::new(FakeClock::new(0));
+    let source = fixture.replay_source(clock.clone()).expect("replay source");
+    let collector = CollectorSink::new();
+    let metrics = RecordingMetricSink::new();
+    let event_handle = collector.handle();
+    let cal_config = SensingConfig {
+        calibration: Some(reloaded),
+        ..SensingConfig::default()
+    };
+    let mut sensing = Sensing::new(
+        Box::new(source),
+        clock.clone(),
+        Box::new(collector),
+        Box::new(metrics),
+        None,
+        None,
+        topology_for(&script),
+        cal_config,
+    )
+    .expect("calibrated core");
+    loop {
+        clock.advance(STEP_NS);
+        if sensing.step().expect("step").ended {
+            break;
+        }
+    }
+    sensing.sink().expect("flush");
+
+    let events = snapshot(&event_handle);
+    let score = presence_f1(&events, &fixture.ground_truth, HOP_MS);
+    eprintln!(
+        "calibrated presence: TP={} FP={} FN={} TN={} precision={:.3} recall={:.3} F1={:.3}",
+        score.true_positive,
+        score.false_positive,
+        score.false_negative,
+        score.true_negative,
+        score.precision,
+        score.recall,
+        score.f1,
+    );
+    assert!(
+        score.f1 >= 0.90,
+        "calibrated presence F1 {:.3} is below the v1 bar of 0.90",
+        score.f1
+    );
+
+    // Ledger rows: the ticket's deterministic/statistical calibration rows.
+    let ledger = Mutex::new(Vec::new());
+    record_ledger(
+        &ledger,
+        "presence.f1.cross_session",
+        score.f1,
+        "score",
+        1,
+    );
+    record_ledger(
+        &ledger,
+        "calibration.drift.per_node",
+        artifact.quality.metrics.drift_residual_ms,
+        "ms",
+        1,
+    );
+    record_ledger(
+        &ledger,
+        "calibration.presence_f1",
+        artifact.quality.metrics.presence_f1,
+        "score",
+        1,
+    );
+    {
+        let digest_row = Measurement {
+            name: MetricName::new("calibration.digest".to_string()).expect("valid name"),
+            version: 1,
+            value: MeasurementValue::Digest(artifact.calibration_id.clone()),
+            unit: Unit::new("sha256").expect("valid unit"),
+            samples: 1,
+            seed: None,
+            commit: CommitSha::new(commit.clone()).expect("valid commit"),
+            dirty: false,
+            host: HostFingerprint::new("aquila-testkit").expect("valid host"),
+            tools: ToolVersions::new(),
+            authority: Authority::Replayed,
+            grade: Grade::Deterministic,
+            timestamp: Timestamp::from_unix_ms(0),
+        };
+        digest_row.validate().expect("valid digest row");
+        ledger
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(digest_row);
+    }
+    let ledger = ledger.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    for name in [
+        "calibration.digest",
+        "presence.f1.cross_session",
+        "calibration.drift.per_node",
+    ] {
+        assert!(
+            ledger.iter().any(|m| m.name.as_str() == name),
+            "the ledger must carry the {name} row"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_stale_calibration_is_never_silently_reused() {
+    let commit = "0".repeat(40);
+    let topology = Topology::load(topology_for(&calibration_empty_scene())).expect("topology");
+    let config = SensingConfig::default();
+    let request = CalibrationRequest::new(commit, "cal-run-2", "2026-10-14T00:00:00Z");
+    let artifact =
+        calibrate(&topology, &config, &request, &calibration_inputs()).expect("calibration");
+    assert!(artifact.quality.valid);
+
+    // A core configured with a different commit must refuse the artefact rather
+    // than sense on a stale calibration.
+    let stale_config = SensingConfig {
+        calibration: Some(artifact),
+        measurement: aquila_sensing::MeasurementConfig {
+            commit: "1".repeat(40),
+            ..aquila_sensing::MeasurementConfig::default()
+        },
+        ..SensingConfig::default()
+    };
+    let script = calibration_empty_scene();
+    let sim_config = SimConfig::new(2026, Slug("tracer".to_string()), 0, 0);
+    let generator = DeterministicCsiGenerator::new(script.clone(), sim_config).expect("scene");
+    let fixture = Fixture::load(&generator).expect("fixture");
+    let clock = Arc::new(FakeClock::new(0));
+    let source = fixture.replay_source(clock.clone()).expect("source");
+    let outcome = Sensing::new(
+        Box::new(source),
+        clock,
+        Box::new(CollectorSink::new()),
+        Box::new(RecordingMetricSink::new()),
+        None,
+        None,
+        topology_for(&script),
+        stale_config,
+    );
+    assert!(
+        outcome.is_err(),
+        "a stale calibration must be refused, never silently reused"
+    );
 }
