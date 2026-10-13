@@ -10,6 +10,16 @@ aquila-types = { path = "../aquila-types" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
+[features]
+default = []
+# The ONNX Runtime adapters (`OnnxPoseModel`/`OnnxVitalsModel`). Off by default:
+# the `ort` dependency is deliberately not pulled yet, so the gated adapters
+# fail closed at load. See `inference-models.md` §3.2 and `src/onnx.rs`.
+onnx = []
+# Optional execution providers for `DeviceSelection`. Not required for v1.
+cuda = []
+openvino = []
+
 [dev-dependencies]
 proptest = { workspace = true }
 
