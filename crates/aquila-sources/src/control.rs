@@ -89,4 +89,65 @@ impl NodeControl {
         let message = decode_control(&self.buffer[..len])?;
         Ok((message, from))
     }
+
+    /// Send a request and wait for the reply that echoes its `request_id`.
+    ///
+    /// This is the core→node round trip of `capture-and-firmware.md` §6.1:
+    /// pairing (`GET_CONFIG`/`SET_CONFIG`/`SET_CSI`), status and time-sync
+    /// (`SYNC_PING` → `SYNC_ECHO`). The socket read timeout is set to `timeout`
+    /// for the duration of the call; a reply whose `request_id` does not match,
+    /// or a stray unsolicited `STATUS`, is skipped until the deadline. The
+    /// method reads no wall clock: the read timeout bounds the wait.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Decode`] if the request cannot be encoded or a
+    /// received datagram is malformed, [`SourceError::Io`] on a socket failure,
+    /// or [`SourceError::Timeout`] when no matching reply arrives in time.
+    pub fn request(
+        &mut self,
+        to: SocketAddr,
+        message: &ControlMessage,
+        timeout: Duration,
+    ) -> Result<ControlMessage, SourceError> {
+        self.send(to, message)?;
+        self.socket.set_read_timeout(Some(timeout))?;
+        loop {
+            match self.socket.recv_from(&mut self.buffer) {
+                Ok((len, _from)) => {
+                    let decoded = decode_control(&self.buffer[..len])?;
+                    if decoded.request_id == message.request_id {
+                        return Ok(decoded);
+                    }
+                    // An unrelated or stale reply: keep waiting until the
+                    // deadline, so a slow earlier exchange cannot desynchronise
+                    // this one.
+                }
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    return Err(SourceError::Timeout {
+                        operation: "request",
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(SourceError::Io(e)),
+            }
+        }
+    }
+
+    /// Set the socket read timeout, returning its previous value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Io`] if the option cannot be read or set.
+    pub fn replace_read_timeout(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<Option<Duration>, SourceError> {
+        let previous = self.socket.read_timeout()?;
+        self.socket.set_read_timeout(timeout)?;
+        Ok(previous)
+    }
 }

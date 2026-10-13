@@ -24,6 +24,13 @@ pub enum SourceError {
     /// The source has been shut down; a pending or subsequent `recv` is stopped.
     #[error("source has been shut down")]
     Stopped,
+    /// A blocking control exchange exceeded its deadline without a matching
+    /// reply.
+    #[error("control {operation} timed out")]
+    Timeout {
+        /// The operation that timed out, for example `"request"`.
+        operation: &'static str,
+    },
     /// Any other source failure, carrying a human-readable reason.
     #[error("source error: {0}")]
     Other(String),
@@ -44,6 +51,7 @@ impl SourceError {
             Self::Decode(_) => "decode",
             Self::Session(_) => "session",
             Self::Stopped => "stopped",
+            Self::Timeout { .. } => "timeout",
             Self::Other(_) => "other",
         }
     }

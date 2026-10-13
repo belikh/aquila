@@ -8,6 +8,7 @@
 //! that measurements were recorded — the three exit criteria of slice 1
 //! (`roadmap.md`, Slice 1).
 
+use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 
 use aquila_metrics::{
@@ -19,14 +20,20 @@ use aquila_sensing::{
     CalibrationRequest, CalibrationStore, HomeWindow, InvalidationReason, Sensing, SensingConfig,
     Topology,
 };
-use aquila_simulator::{Actor, Body, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SimConfig};
-use aquila_types::{Band, CsiEnvelope, Event, FloorId, GroundTruthRecord, NodeId, RoomId, Slug};
+use aquila_simulator::{
+    Actor, Body, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SimConfig,
+};
+use aquila_sources::{LiveConfig, NodeControl, UdpLiveSource};
+use aquila_types::{
+    Band, CsiEnvelope, Event, FloorId, GroundTruthRecord, MacAddr, NodeId, RoomId, Slug,
+};
+use aquila_wire::{AckStatus, ControlBody, ControlMessage, JoinAck, SetConfig, SyncEcho, SyncPing};
 
 use crate::{
     count_mae, floor_count_mae, floor_presence_f1, home_count_mae, home_floor_attribution_accuracy,
-    home_presence_f1, presence_f1, room_attribution_accuracy, torso_pck20, topology_for,
-    topology_for_floors, vitals_mae, vitals_reference, CollectorSink, DeterministicCsiGenerator,
-    FakeClock, Fixture, FloorPlan, RecordingMetricSink,
+    home_presence_f1, presence_f1, room_attribution_accuracy, topology_for, topology_for_floors,
+    torso_pck20, vitals_mae, vitals_reference, CollectorSink, DeterministicCsiGenerator, FakeClock,
+    Fixture, FloorPlan, RecordingMetricSink, VirtualNode, VirtualNodeConfig,
 };
 
 /// The window hop used to align predictions with ground truth, in milliseconds.
@@ -288,7 +295,13 @@ fn run_vitals_tracer() -> VitalsRun {
 }
 
 /// Record one ledger row into a captured measurement vector.
-fn record_ledger(records: &Mutex<Vec<Measurement>>, name: &str, value: f64, unit: &str, samples: u64) {
+fn record_ledger(
+    records: &Mutex<Vec<Measurement>>,
+    name: &str,
+    value: f64,
+    unit: &str,
+    samples: u64,
+) {
     let measurement = Measurement {
         name: MetricName::new(name.to_string()).expect("valid metric name"),
         version: 1,
@@ -374,7 +387,10 @@ fn vitals_ride_the_same_windows_as_presence() {
 
     // Vitals windows were estimated, and the last recorded count matches the
     // running total the core reports.
-    assert!(run.vitals_windows > 0, "at least one vitals window must run");
+    assert!(
+        run.vitals_windows > 0,
+        "at least one vitals window must run"
+    );
     let count = vitals_measurement(&run, "sensing.vitals.window.count")
         .expect("vitals.window.count must be recorded");
     assert!(
@@ -395,7 +411,10 @@ fn vitals_ride_the_same_windows_as_presence() {
             );
         }
     }
-    assert!(vitals_events > 0, "at least one vitals event must be emitted");
+    assert!(
+        vitals_events > 0,
+        "at least one vitals event must be emitted"
+    );
 
     // The frames the vitals estimator consumed are the presence frames: the
     // vitals buffer is fed from the same WindowBatch.
@@ -428,7 +447,9 @@ fn vitals_readings_are_recorded() {
         if name.starts_with("sensing.vitals.") {
             vitals_rows += 1;
         }
-        measurement.validate().expect("recorded measurement is valid");
+        measurement
+            .validate()
+            .expect("recorded measurement is valid");
     }
     assert!(
         vitals_rows > 0,
@@ -601,7 +622,9 @@ fn calibration_tracer_calibrates_persists_and_detects() {
     let artifact = calibrate(&topology, &config, &request, &inputs).expect("calibration");
     eprintln!(
         "calibration {} status {:?} valid {} metrics {:?}",
-        artifact.calibration_id, artifact.quality.status, artifact.quality.valid,
+        artifact.calibration_id,
+        artifact.quality.status,
+        artifact.quality.valid,
         artifact.quality.metrics
     );
     assert!(
@@ -650,7 +673,9 @@ fn calibration_tracer_calibrates_persists_and_detects() {
     // The artefact is content-addressed over its serialised body, so a
     // round-trip must preserve identity exactly (the in-memory `f64`s may
     // differ by a final bit, which does not change the canonical bytes).
-    reloaded.verify_digest().expect("digest verifies after reload");
+    reloaded
+        .verify_digest()
+        .expect("digest verifies after reload");
     assert_eq!(
         reloaded.calibration_id, artifact.calibration_id,
         "the reloaded artefact must keep its content-addressed identity"
@@ -776,13 +801,7 @@ fn calibration_tracer_calibrates_persists_and_detects() {
 
     // Ledger rows: the ticket's deterministic/statistical calibration rows.
     let ledger = Mutex::new(Vec::new());
-    record_ledger(
-        &ledger,
-        "presence.f1.cross_session",
-        score.f1,
-        "score",
-        1,
-    );
+    record_ledger(&ledger, "presence.f1.cross_session", score.f1, "score", 1);
     record_ledger(
         &ledger,
         "calibration.drift.per_node",
@@ -819,7 +838,9 @@ fn calibration_tracer_calibrates_persists_and_detects() {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(digest_row);
     }
-    let ledger = ledger.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let ledger = ledger
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     for name in [
         "calibration.digest",
         "presence.f1.cross_session",
@@ -1042,7 +1063,9 @@ mean torso span {:.3} m; presence F1={:.3}, events={}, measurements={}",
     let ledger = Mutex::new(Vec::new());
     record_ledger(&ledger, "pose.pck20.torso", score.pck, "score", score.total);
     record_ledger(&ledger, "presence.f1.room", presence.f1, "score", 1);
-    let ledger = ledger.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let ledger = ledger
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     assert!(ledger.iter().any(|m| m.name.as_str() == "pose.pck20.torso"));
     assert!(ledger.iter().any(|m| m.name.as_str() == "presence.f1.room"));
 }
@@ -1096,7 +1119,9 @@ fn pose_rows_are_recorded() {
         "the core must record a pose Measurement row"
     );
     for measurement in &run.measurements {
-        measurement.validate().expect("recorded measurement is valid");
+        measurement
+            .validate()
+            .expect("recorded measurement is valid");
     }
     for pose in &run.poses {
         pose.validate().expect("emitted pose is valid");
@@ -1175,9 +1200,12 @@ fn floor_scene() -> SceneScript {
 /// (`topology_for` places every scene room on one "ground" floor).
 fn floor_rooms_for(script: &SceneScript) -> Vec<(FloorId, Vec<RoomId>)> {
     let topology = topology_for(script);
-    let mut map: std::collections::BTreeMap<FloorId, Vec<RoomId>> = std::collections::BTreeMap::new();
+    let mut map: std::collections::BTreeMap<FloorId, Vec<RoomId>> =
+        std::collections::BTreeMap::new();
     for room in &topology.rooms {
-        map.entry(room.floor.clone()).or_default().push(room.id.clone());
+        map.entry(room.floor.clone())
+            .or_default()
+            .push(room.id.clone());
     }
     map.into_iter().collect()
 }
@@ -1292,11 +1320,20 @@ floor count MAE={:.3} over {} windows; room attribution={:.3} over {} windows; e
     // The hierarchy is data, not hard-coded: one floor holds three rooms.
     assert_eq!(floor_rooms.len(), 1);
     assert_eq!(floor_rooms[0].1.len(), 3);
-    assert!(run.floor_history.iter().all(|window| window.floors.len() == 1));
+    assert!(run
+        .floor_history
+        .iter()
+        .all(|window| window.floors.len() == 1));
 
     // The slice-5 ledger rows; this test is the reproducer.
     let ledger = Mutex::new(Vec::new());
-    record_ledger(&ledger, "presence.f1.floor", score.f1, "score", count_n.max(1));
+    record_ledger(
+        &ledger,
+        "presence.f1.floor",
+        score.f1,
+        "score",
+        count_n.max(1),
+    );
     record_ledger(
         &ledger,
         "attribution.accuracy.room",
@@ -1304,8 +1341,12 @@ floor count MAE={:.3} over {} windows; room attribution={:.3} over {} windows; e
         "score",
         attribution_n.max(1),
     );
-    let ledger = ledger.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
-    assert!(ledger.iter().any(|m| m.name.as_str() == "presence.f1.floor"));
+    let ledger = ledger
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(ledger
+        .iter()
+        .any(|m| m.name.as_str() == "presence.f1.floor"));
     assert!(ledger
         .iter()
         .any(|m| m.name.as_str() == "attribution.accuracy.room"));
@@ -1452,10 +1493,7 @@ fn home_floor_plans() -> Vec<FloorPlan> {
             name: "Ground".to_string(),
             level: 0,
             elevation_m: 0.0,
-            rooms: vec![
-                Slug("kitchen".to_string()),
-                Slug("lounge".to_string()),
-            ],
+            rooms: vec![Slug("kitchen".to_string()), Slug("lounge".to_string())],
         },
         FloorPlan {
             id: Slug("first".to_string()),
@@ -1480,7 +1518,9 @@ fn home_floor_rooms(script: &SceneScript) -> Vec<(FloorId, Vec<RoomId>)> {
     let mut map: std::collections::BTreeMap<FloorId, Vec<RoomId>> =
         std::collections::BTreeMap::new();
     for room in &topology.rooms {
-        map.entry(room.floor.clone()).or_default().push(room.id.clone());
+        map.entry(room.floor.clone())
+            .or_default()
+            .push(room.id.clone());
     }
     map.into_iter().collect()
 }
@@ -1601,8 +1641,20 @@ home count MAE={:.3} over {} windows; floor attribution={:.3} over {} windows; e
 
     // The slice-6 ledger rows; this test is the reproducer.
     let ledger = Mutex::new(Vec::new());
-    record_ledger(&ledger, "presence.f1.home", presence.f1, "score", count_n.max(1));
-    record_ledger(&ledger, "count.mae.home", count_mae_home, "people", count_n.max(1));
+    record_ledger(
+        &ledger,
+        "presence.f1.home",
+        presence.f1,
+        "score",
+        count_n.max(1),
+    );
+    record_ledger(
+        &ledger,
+        "count.mae.home",
+        count_mae_home,
+        "people",
+        count_n.max(1),
+    );
     record_ledger(
         &ledger,
         "attribution.accuracy.floor",
@@ -1610,8 +1662,14 @@ home count MAE={:.3} over {} windows; floor attribution={:.3} over {} windows; e
         "score",
         attribution_n.max(1),
     );
-    let ledger = ledger.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
-    for name in ["presence.f1.home", "count.mae.home", "attribution.accuracy.floor"] {
+    let ledger = ledger
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for name in [
+        "presence.f1.home",
+        "count.mae.home",
+        "attribution.accuracy.floor",
+    ] {
         assert!(
             ledger.iter().any(|m| m.name.as_str() == name),
             "the ledger must carry the {name} row"
@@ -1664,5 +1722,301 @@ fn home_measurements_are_recorded() {
     }
     for window in &run.home_history {
         assert!(window.home.count.is_some());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 7 — live nodes and the node control channel (`roadmap.md`, Slice 7)
+// ---------------------------------------------------------------------------
+
+/// The observable result of one live tracer run.
+struct LiveRun {
+    events: Vec<Event>,
+    measurements: Vec<Measurement>,
+    ground_truth: Vec<GroundTruthRecord>,
+    streams: usize,
+    stats: aquila_sources::LiveStatsSnapshot,
+}
+
+/// Drive virtual nodes over loopback UDP into `UdpLiveSource` and the sensing
+/// core, and collect everything the core emits.
+///
+/// The data path is deterministic: the virtual nodes send one frame per scene
+/// node per tick in the same order the replay tracer does, and the core's
+/// injected [`FakeClock`] advances one 25 ms step per frame, so the live run is
+/// byte-identical to a `Deterministic` replay of the same scene.
+fn run_live_tracer() -> LiveRun {
+    let script = tracer_scene();
+    let clock = Arc::new(FakeClock::new(0));
+
+    let source = UdpLiveSource::bind(
+        "127.0.0.1:0".parse().expect("loopback address"),
+        clock.clone(),
+        LiveConfig::default(),
+    )
+    .expect("bind live source");
+    let data_addr = source.local_addr().expect("live source address");
+    let stats = source.stats();
+
+    let core_control = NodeControl::bind_any().expect("core control socket");
+    let core_control_addr = core_control.local_addr().expect("core control address");
+
+    let mut nodes: Vec<VirtualNode> = script
+        .nodes
+        .iter()
+        .map(|spec| {
+            let mac = MacAddr([0, 0, 0, 0, 0, spec.id.0 as u8]);
+            let config =
+                VirtualNodeConfig::new(spec.id, mac, 1, 0x1234, data_addr, core_control_addr);
+            let sim = SimConfig::new(2026, Slug("tracer".to_string()), 0, 0);
+            VirtualNode::new(script.clone(), sim, config).expect("virtual node")
+        })
+        .collect();
+    let streams = nodes.len();
+
+    let collector = CollectorSink::new();
+    let metrics = RecordingMetricSink::new();
+    let event_handle = collector.handle();
+    let record_handle = metrics.handle();
+
+    let mut sensing = Sensing::new(
+        Box::new(source),
+        clock.clone(),
+        Box::new(collector),
+        Box::new(metrics),
+        None,
+        None,
+        topology_for(&script),
+        SensingConfig::default(),
+    )
+    .expect("valid core");
+
+    loop {
+        let mut sent = 0usize;
+        for node in &mut nodes {
+            if node.send_next().expect("send frame").is_some() {
+                sent += 1;
+            }
+        }
+        if sent == 0 {
+            break;
+        }
+        for _ in 0..sent {
+            clock.advance(STEP_NS);
+            sensing.step().expect("step");
+        }
+    }
+    sensing.sink().expect("flush");
+
+    let ground_truth = DeterministicCsiGenerator::new(
+        script.clone(),
+        SimConfig::new(2026, Slug("tracer".to_string()), 0, 0),
+    )
+    .expect("generator")
+    .ground_truth()
+    .into_iter()
+    .map(|(_, record)| record)
+    .collect();
+
+    LiveRun {
+        events: snapshot(&event_handle),
+        measurements: snapshot(&record_handle),
+        ground_truth,
+        streams,
+        stats: stats.snapshot(),
+    }
+}
+
+#[test]
+fn live_presence_f1_meets_the_v1_bar() {
+    let run = run_live_tracer();
+    let score = presence_f1(&run.events, &run.ground_truth, HOP_MS);
+    eprintln!(
+        "slice7 live: TP={} FP={} FN={} TN={} precision={:.3} recall={:.3} F1={:.3}; \
+datagrams={} decoded={} bad_frame={} bad_version={} streams={} events={} measurements={}",
+        score.true_positive,
+        score.false_positive,
+        score.false_negative,
+        score.true_negative,
+        score.precision,
+        score.recall,
+        score.f1,
+        run.stats.datagrams,
+        run.stats.decoded,
+        run.stats.bad_frame,
+        run.stats.bad_version,
+        run.streams,
+        run.events.len(),
+        run.measurements.len(),
+    );
+
+    assert!(
+        !run.events.is_empty(),
+        "the core must emit presence events from live UDP frames"
+    );
+    assert!(
+        score.f1 >= 0.90,
+        "live presence F1 {:.3} is below the v1 bar of 0.90",
+        score.f1
+    );
+    assert!(
+        run.stats.decoded > 0,
+        "the live source must decode real AQCI datagrams"
+    );
+    assert_eq!(run.stats.bad_frame, 0, "no live datagram may be malformed");
+
+    // The slice-7 ledger rows; this test is the reproducer.
+    let ledger = Mutex::new(Vec::new());
+    record_ledger(&ledger, "live.presence.f1", score.f1, "score", 1);
+    record_ledger(
+        &ledger,
+        "host.streams.count",
+        run.streams as f64,
+        "count",
+        run.streams as u64,
+    );
+    let ledger = ledger
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(ledger.iter().any(|m| m.name.as_str() == "live.presence.f1"));
+    assert!(ledger
+        .iter()
+        .any(|m| m.name.as_str() == "host.streams.count"));
+}
+
+#[test]
+fn live_replay_is_deterministic() {
+    let first = run_live_tracer();
+    let second = run_live_tracer();
+    assert_eq!(
+        first.events, second.events,
+        "same scene and seed must emit byte-identical live events"
+    );
+    assert_eq!(first.measurements.len(), second.measurements.len());
+    assert_eq!(first.stats.decoded, second.stats.decoded);
+}
+
+/// A representative `SET_CONFIG` body at `config_version`.
+fn set_config_body(config_version: u32) -> SetConfig {
+    SetConfig {
+        config_version,
+        config_hash: [2u8; 32],
+        channel: 11,
+        bandwidth_mhz: 20,
+        secondary: 0,
+        csi_enable: true,
+        lltf_enable: true,
+        ht_ltf_enable: true,
+        stbc_ht_ltf_enable: false,
+        csi_len_cap: 612,
+        max_tx_rate_hz: 100,
+        heartbeat_ms: 5_000,
+        source_mac_allowlist: vec![],
+    }
+}
+
+#[test]
+fn node_control_full_round_trip_succeeds() {
+    let script = tracer_scene();
+    let dummy = UdpSocket::bind("127.0.0.1:0").expect("dummy data sink");
+    let core_data = dummy.local_addr().expect("dummy address");
+    let mut core = NodeControl::bind_any().expect("core control socket");
+    let core_control = core.local_addr().expect("core control address");
+    let mac = MacAddr([0, 0, 0, 0, 0, 1]);
+    let config = VirtualNodeConfig::new(NodeId(1), mac, 7, 0xABCD, core_data, core_control);
+    let sim = SimConfig::new(2026, Slug("tracer".to_string()), 0, 0);
+    let mut node = VirtualNode::new(script, sim, config).expect("virtual node");
+    let node_control = node.control_addr().expect("node control address");
+
+    // 1. Join/pair: node-initiated.
+    let join_id = node.send_join_request().expect("join request");
+    let (request, from) = core.recv().expect("join recv");
+    assert_eq!(request.request_id, join_id);
+    match &request.body {
+        ControlBody::JoinRequest(body) => {
+            assert_eq!(body.node, mac);
+            assert_eq!(body.pairing_code, 0xABCD);
+        }
+        other => panic!("expected JoinRequest, got {other:?}"),
+    }
+    let token = [9u8; 32];
+    let ack = ControlMessage {
+        request_id: request.request_id,
+        body: ControlBody::JoinAck(JoinAck {
+            node: mac,
+            token,
+            config_version: 3,
+            config_hash: [1u8; 32],
+        }),
+    };
+    core.send(from, &ack).expect("join ack");
+    assert!(node.serve_control_once().expect("serve ack"));
+    assert!(node.is_paired(), "the node must be paired after JOIN_ACK");
+    assert_eq!(node.token(), token);
+    assert_eq!(node.config_version(), 3);
+
+    // 2. GetConfig: core-initiated, answered with a RESULT.
+    let get = ControlMessage {
+        request_id: 100,
+        body: ControlBody::GetConfig,
+    };
+    core.send(node_control, &get).expect("get config");
+    assert!(node.serve_control_once().expect("serve get config"));
+    let (reply, _) = core.recv().expect("get config reply");
+    assert_eq!(reply.request_id, 100);
+    assert!(matches!(reply.body, ControlBody::Result(ref a) if a.status == AckStatus::Active));
+
+    // 3. SetConfig: applied transactionally.
+    let set = ControlMessage {
+        request_id: 101,
+        body: ControlBody::SetConfig(set_config_body(4)),
+    };
+    core.send(node_control, &set).expect("set config");
+    assert!(node.serve_control_once().expect("serve set config"));
+    let (reply, _) = core.recv().expect("set config reply");
+    assert_eq!(reply.request_id, 101);
+    assert!(matches!(reply.body, ControlBody::Result(ref a) if a.status == AckStatus::Active));
+    assert_eq!(node.config_version(), 4);
+
+    // A stale config version is rejected, not applied (idempotent, versioned).
+    let stale = ControlMessage {
+        request_id: 102,
+        body: ControlBody::SetConfig(set_config_body(2)),
+    };
+    core.send(node_control, &stale).expect("stale config");
+    assert!(node.serve_control_once().expect("serve stale config"));
+    let (reply, _) = core.recv().expect("stale config reply");
+    assert!(matches!(reply.body, ControlBody::Result(ref a) if a.status == AckStatus::Rejected));
+    assert_eq!(
+        node.config_version(),
+        4,
+        "a stale config must not be applied"
+    );
+
+    // 4. Status: node-initiated heartbeat.
+    let status_id = node.send_status().expect("status");
+    let (status, _) = core.recv().expect("status recv");
+    assert_eq!(status.request_id, status_id);
+    assert!(matches!(status.body, ControlBody::Status(_)));
+
+    // 5. SyncPing/Echo: the time-sync round trip.
+    let ping = ControlMessage {
+        request_id: 200,
+        body: ControlBody::SyncPing(SyncPing { t1_us: 111 }),
+    };
+    core.send(node_control, &ping).expect("sync ping");
+    assert!(node.serve_control_once().expect("serve sync ping"));
+    let (echo, _) = core.recv().expect("sync echo recv");
+    assert_eq!(echo.request_id, 200);
+    match echo.body {
+        ControlBody::SyncEcho(SyncEcho {
+            t1_us,
+            t2_us,
+            t3_us,
+        }) => {
+            assert_eq!(t1_us, 111, "the echo must carry the ping's t1");
+            assert!(t3_us >= t2_us, "the node send time cannot precede receive");
+        }
+        other => panic!("expected SyncEcho, got {other:?}"),
     }
 }

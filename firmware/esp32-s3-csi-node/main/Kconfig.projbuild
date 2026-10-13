@@ -1,0 +1,48 @@
+menu "Aquila CSI node"
+
+    config AQUILA_WIFI_SSID
+        string "WiFi SSID"
+        default "aquila-home"
+        help
+            The network the node associates with. An ESP-IDF association
+            detail; it confers no Aquila role (capture-and-firmware.md §9.1).
+
+    config AQUILA_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+        help
+            The network password; empty for an open network.
+
+    config AQUILA_CORE_HOST
+        string "Core IPv4 address"
+        default "192.168.1.10"
+        help
+            The add-on's IPv4 literal. The node talks only to this endpoint.
+
+    config AQUILA_CORE_DATA_PORT
+        int "CSI data-plane UDP port"
+        default 9100
+        help
+            The AQCI data plane port (capture-and-firmware.md §5).
+
+    config AQUILA_CORE_CONTROL_PORT
+        int "Node control-plane UDP port"
+        default 9101
+        help
+            The AQCC control plane port (capture-and-firmware.md §6).
+
+    config AQUILA_NODE_ID
+        int "Dense node id"
+        default 1
+        range 1 65535
+        help
+            The dense on-air node id, provisioned by the operator.
+
+    config AQUILA_PAIRING_CODE
+        int "Pairing code"
+        default 0
+        help
+            The short-lived pairing code shown by the core's pairing flow
+            (capture-and-firmware.md §6.3); 0 disables join attempts.
+
+endmenu

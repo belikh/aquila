@@ -12,6 +12,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aquila-capture"
+version = "0.0.0"
+dependencies = [
+ "aquila-session",
+ "aquila-simulator",
+ "aquila-sources",
+ "aquila-types",
+ "aquila-wire",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aquila-evaluation"
 version = "0.0.0"
 dependencies = [
@@ -120,6 +134,7 @@ dependencies = [
  "aquila-simulator",
  "aquila-sources",
  "aquila-types",
+ "aquila-wire",
 ]
 
 [[package]]

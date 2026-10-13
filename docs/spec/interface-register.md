@@ -36,8 +36,8 @@ strictly lower level); layer is the six-layer name from `architecture.md`.
 | Crate | Kind | Purpose | Depends on | Owning spec |
 | --- | --- | --- | --- | --- |
 | `aquila-addon` | binary | Composition root: wires adapters, serves dashboard + ingress; no domain logic. | any module crate | `architecture.md` §9, `home-assistant.md` §3 |
-| `aquila-capture` | binary (dev) | `record`/`synth`/`verify`/`provision` a Session. | `aquila-session`, `aquila-sources`, `aquila-simulator`, `aquila-wire` | `capture-and-firmware.md` §8.3 |
-| `aquila-testkit` | lib (dev-only) | Fakes, in-memory adapters, deterministic generator, fixtures. | any module crate, via `[dev-dependencies]` only | `testing.md` §3 |
+| `aquila-capture` | binary (dev) | `record`/`synth`/`verify`/`provision` a Session; regenerates `node_wire.h`. | `aquila-types`, `aquila-session`, `aquila-sources`, `aquila-simulator`, `aquila-wire` | `capture-and-firmware.md` §8.3, §9.4 |
+| `aquila-testkit` | lib (dev-only) | Fakes, in-memory adapters, a deterministic generator, a virtual live node, fixtures. | any module crate, via `[dev-dependencies]` only | `testing.md` §3 |
 | `xtask` | binary (tooling) | `dag-check`, `check-scaffolding`, coverage/claims/ledger helpers. | any crate; never a product dependency | `repository-tooling.md` §5 |
 
 ## Seams and their adapters
@@ -66,6 +66,15 @@ protocol in the same crate with the same adapters (ADR-0001 §3).
 
 `6969/udp` (`home-assistant.md`), `8765` (`core-api.md` §2) and `8080`
 (`dashboard.md`) are superseded by this register (ADR-0003 §7–8).
+
+## Firmware OTA
+
+Node firmware update rides the node control plane (`9101/udp`) via opcodes
+`0x0E`–`0x14` (`docs/spec/firmware-ota.md` §5) — no new port, no node HTTP
+server. The core owns a signed image store under `/data` and exposes
+`/api/v1/firmware*` (`home-assistant.md` §5); the HACS component adds one `update`
+entity per node. Ed25519-signed images, dual-partition A/B, health check and
+rollback. No new crate.
 
 ## Dependency edges (authoritative)
 

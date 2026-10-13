@@ -7,12 +7,16 @@
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use aquila_session::{Manifest, SessionReader, SessionWriter};
 use aquila_types::{
     Band, BuildId, Clock, ContractVersion, CoreTime, CsiFrame, NodeId, PhyFlags, Session, Slug,
 };
-use aquila_wire::{encode_datagram, ControlBody, ControlMessage, SyncPing};
+use aquila_wire::{
+    encode_control, encode_datagram, result_message, AckStatus, ControlBody, ControlMessage,
+    SyncPing,
+};
 
 use crate::*;
 
@@ -88,7 +92,9 @@ fn session_bytes(frames: &[CsiFrame]) -> Vec<u8> {
     };
     let mut writer = SessionWriter::new(&Manifest::new(session)).unwrap();
     for (i, f) in frames.iter().enumerate() {
-        writer.write_frame(i as u64 * 1_000, &encode_datagram(f)).unwrap();
+        writer
+            .write_frame(i as u64 * 1_000, &encode_datagram(f))
+            .unwrap();
     }
     writer.finish().unwrap()
 }
@@ -143,11 +149,8 @@ fn deterministic_replay_is_stable_across_runs() {
 fn replay_honours_shutdown() {
     let bytes = session_bytes(&[frame(1, 0)]);
     let reader = SessionReader::from_bytes(&bytes).unwrap();
-    let mut source = ReplaySource::from_reader(
-        reader,
-        ReplayMode::Deterministic,
-        Arc::new(FixedClock(0)),
-    );
+    let mut source =
+        ReplaySource::from_reader(reader, ReplayMode::Deterministic, Arc::new(FixedClock(0)));
     source.shutdown();
     let err = source.recv().unwrap_err();
     assert_eq!(err.kind(), "stopped");
@@ -261,4 +264,46 @@ fn control_round_trips_over_loopback() {
     let (received, from) = node.recv().unwrap();
     assert_eq!(received, message);
     assert_eq!(from, core.local_addr().unwrap());
+}
+
+#[test]
+fn control_request_skips_unrelated_replies_and_matches_the_id() {
+    let mut core = NodeControl::bind_any().unwrap();
+    let core_addr = core.local_addr().unwrap();
+    let node = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let node_addr = node.local_addr().unwrap();
+
+    // A stale reply with a different request id is queued first; `request` must
+    // skip it and return the one that echoes the request's id.
+    let unrelated = encode_control(&result_message(1, AckStatus::Active, "stale")).unwrap();
+    let reply = encode_control(&result_message(42, AckStatus::Active, "ok")).unwrap();
+    node.send_to(&unrelated, core_addr).unwrap();
+    node.send_to(&reply, core_addr).unwrap();
+
+    let request = ControlMessage {
+        request_id: 42,
+        body: ControlBody::SyncPing(SyncPing { t1_us: 7 }),
+    };
+    let got = core
+        .request(node_addr, &request, Duration::from_millis(500))
+        .unwrap();
+    assert_eq!(got, result_message(42, AckStatus::Active, "ok"));
+}
+
+#[test]
+fn control_request_times_out_without_a_reply() {
+    let mut core = NodeControl::bind_any().unwrap();
+    let node = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let request = ControlMessage {
+        request_id: 7,
+        body: ControlBody::SyncPing(SyncPing { t1_us: 0 }),
+    };
+    let error = core
+        .request(
+            node.local_addr().unwrap(),
+            &request,
+            Duration::from_millis(50),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), "timeout");
 }

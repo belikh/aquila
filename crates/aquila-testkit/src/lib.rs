@@ -20,6 +20,7 @@ mod metrics;
 mod models;
 mod scoring;
 mod sink;
+mod virtual_node;
 
 #[cfg(test)]
 mod tests;
@@ -35,3 +36,4 @@ pub use scoring::{
     vitals_reference, window_index, FloorRooms, PckScore, PresenceScore, TorsoPoint,
 };
 pub use sink::CollectorSink;
+pub use virtual_node::{VirtualNode, VirtualNodeConfig, VirtualNodeError};

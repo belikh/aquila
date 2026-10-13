@@ -1,0 +1,8 @@
+# Aquila ESP32-S3 CSI node — sdkconfig defaults.
+#
+# Applied on top of the ESP-IDF defaults by `idf.py`. The CSI feature must be
+# enabled for esp_wifi_set_csi to compile in.
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

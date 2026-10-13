@@ -1,0 +1,19 @@
+[package]
+name = "aquila-capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+aquila-types = { path = "../aquila-types" }
+aquila-wire = { path = "../aquila-wire" }
+aquila-session = { path = "../aquila-session" }
+aquila-sources = { path = "../aquila-sources" }
+aquila-simulator = { path = "../aquila-simulator" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

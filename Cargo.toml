@@ -13,6 +13,7 @@ members = [
     "crates/aquila-sensing",
     "crates/aquila-evaluation",
     "crates/aquila-testkit",
+    "crates/aquila-capture",
 ]
 
 [workspace.package]
