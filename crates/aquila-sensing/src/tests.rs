@@ -9,7 +9,8 @@ use std::sync::Arc;
 use aquila_metrics::InMemoryMetricSink;
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
-    Band, Clock, CoreTime, CsiEnvelope, CsiFrame, EventKind, NodeId, PhyFlags, RoomId, Slug,
+    Band, Clock, CoreTime, CsiEnvelope, CsiFrame, Estimate, EventKind, NodeId, PhyFlags, RoomId,
+    Slug,
 };
 
 use crate::clock::ManualClock;
@@ -428,14 +429,130 @@ fn clamp_logit_is_bounded_and_finite() {
 
 #[test]
 fn escalation_soft_or_is_monotone() {
-    let room = |p: f64| crate::escalation::RoomSummary {
-        room: Slug("r".into()),
-        presence_probability: p,
-        count: 0,
+    let room = |p: f64| {
+        crate::escalation::RoomSummary::covered(Slug("r".into()), p, fusion::node_count_pmf(p, 8))
     };
     let one = crate::escalation::floor_presence_probability(&[room(0.5)]);
     let two = crate::escalation::floor_presence_probability(&[room(0.5), room(0.5)]);
     assert!(two >= one);
     assert!((one - 0.5).abs() < 1e-12);
     assert!((crate::escalation::home_presence_probability(&[one]) - one).abs() < 1e-12);
+}
+
+#[test]
+fn floor_count_is_the_convolution_of_room_pmfs() {
+    let room = |id: &str, p: f64| {
+        crate::escalation::RoomSummary::covered(Slug(id.into()), p, fusion::node_count_pmf(p, 8))
+    };
+    let summary = crate::escalation::aggregate_floor(
+        Slug("ground".into()),
+        &[room("kitchen", 0.999), room("lounge", 0.999)],
+        0.15,
+        0.8,
+        8,
+    );
+    // Two rooms each almost certainly holding one person convolve to two.
+    assert_eq!(summary.count, Some(2));
+    assert!(summary.presence_probability.unwrap_or(0.0) > 0.99);
+    // A single occupied room yields its own MAP count.
+    let single = crate::escalation::aggregate_floor(
+        Slug("ground".into()),
+        &[room("kitchen", 0.999), room("lounge", 0.01)],
+        0.15,
+        0.8,
+        8,
+    );
+    assert_eq!(single.count, Some(1));
+}
+
+#[test]
+fn ambiguous_room_attribution_raises_a_conflict() {
+    let room = |id: &str, p: f64| {
+        crate::escalation::RoomSummary::covered(Slug(id.into()), p, fusion::node_count_pmf(p, 8))
+    };
+    let ambiguous = crate::escalation::aggregate_floor(
+        Slug("ground".into()),
+        &[room("kitchen", 0.9), room("lounge", 0.9)],
+        0.15,
+        0.8,
+        8,
+    );
+    assert!(
+        ambiguous.attribution.is_none(),
+        "a near-tie must not name a false confident room"
+    );
+    assert!(matches!(
+        ambiguous.conflicts.as_slice(),
+        [crate::escalation::Conflict::AmbiguousRooms { .. }]
+    ));
+    // The floor's aggregate presence and count are still reported: the
+    // ambiguity is about which room, not whether the floor is occupied.
+    assert!(ambiguous.presence_probability.unwrap_or(0.0) > 0.9);
+    assert_eq!(ambiguous.count, Some(2));
+
+    // A clear winner is attributed, with no conflict.
+    let clear = crate::escalation::aggregate_floor(
+        Slug("ground".into()),
+        &[room("kitchen", 0.99), room("lounge", 0.1)],
+        0.15,
+        0.8,
+        8,
+    );
+    assert_eq!(clear.attribution, Some(Slug("kitchen".into())));
+    assert!(clear.conflicts.is_empty());
+}
+
+#[test]
+fn uncovered_room_forces_unknown_floor_count() {
+    let covered =
+        crate::escalation::RoomSummary::covered(Slug("kitchen".into()), 0.99, fusion::node_count_pmf(0.99, 8));
+    let uncovered = crate::escalation::RoomSummary::uncovered(Slug("lounge".into()), 8);
+    let summary = crate::escalation::aggregate_floor(
+        Slug("ground".into()),
+        &[covered, uncovered],
+        0.15,
+        0.8,
+        8,
+    );
+    assert_eq!(summary.count, None, "an uncovered room must not be counted as zero");
+    // Coverage is not conflation: presence is still the soft-OR over the
+    // covered room only.
+    assert!(summary.presence_probability.unwrap_or(0.0) > 0.9);
+}
+
+#[test]
+fn no_covered_rooms_is_unknown_not_absent() {
+    let summary = crate::escalation::aggregate_floor(
+        Slug("ground".into()),
+        &[crate::escalation::RoomSummary::uncovered(Slug("lounge".into()), 8)],
+        0.15,
+        0.8,
+        8,
+    );
+    assert!(summary.presence_probability.is_none());
+    assert!(summary.count.is_none());
+}
+
+#[test]
+fn floor_vitals_take_the_highest_confidence() {
+    let estimate = |value: f32, confidence: f32| Estimate { value, confidence };
+    let rooms = vec![
+        crate::escalation::RoomVitals {
+            room: Slug("kitchen".into()),
+            breathing: Some(estimate(15.0, 0.4)),
+            heart_rate: None,
+        },
+        crate::escalation::RoomVitals {
+            room: Slug("lounge".into()),
+            breathing: Some(estimate(16.0, 0.9)),
+            heart_rate: Some(estimate(70.0, 0.5)),
+        },
+    ];
+    let vitals = crate::escalation::aggregate_floor_vitals(&rooms, 0.0);
+    assert_eq!(vitals.breathing.as_ref().unwrap().1.value, 16.0);
+    assert_eq!(vitals.heart_rate.as_ref().unwrap().1.value, 70.0);
+    // A confidence floor excludes a low-confidence estimate.
+    let filtered = crate::escalation::aggregate_floor_vitals(&rooms, 0.95);
+    assert!(filtered.breathing.is_none());
+    assert!(filtered.heart_rate.is_none());
 }

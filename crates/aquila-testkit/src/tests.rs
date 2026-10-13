@@ -19,11 +19,12 @@ use aquila_sensing::{
     CalibrationRequest, CalibrationStore, InvalidationReason, Sensing, SensingConfig, Topology,
 };
 use aquila_simulator::{Actor, Body, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SimConfig};
-use aquila_types::{Band, CsiEnvelope, Event, GroundTruthRecord, NodeId, RoomId, Slug};
+use aquila_types::{Band, CsiEnvelope, Event, FloorId, GroundTruthRecord, NodeId, RoomId, Slug};
 
 use crate::{
-    count_mae, presence_f1, torso_pck20, topology_for, vitals_mae, vitals_reference, CollectorSink,
-    DeterministicCsiGenerator, FakeClock, Fixture, RecordingMetricSink,
+    count_mae, floor_count_mae, floor_presence_f1, presence_f1, room_attribution_accuracy,
+    torso_pck20, topology_for, vitals_mae, vitals_reference, CollectorSink, DeterministicCsiGenerator,
+    FakeClock, Fixture, RecordingMetricSink,
 };
 
 /// The window hop used to align predictions with ground truth, in milliseconds.
@@ -1097,5 +1098,260 @@ fn pose_rows_are_recorded() {
     }
     for pose in &run.poses {
         pose.validate().expect("emitted pose is valid");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 5 — floor aggregation: room → floor (`roadmap.md`, Slice 5)
+// ---------------------------------------------------------------------------
+
+/// A deterministic single-floor scene with three rooms and two nodes each
+/// (`roadmap.md`, Slice 5 entry: fixtures spanning at least two rooms on one
+/// floor). Three actors walk through the rooms on overlapping spans, so the
+/// floor count is genuinely a sum across rooms at times.
+fn floor_scene() -> SceneScript {
+    let study: Slug = Slug("study".to_string());
+    let kitchen: Slug = Slug("kitchen".to_string());
+    let lounge: Slug = Slug("lounge".to_string());
+    let node = |id: u16, room: &Slug, x: f64| NodeSpec {
+        id: NodeId(id),
+        room: room.clone(),
+        pos_m: [x, 0.0, 2.4],
+        skew_ppm: 0.0,
+        noise_scale: 1.0,
+    };
+    let walk = Motion::Walk {
+        axis: [1.0, 0.0, 0.0],
+        amplitude_m: 0.5,
+        period_s: 2.0,
+        phase_rad: 0.0,
+    };
+    let breath = Rhythm {
+        amplitude_m: 0.005,
+        rate_hz: 0.25,
+        phase_rad: 0.0,
+    };
+    let actor = |room: &Slug, from: f64, to: f64| Actor {
+        room: room.clone(),
+        position_m: [1.5, 0.0, 0.0],
+        active_from_s: from,
+        active_to_s: to,
+        motion: walk,
+        breathing: Some(breath),
+        heart: None,
+        body: None,
+    };
+    SceneScript {
+        name: "slice5-floor".to_string(),
+        home: Slug("slice5-home".to_string()),
+        nodes: vec![
+            node(1, &study, 0.3),
+            node(2, &study, 3.7),
+            node(3, &kitchen, 0.3),
+            node(4, &kitchen, 3.7),
+            node(5, &lounge, 0.3),
+            node(6, &lounge, 3.7),
+        ],
+        actors: vec![
+            actor(&study, 0.0, 6.0),
+            actor(&kitchen, 4.0, 10.0),
+            actor(&lounge, 8.0, 14.0),
+        ],
+        band: Band::B2G4,
+        channel: 6,
+        bandwidth_mhz: 20,
+        subcarriers: 64,
+        subcarrier_spacing_hz: 312_500.0,
+        tick_hz: 20.0,
+        duration_s: 14.0,
+        noise_amplitude: 0.05,
+        impairments: Impairments::default(),
+    }
+}
+
+/// The floor → rooms grouping of a scene, read from its contract topology
+/// (`topology_for` places every scene room on one "ground" floor).
+fn floor_rooms_for(script: &SceneScript) -> Vec<(FloorId, Vec<RoomId>)> {
+    let topology = topology_for(script);
+    let mut map: std::collections::BTreeMap<FloorId, Vec<RoomId>> = std::collections::BTreeMap::new();
+    for room in &topology.rooms {
+        map.entry(room.floor.clone()).or_default().push(room.id.clone());
+    }
+    map.into_iter().collect()
+}
+
+/// The clock step between replayed floor frames, in nanoseconds.
+///
+/// The replayed clock drives window assembly, and the six nodes of a tick are
+/// pulled one frame per step, so one simulation tick spans six steps. A step of
+/// ~50 ms / 6 makes one tick exactly 50 ms of core time, aligning the core's
+/// one-second windows with the simulator's ground-truth grid.
+const FLOOR_STEP_NS: u64 = 8_333_333;
+
+/// The observable result of one slice-5 floor run.
+struct FloorRun {
+    events: Vec<Event>,
+    measurements: Vec<Measurement>,
+    floor_history: Vec<aquila_sensing::FloorWindow>,
+    ground_truth: Vec<GroundTruthRecord>,
+}
+
+/// Replay the multi-room single-floor scene through the sensing core and
+/// collect its floor output.
+fn run_floor_tracer() -> FloorRun {
+    let script = floor_scene();
+    let sim_config = SimConfig::new(2026, Slug("slice5-floor".to_string()), 0, 0);
+    let generator =
+        DeterministicCsiGenerator::new(script.clone(), sim_config).expect("valid scene");
+    let fixture = Fixture::load(&generator).expect("fixture");
+
+    let clock = Arc::new(FakeClock::new(0));
+    let source = fixture.replay_source(clock.clone()).expect("replay source");
+    let collector = CollectorSink::new();
+    let metrics = RecordingMetricSink::new();
+    let event_handle = collector.handle();
+    let record_handle = metrics.handle();
+
+    let mut sensing = Sensing::new(
+        Box::new(source),
+        clock.clone(),
+        Box::new(collector),
+        Box::new(metrics),
+        None,
+        None,
+        topology_for(&script),
+        SensingConfig::default(),
+    )
+    .expect("valid core");
+
+    loop {
+        clock.advance(FLOOR_STEP_NS);
+        if sensing.step().expect("step").ended {
+            break;
+        }
+    }
+    sensing.sink().expect("flush");
+
+    FloorRun {
+        events: snapshot(&event_handle),
+        measurements: snapshot(&record_handle),
+        floor_history: sensing.floor_history().to_vec(),
+        ground_truth: fixture.ground_truth,
+    }
+}
+
+#[test]
+fn floor_presence_and_count_meet_the_slice5_bars() {
+    let script = floor_scene();
+    let run = run_floor_tracer();
+    let floor_rooms = floor_rooms_for(&script);
+
+    let score = floor_presence_f1(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
+    let (mae, count_n) = floor_count_mae(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
+    let (attribution, attribution_n) =
+        room_attribution_accuracy(&run.floor_history, &run.ground_truth, &floor_rooms, HOP_MS);
+
+    eprintln!(
+        "slice5 floor: TP={} FP={} FN={} TN={} precision={:.3} recall={:.3} F1={:.3}; \
+floor count MAE={:.3} over {} windows; room attribution={:.3} over {} windows; events={} measurements={}",
+        score.true_positive,
+        score.false_positive,
+        score.false_negative,
+        score.true_negative,
+        score.precision,
+        score.recall,
+        score.f1,
+        mae,
+        count_n,
+        attribution,
+        attribution_n,
+        run.events.len(),
+        run.measurements.len(),
+    );
+
+    assert!(
+        score.f1 >= 0.90,
+        "floor presence F1 {:.3} is below the v1 bar of 0.90",
+        score.f1
+    );
+    assert!(
+        mae <= 0.5,
+        "floor count MAE {mae:.3} exceeds the slice-5 gate of 0.5"
+    );
+    assert!(
+        attribution_n > 0,
+        "no window had exactly one truly-occupied room, so attribution is unscoreable"
+    );
+    assert!(
+        attribution >= 0.90,
+        "room attribution accuracy {attribution:.3} is below 0.90"
+    );
+
+    // The hierarchy is data, not hard-coded: one floor holds three rooms.
+    assert_eq!(floor_rooms.len(), 1);
+    assert_eq!(floor_rooms[0].1.len(), 3);
+    assert!(run.floor_history.iter().all(|window| window.floors.len() == 1));
+
+    // The slice-5 ledger rows; this test is the reproducer.
+    let ledger = Mutex::new(Vec::new());
+    record_ledger(&ledger, "presence.f1.floor", score.f1, "score", count_n.max(1));
+    record_ledger(
+        &ledger,
+        "attribution.accuracy.room",
+        attribution,
+        "score",
+        attribution_n.max(1),
+    );
+    let ledger = ledger.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(ledger.iter().any(|m| m.name.as_str() == "presence.f1.floor"));
+    assert!(ledger
+        .iter()
+        .any(|m| m.name.as_str() == "attribution.accuracy.room"));
+}
+
+#[test]
+fn floor_replay_is_deterministic() {
+    let first = run_floor_tracer();
+    let second = run_floor_tracer();
+    assert_eq!(
+        first.events, second.events,
+        "same scene and seed must emit byte-identical floor events"
+    );
+    assert_eq!(first.measurements, second.measurements);
+    assert_eq!(
+        first.floor_history, second.floor_history,
+        "same scene and seed must produce byte-identical floor summaries"
+    );
+}
+
+#[test]
+fn floor_measurements_are_recorded() {
+    let run = run_floor_tracer();
+    assert!(
+        !run.floor_history.is_empty(),
+        "at least one window must summarise the floor"
+    );
+    assert!(
+        run.measurements
+            .iter()
+            .any(|m| m.name.as_str().starts_with("sensing.floor.presence.")),
+        "the core must record a floor presence Measurement row"
+    );
+    assert!(
+        run.measurements
+            .iter()
+            .any(|m| m.name.as_str() == "sensing.floor.count.confidence.ground"),
+        "the core must record the floor count confidence"
+    );
+    assert!(
+        run.events
+            .iter()
+            .any(|e| matches!(&e.scope, aquila_types::EventScope::Floor(_))),
+        "the core must emit at least one floor-scoped event"
+    );
+    for measurement in &run.measurements {
+        measurement
+            .validate()
+            .expect("recorded measurement is valid");
     }
 }

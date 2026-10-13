@@ -11,7 +11,10 @@
 
 use std::collections::BTreeMap;
 
-use aquila_types::{Event, EventKind, EventPayload, EventScope, GroundTruthRecord, KeypointId, Pose, RoomId};
+use aquila_sensing::FloorWindow;
+use aquila_types::{
+    Event, EventKind, EventPayload, EventScope, FloorId, GroundTruthRecord, KeypointId, Pose, RoomId,
+};
 
 /// A binary-classification confusion matrix and its derived scores.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -153,6 +156,250 @@ pub fn count_mae(events: &[Event], ground_truth: &[GroundTruthRecord], hop_ms: i
     }
 }
 
+/// The room → floor grouping the floor scorers need: each floor and the rooms
+/// it contains, in canonical order.
+pub type FloorRooms = Vec<(FloorId, Vec<RoomId>)>;
+
+/// The per-window room presence truth, aggregated from the ground-truth records.
+fn room_presence_truth(
+    ground_truth: &[GroundTruthRecord],
+    hop_ms: i64,
+) -> BTreeMap<i64, BTreeMap<RoomId, bool>> {
+    let mut truth: BTreeMap<i64, BTreeMap<RoomId, bool>> = BTreeMap::new();
+    for record in ground_truth {
+        if let (EventScope::Room(room), EventPayload::Presence { occupied, .. }) =
+            (&record.scope, &record.payload)
+        {
+            truth
+                .entry(window_index(record.t_unix_ms, hop_ms))
+                .or_default()
+                .entry(room.clone())
+                .and_modify(|state| *state |= *occupied)
+                .or_insert(*occupied);
+        }
+    }
+    truth
+}
+
+/// The per-window room count truth, aggregated from the ground-truth records.
+fn room_count_truth(
+    ground_truth: &[GroundTruthRecord],
+    hop_ms: i64,
+) -> BTreeMap<i64, BTreeMap<RoomId, u8>> {
+    let mut truth: BTreeMap<i64, BTreeMap<RoomId, u8>> = BTreeMap::new();
+    for record in ground_truth {
+        if let (EventScope::Room(room), EventPayload::Count { people }) =
+            (&record.scope, &record.payload)
+        {
+            truth
+                .entry(window_index(record.t_unix_ms, hop_ms))
+                .or_default()
+                .insert(room.clone(), *people);
+        }
+    }
+    truth
+}
+
+/// The per-window floor presence truth: the union (logical OR) of the floor's
+/// rooms' presence.
+fn floor_presence_truth(
+    ground_truth: &[GroundTruthRecord],
+    floor_rooms: &FloorRooms,
+    hop_ms: i64,
+) -> BTreeMap<i64, BTreeMap<FloorId, bool>> {
+    let room_truth = room_presence_truth(ground_truth, hop_ms);
+    let mut truth: BTreeMap<i64, BTreeMap<FloorId, bool>> = BTreeMap::new();
+    for (window, rooms) in &room_truth {
+        let entry = truth.entry(*window).or_default();
+        for (floor, ids) in floor_rooms {
+            let occupied = ids
+                .iter()
+                .any(|room| rooms.get(room).copied().unwrap_or(false));
+            entry.insert(floor.clone(), occupied);
+        }
+    }
+    truth
+}
+
+/// The per-window floor count truth: the sum of the floor's rooms' counts.
+fn floor_count_truth(
+    ground_truth: &[GroundTruthRecord],
+    floor_rooms: &FloorRooms,
+    hop_ms: i64,
+) -> BTreeMap<i64, BTreeMap<FloorId, u8>> {
+    let room_truth = room_count_truth(ground_truth, hop_ms);
+    let mut truth: BTreeMap<i64, BTreeMap<FloorId, u8>> = BTreeMap::new();
+    for (window, rooms) in &room_truth {
+        let entry = truth.entry(*window).or_default();
+        for (floor, ids) in floor_rooms {
+            let sum: u16 = ids
+                .iter()
+                .map(|room| u16::from(rooms.get(room).copied().unwrap_or(0)))
+                .sum();
+            entry.insert(floor.clone(), sum.min(u16::from(u8::MAX)) as u8);
+        }
+    }
+    truth
+}
+
+/// Group floor presence-change events by window, in deterministic event order.
+fn floor_presence_changes(
+    events: &[Event],
+    hop_ms: i64,
+) -> BTreeMap<i64, Vec<(FloorId, bool)>> {
+    let mut sorted: Vec<&Event> = events
+        .iter()
+        .filter(|e| e.kind == EventKind::PresenceChanged)
+        .collect();
+    sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
+    let mut changes: BTreeMap<i64, Vec<(FloorId, bool)>> = BTreeMap::new();
+    for event in sorted {
+        if let (EventScope::Floor(floor), EventPayload::Presence { occupied, .. }) =
+            (&event.scope, &event.payload)
+        {
+            changes
+                .entry(window_index(event.t_unix_ms, hop_ms))
+                .or_default()
+                .push((floor.clone(), *occupied));
+        }
+    }
+    changes
+}
+
+/// Group floor count-change events by window, in deterministic event order.
+fn floor_count_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(FloorId, u8)>> {
+    let mut sorted: Vec<&Event> = events
+        .iter()
+        .filter(|e| e.kind == EventKind::CountChanged)
+        .collect();
+    sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
+    let mut changes: BTreeMap<i64, Vec<(FloorId, u8)>> = BTreeMap::new();
+    for event in sorted {
+        if let (EventScope::Floor(floor), EventPayload::Count { people }) =
+            (&event.scope, &event.payload)
+        {
+            changes
+                .entry(window_index(event.t_unix_ms, hop_ms))
+                .or_default()
+                .push((floor.clone(), *people));
+        }
+    }
+    changes
+}
+
+/// Score floor-level presence against the union of the floor's room ground
+/// truth (`roadmap.md`, Slice 5). Floor predictions come from the core's
+/// floor-scoped presence events.
+#[must_use]
+pub fn floor_presence_f1(
+    events: &[Event],
+    ground_truth: &[GroundTruthRecord],
+    floor_rooms: &FloorRooms,
+    hop_ms: i64,
+) -> PresenceScore {
+    let truth = floor_presence_truth(ground_truth, floor_rooms, hop_ms);
+    let changes = floor_presence_changes(events, hop_ms);
+    let predicted = replay(&changes, truth.keys().copied());
+
+    let (mut tp, mut fp, mut fn_, mut tn) = (0u64, 0u64, 0u64, 0u64);
+    for (window, actual_floors) in &truth {
+        let empty = BTreeMap::new();
+        let predicted_floors = predicted.get(window).unwrap_or(&empty);
+        for (floor, actual) in actual_floors {
+            let guess = predicted_floors.get(floor).copied().unwrap_or(false);
+            match (guess, *actual) {
+                (true, true) => tp += 1,
+                (true, false) => fp += 1,
+                (false, true) => fn_ += 1,
+                (false, false) => tn += 1,
+            }
+        }
+    }
+    PresenceScore::from_counts(tp, fp, fn_, tn)
+}
+
+/// The mean absolute error of the floor count timeline against the summed room
+/// ground truth, with its paired sample count (`roadmap.md`, Slice 5).
+#[must_use]
+pub fn floor_count_mae(
+    events: &[Event],
+    ground_truth: &[GroundTruthRecord],
+    floor_rooms: &FloorRooms,
+    hop_ms: i64,
+) -> (f64, u64) {
+    let truth = floor_count_truth(ground_truth, floor_rooms, hop_ms);
+    let changes = floor_count_changes(events, hop_ms);
+    let predicted = replay(&changes, truth.keys().copied());
+
+    let mut total = 0.0_f64;
+    let mut n = 0u64;
+    for (window, actual_floors) in &truth {
+        let empty = BTreeMap::new();
+        let predicted_floors = predicted.get(window).unwrap_or(&empty);
+        for (floor, actual) in actual_floors {
+            let guess = predicted_floors.get(floor).copied().unwrap_or(0);
+            total += f64::from(actual.abs_diff(guess));
+            n += 1;
+        }
+    }
+    if n == 0 {
+        (0.0, 0)
+    } else {
+        (total / n as f64, n)
+    }
+}
+
+/// The accuracy of the core's floor room attribution, over the windows where
+/// exactly one room on the floor is truly occupied (`roadmap.md`, Slice 5;
+/// `attribution.accuracy.room`).
+///
+/// Windows with zero or more than one truly-occupied room are excluded: there
+/// is no single correct room to attribute, so they are not scoreable and must
+/// not inflate or deflate the number. Returns `(accuracy, paired_windows)`.
+#[must_use]
+pub fn room_attribution_accuracy(
+    history: &[FloorWindow],
+    ground_truth: &[GroundTruthRecord],
+    floor_rooms: &FloorRooms,
+    hop_ms: i64,
+) -> (f64, u64) {
+    let rooms_by_floor: BTreeMap<FloorId, &Vec<RoomId>> = floor_rooms
+        .iter()
+        .map(|(floor, rooms)| (floor.clone(), rooms))
+        .collect();
+    let room_truth = room_presence_truth(ground_truth, hop_ms);
+
+    let mut correct = 0u64;
+    let mut total = 0u64;
+    for window in history {
+        let window_index = window_index(window.t_ms, hop_ms);
+        let Some(rooms) = room_truth.get(&window_index) else {
+            continue;
+        };
+        for floor in &window.floors {
+            let Some(floor_room_ids) = rooms_by_floor.get(&floor.floor) else {
+                continue;
+            };
+            let occupied: Vec<&RoomId> = floor_room_ids
+                .iter()
+                .filter(|room| rooms.get(*room).copied().unwrap_or(false))
+                .collect();
+            if occupied.len() != 1 {
+                continue;
+            }
+            total += 1;
+            if floor.attribution.as_ref() == Some(occupied[0]) {
+                correct += 1;
+            }
+        }
+    }
+    if total == 0 {
+        (0.0, 0)
+    } else {
+        (correct as f64 / total as f64, total)
+    }
+}
+
 /// The reference value for a vitals metric: the mean of its ground-truth
 /// records. This is honest only for a reference that is constant over the
 /// scored span (a steady-rate fixture); a varying reference needs per-window
@@ -253,19 +500,20 @@ fn count_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(RoomId, u8
 }
 
 /// Replay edge-triggered changes across the given window axis, carrying state
-/// forward so every requested window has a prediction.
-fn replay<T: Clone>(
-    changes: &BTreeMap<i64, Vec<(RoomId, T)>>,
+/// forward so every requested window has a prediction. Generic over the unit
+/// key (a room or a floor).
+fn replay<K: Ord + Clone, T: Clone>(
+    changes: &BTreeMap<i64, Vec<(K, T)>>,
     windows: impl Iterator<Item = i64>,
-) -> BTreeMap<i64, BTreeMap<RoomId, T>> {
+) -> BTreeMap<i64, BTreeMap<K, T>> {
     let change_windows: Vec<i64> = changes.keys().copied().collect();
     let mut cursor = 0usize;
-    let mut state: BTreeMap<RoomId, T> = BTreeMap::new();
-    let mut out: BTreeMap<i64, BTreeMap<RoomId, T>> = BTreeMap::new();
+    let mut state: BTreeMap<K, T> = BTreeMap::new();
+    let mut out: BTreeMap<i64, BTreeMap<K, T>> = BTreeMap::new();
     for window in windows {
         while cursor < change_windows.len() && change_windows[cursor] <= window {
-            for (room, value) in &changes[&change_windows[cursor]] {
-                state.insert(room.clone(), value.clone());
+            for (unit, value) in &changes[&change_windows[cursor]] {
+                state.insert(unit.clone(), value.clone());
             }
             cursor += 1;
         }

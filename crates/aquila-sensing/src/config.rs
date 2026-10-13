@@ -80,6 +80,12 @@ pub struct SensingConfig {
     /// The number of consecutive windows a state change must hold before it is
     /// committed (`T_hold`).
     pub t_hold: u32,
+    /// The room-attribution ambiguity margin (`fusion-sync.md` §2.4.1): when a
+    /// floor is occupied and the two strongest room presence probabilities
+    /// differ by less than this, the floor's room attribution is withheld and a
+    /// [`Conflict::AmbiguousRooms`](crate::Conflict) is raised rather than
+    /// naming a false confident room.
+    pub room_gap: f64,
     /// The v1 cap on a people count.
     pub max_count: u8,
     /// The base fusion weight of a healthy node.
@@ -120,6 +126,10 @@ pub struct SensingConfig {
     /// (an uncalibrated node contributes no pose); a synthetic in-domain
     /// fixture that treats its nodes as calibrated opts in explicitly.
     pub pose_uncalibrated_quality: f64,
+    /// The minimum confidence a room's vital estimate must carry to be eligible
+    /// for the floor's highest-confidence selection (`fusion-sync.md` §2.2).
+    /// The default `0.0` admits every finite estimate.
+    pub vitals_floor_min_confidence: f64,
     /// The provenance recorded on each measurement.
     pub measurement: MeasurementConfig,
 }
@@ -145,6 +155,7 @@ impl Default for SensingConfig {
             p_lo: 0.2,
             p_hi: 0.8,
             t_hold: 1,
+            room_gap: 0.15,
             max_count: aquila_types::MAX_COUNT_V1,
             node_weight: 1.0,
             vitals_enabled: false,
@@ -158,6 +169,7 @@ impl Default for SensingConfig {
             pose_dither_hz: DEFAULT_TORSO_DITHER_HZ,
             pose_geometry: TorsoGeometry::adult(),
             pose_uncalibrated_quality: 0.0,
+            vitals_floor_min_confidence: 0.0,
             measurement: MeasurementConfig::default(),
         }
     }
@@ -215,6 +227,12 @@ impl SensingConfig {
         }
         if self.p_lo >= self.p_hi {
             return Err(bad("p_lo must be below p_hi"));
+        }
+        if !(0.0..=1.0).contains(&self.room_gap) {
+            return Err(bad("room_gap must lie in [0, 1]"));
+        }
+        if !(0.0..=1.0).contains(&self.vitals_floor_min_confidence) {
+            return Err(bad("vitals_floor_min_confidence must lie in [0, 1]"));
         }
         if self.max_count == 0 || self.max_count > aquila_types::MAX_COUNT_V1 {
             return Err(bad("max_count must lie in 1..=MAX_COUNT_V1"));

@@ -44,7 +44,10 @@ impl CountPmf {
     }
 
     /// Renormalise the mass to sum to one, guarding against an all-zero PMF.
-    fn normalised(mut self) -> Self {
+    ///
+    /// Visible within the crate so the escalation step's convolution
+    /// (`escalation::convolve`) can renormalise a truncated count PMF.
+    pub(crate) fn normalised(mut self) -> Self {
         let sum: f64 = self.probs.iter().sum();
         if sum > 0.0 && sum.is_finite() {
             for p in &mut self.probs {
