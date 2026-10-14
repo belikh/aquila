@@ -66,7 +66,7 @@ static _Atomic bool s_streaming;
 static portMUX_TYPE s_cfg_mux = portMUX_INITIALIZER_UNLOCKED;
 static csi_node_config_t s_config;
 static uint16_t s_raw_cap = (uint16_t)CSI_RAW_MAX;
-static uint32_t s_boot_epoch;
+static uint16_t s_boot_epoch;
 
 static int s_sock = -1;
 static struct sockaddr_in s_core;
@@ -217,9 +217,9 @@ static void csi_sender_task(void *arg)
         if (n > AQ_CSI_MAX_SUBCARRIERS) {
             n = AQ_CSI_MAX_SUBCARRIERS;
         }
-        /* The first 4 bytes are invalid when the driver says so; the frozen
-         * CsiFrame has no such flag, so the first subcarrier is nulled, exactly
-         * as the simulator does (capture-and-firmware.md §7.4). */
+        /* The leading complex sample (two bytes) is unreliable when the driver
+         * says so; null it and mark the header flags byte, exactly as the
+         * simulator and the core decoder do (capture-and-firmware.md §7.4). */
         if (slot.first_word_invalid) {
             slot.csi[0] = 0;
             slot.csi[1] = 0;
@@ -228,9 +228,9 @@ static void csi_sender_task(void *arg)
         int16_t subcarrier_offset = (int16_t)(-(int16_t)(n / 2u));
         size_t length = aq_frame_csi(
             cfg.node_id, slot.band, slot.channel, cfg.bandwidth_mhz, slot.sequence,
-            slot.device_ts_us, (uint16_t)s_boot_epoch, subcarrier_offset, n,
-            slot.rssi, slot.noise_floor, slot.phy_flags, slot.csi, datagram,
-            sizeof(datagram));
+            slot.device_ts_us, s_boot_epoch, subcarrier_offset, n, slot.rssi,
+            slot.noise_floor, slot.phy_flags, slot.first_word_invalid, slot.csi,
+            datagram, sizeof(datagram));
         if (length > 0u && s_sock >= 0) {
             sendto(s_sock, datagram, length, 0, (struct sockaddr *)&s_core,
                    sizeof(s_core));

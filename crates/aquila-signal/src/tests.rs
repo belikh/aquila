@@ -127,20 +127,53 @@ fn decode_csi_bridges_the_contract_frame() {
         channel: 6,
         bandwidth_mhz: 20,
         subcarrier_offset: 1,
-        i_q: vec![64, 0, 0, 0],
+        // Imaginary-first interleaved sample: (Q, I) pairs. Subcarrier 0 is
+        // (Q=0, I=64) and subcarrier 1 is (Q=64, I=0).
+        i_q: vec![0, 64, 64, 0],
         rssi_dbm: -50,
         noise_floor_dbm: -90,
         phy: PhyFlags::empty(),
+        first_word_invalid: false,
     };
     let decoded = decode_csi(&frame).expect("a valid contract frame decodes");
     assert_eq!(decoded.meta.node, NodeId(7));
     assert_eq!(decoded.meta.seq, 5);
     assert_eq!(decoded.meta.bandwidth, Bandwidth::Ht20);
     assert_eq!(decoded.bins.len(), 2);
-    // I/Q (64, 0) is a full-scale count, so one unit of working amplitude.
+    // The imaginary-first order maps the first byte to Q and the second to I.
     assert!((decoded.bins[0].re - 1.0).abs() < 1e-4);
     assert!(decoded.bins[0].im.abs() < 1e-4);
-    assert_eq!(decoded.bins[1], Complex32::ZERO);
+    assert!(decoded.bins[1].re.abs() < 1e-4);
+    assert!((decoded.bins[1].im - 1.0).abs() < 1e-4);
+    assert!(!decoded.flags.first_word_zeroed);
+}
+
+#[test]
+fn decode_csi_zeroes_first_pair_when_flagged() {
+    use aquila_types::{Band, PhyFlags};
+    let mut frame = aquila_types::CsiFrame {
+        node_id: NodeId(1),
+        boot_epoch: 0,
+        sequence: 0,
+        device_time_us: 0,
+        band: Band::B2G4,
+        channel: 6,
+        bandwidth_mhz: 20,
+        subcarrier_offset: 0,
+        i_q: vec![10, 20, 30, 40],
+        rssi_dbm: -50,
+        noise_floor_dbm: -90,
+        phy: PhyFlags::empty(),
+        first_word_invalid: false,
+    };
+    let clean = decode_csi(&frame).expect("clean decodes");
+    assert_eq!(clean.bins.len(), 2);
+    frame.first_word_invalid = true;
+    let zeroed = decode_csi(&frame).expect("flagged decodes");
+    assert_eq!(zeroed.bins[0], Complex32::ZERO);
+    assert!(zeroed.meta.first_word_invalid);
+    assert!(zeroed.flags.first_word_zeroed);
+    assert_eq!(zeroed.bins[1..], clean.bins[1..]);
 }
 
 #[test]
@@ -159,6 +192,7 @@ fn decode_csi_rejects_malformed_contract_frames() {
         rssi_dbm: -50,
         noise_floor_dbm: -90,
         phy: PhyFlags::empty(),
+        first_word_invalid: false,
     };
     // An odd-length interleaved sample is not whole I/Q pairs.
     assert!(matches!(

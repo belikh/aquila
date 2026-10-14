@@ -18,6 +18,7 @@
 #define AQ_CONTROL_MAGIC_3 0x43u /* 'C' */
 #define AQ_CSI_MESSAGE_TYPE 1u
 #define AQ_SUBCARRIER_FORMAT_INT8_IQ 1u
+#define AQ_CSI_FLAG_FIRST_WORD_INVALID 1u
 
 /* Ports and size limits. */
 #define AQ_CSI_DATA_PORT 9100u
@@ -29,7 +30,7 @@
 #define AQ_CONTROL_HEADER_LEN 12
 
 /* Variable-length CSI payload. */
-/* Interleaved signed int8 I/Q, I then Q per subcarrier; 2 bytes per subcarrier. */
+/* Interleaved signed int8 I/Q, Q then I (imaginary first) per subcarrier; 2 bytes per subcarrier. */
 #define AQ_CSI_PAYLOAD_BYTES_PER_SUBCARRIER 2u
 #define AQ_CSI_PAYLOAD_BYTES(n_subcarriers) (2u * (n_subcarriers))
 #define AQ_CSI_FRAME_SIZE(n_subcarriers) \
@@ -61,7 +62,7 @@
 #define AQ_CSI_OFF_BAND 12u
 #define AQ_CSI_OFF_CHANNEL 13u
 #define AQ_CSI_OFF_BANDWIDTH_MHZ 14u
-#define AQ_CSI_OFF_RESERVED 15u
+#define AQ_CSI_OFF_FLAGS 15u
 
 /* CSI body field offsets (relative to the body start). */
 #define AQ_CSI_BODY_OFF_SEQUENCE 0u
@@ -96,7 +97,7 @@ typedef struct {
     uint8_t  band;
     uint8_t  channel;
     uint8_t  bandwidth_mhz;
-    uint8_t  reserved;
+    uint8_t  flags; /* bit0 = AQ_CSI_FLAG_FIRST_WORD_INVALID */
 } aq_csi_header_t;
 
 typedef struct {

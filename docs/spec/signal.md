@@ -213,16 +213,19 @@ contract frame, and reject structurally invalid input before any DSP touches it.
 
 **Contract.** `decode_csi(frame: &aquila_types::CsiFrame) -> Result<ComplexFrame,
 DecodeError>` derives the one contract frame's per-subcarrier `Complex32` bins
-from its raw signed int8 I/Q sample (`i_q`, interleaved `I, Q`;
-`data-contracts.md` §2, ADR-0005), dividing each count by the nominal
-`IQ_COUNTS_PER_UNIT`. This is where the amplitude/phase derivation the firmware
-used to do on-node now lives. `decode_record(raw, meta, layout) ->
+from its raw signed int8 I/Q sample (`i_q`, interleaved `Q, I` — **imaginary
+first**, `[Q0, I0, Q1, I1, …]`; `data-contracts.md` §2, ADR-0006), dividing each
+count by the nominal `IQ_COUNTS_PER_UNIT`. The frame's derived accessors apply
+the imaginary-first order, so each pair `[Q, I]` becomes one `Complex32` with
+`re = i_q[2k+1]/IQ_COUNTS_PER_UNIT` and `im = i_q[2k]/IQ_COUNTS_PER_UNIT`; this
+is where the amplitude/phase derivation the firmware used to do on-node
+(`√(I²+Q²)`, `atan2(Q, I)`) now lives. `decode_record(raw, meta, layout) ->
 Result<ComplexFrame, DecodeError>` decodes a raw ESP32 CSI record: `raw` is
 interleaved `int8` I/Q pairs, imaginary byte first per Espressif
-`wifi_csi_info_t`, and `bins.len() == layout.expected_bins`. Both are total
-functions; they allocate but do not touch IO. The exact I/Q byte interleaving
-and the HT20/HT40 null-bin map are **research-verify** items flagged in §7, not
-assumed silently.
+`wifi_csi_info_t` (`esp-csi-csi`), and `bins.len() == layout.expected_bins`.
+Both are total functions; they allocate but do not touch IO. Both decoders use
+the same imaginary-first order. The HT20/HT40 null-bin map is a
+**research-verify** item flagged in §7, not assumed silently.
 
 **Invariants.**
 - `D1` Structural: `decode_record` accepts iff `raw.len()` is even,
@@ -232,8 +235,9 @@ assumed silently.
   `i_q.len() / 2` (`decode_csi`).
 - `D2` Determinism: identical input yields bit-identical `ComplexFrame`.
 - `D3` Exactness: `int8 → f32` conversion is exact; no clamping or NaN.
-- `D4` `first_word_invalid` policy: the first I/Q pair is zeroed and
-  `flags.first_word_zeroed = true`; the frame is otherwise accepted.
+- `D4` `first_word_invalid` policy: the first complex sample (one I/Q pair,
+  two bytes) is zeroed and `flags.first_word_zeroed = true`; the frame is
+  otherwise accepted.
 - `D5` Metadata sanity is *recorded*, not enforced destructively: out-of-range
   `rssi`/`noise_floor` set a flag rather than failing the decode.
 
@@ -634,9 +638,10 @@ cross-node phase in v1; `G3` bit-exact on the pinned reference target; `G4` no
 
 ## 7. Open questions (honest unknowns)
 
-- Exact ESP32-S3 CSI byte order (imaginary-first vs. real-first) and the HT20/
-  HT40 null-bin map must be confirmed against a real capture before `decode_csi`
-  is frozen; until then they are configuration, not assumptions.
+- The HT20/HT40 null-bin map must be confirmed against a real capture before
+  `decode_csi` is frozen; until then it is configuration, not an assumption.
+  (The CSI byte order is no longer open: it is imaginary-first, per `esp-csi-csi`
+  and ADR-0006 below.)
 - Whether `f32` is sufficient for the accumulation-heavy stages, or whether the
   residual/spine should stay in `f64` throughout, is to be settled by the
   measurement ledger (record + diff), not by taste.

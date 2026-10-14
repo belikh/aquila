@@ -38,8 +38,8 @@ pub struct VirtualNodeConfig {
     pub node: NodeId,
     /// The factory base MAC carried on the control plane.
     pub mac: MacAddr,
-    /// The node's boot epoch.
-    pub boot: u32,
+    /// The node's boot epoch (`u16`, matching the CSI contract frame).
+    pub boot: u16,
     /// The short-lived pairing code the node presents at join.
     pub pairing_code: u32,
     /// The core's CSI data-plane address (`9100/udp`).
@@ -63,7 +63,7 @@ impl VirtualNodeConfig {
     pub fn new(
         node: NodeId,
         mac: MacAddr,
-        boot: u32,
+        boot: u16,
         pairing_code: u32,
         core_data: SocketAddr,
         core_control: SocketAddr,
@@ -262,7 +262,7 @@ impl VirtualNode {
                     }
                     let mut frame = envelope.frame;
                     frame.node_id = self.config.node;
-                    frame.boot_epoch = self.config.boot as u16;
+                    frame.boot_epoch = self.config.boot;
                     frame.sequence = self.sequence;
                     frame.device_time_us = self.device_us;
                     let datagram = encode_datagram(&frame);

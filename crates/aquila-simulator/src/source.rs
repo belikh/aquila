@@ -100,7 +100,7 @@ impl SimConfig {
 ///
 /// Frames are yielded node-by-node within each tick, in configured node order,
 /// with the tick advancing after the last node. Impairments drop frames (a
-/// sequence gap) or null the first subcarrier.
+/// sequence gap) or null the first complex sample and set `first_word_invalid`.
 pub struct SimulatorSource {
     script: SceneScript,
     config: SimConfig,
@@ -313,16 +313,18 @@ impl SimulatorSource {
             re += self.noise(node_index, tick, k, TAG_NOISE_RE);
             im += self.noise(node_index, tick, k, TAG_NOISE_IM);
 
-            // Model the hardware: quantise the complex sample to signed int8.
-            i_q.push(quantise_i8(re));
+            // Model the hardware: quantise the complex sample to signed int8,
+            // imaginary-first (Q then I), matching the esp-csi wire order.
             i_q.push(quantise_i8(im));
+            i_q.push(quantise_i8(re));
         }
 
-        if self.is_impaired(node_index, tick) {
-            // A nulled first subcarrier stands in for the capture layer's
-            // `FIRST_WORD_INVALID`; the frozen `CsiFrame` has no such flag, so
-            // the impairment is expressed as an unusable subcarrier rather than
-            // an invented field.
+        let first_word_invalid = self.is_impaired(node_index, tick);
+        if first_word_invalid {
+            // The capture layer's `FIRST_WORD_INVALID`: the leading complex
+            // sample (two bytes) is nulled and the frame marks the flag, exactly
+            // as the node and the core decoder do (`capture-and-firmware.md`
+            // §7.4).
             i_q[0] = 0;
             i_q[1] = 0;
         }
@@ -358,6 +360,7 @@ impl SimulatorSource {
             rssi_dbm: rssi,
             noise_floor_dbm: noise_floor,
             phy: PhyFlags(phy),
+            first_word_invalid,
         }
     }
 }

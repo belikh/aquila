@@ -39,7 +39,7 @@ spec index, then the ADRs relevant to what you are touching.
 
 - Specs: 18 files, including `firmware-ota.md`; the crate graph and ports are reconciled by
   ADR-0003 and `docs/spec/interface-register.md`.
-- ADRs: `0001`–`0004`.
+- ADRs: `0001`–`0006`.
 - Research: paired datasets, plugin architectures, ESP32-as-SDR, ESP32-C5 dual-band, node backhaul.
 - Plan: v1 wayfinder map (#1) and tickets published at https://github.com/belikh/aquila/issues;
   `docs/plan/` mirrors them (`docs/plan/issues.md` maps plan numbers to issue numbers).

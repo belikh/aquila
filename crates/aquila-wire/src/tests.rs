@@ -31,6 +31,7 @@ fn golden_frame() -> CsiFrame {
         rssi_dbm: -42,
         noise_floor_dbm: -95,
         phy: PhyFlags(PhyFlags::HT),
+        first_word_invalid: false,
     }
 }
 
@@ -81,6 +82,7 @@ fn representative_frame() -> CsiFrame {
         rssi_dbm: -38,
         noise_floor_dbm: -92,
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
+        first_word_invalid: false,
     }
 }
 
@@ -103,6 +105,26 @@ fn golden_layout_is_pinned() {
         "golden datagram does not decode to its frame"
     );
     assert_eq!(datagram_len(2), Some(48));
+    // Header offset 15 is the flags byte; a clean frame leaves it zero.
+    assert_eq!(GOLDEN[15], 0, "the flags byte must be zero when clean");
+}
+
+#[test]
+fn first_word_invalid_rides_the_flags_byte() {
+    let mut frame = golden_frame();
+    frame.first_word_invalid = true;
+    let bytes = encode_datagram(&frame);
+    assert_eq!(
+        bytes[15], CSI_FLAG_FIRST_WORD_INVALID,
+        "bit 0 of the header flags byte carries first_word_invalid"
+    );
+    let decoded = decode_datagram(&bytes).expect("decode flagged");
+    assert!(decoded.first_word_invalid);
+    // Clearing the flag clears the bit and round-trips.
+    frame.first_word_invalid = false;
+    let bytes = encode_datagram(&frame);
+    assert_eq!(bytes[15], 0);
+    assert!(!decode_datagram(&bytes).expect("decode clean").first_word_invalid);
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +315,7 @@ fn control_fixtures() -> Vec<ControlMessage> {
             request_id: 1,
             body: ControlBody::JoinRequest(JoinRequest {
                 node: sample_mac(1),
-                boot: 0x1122_3344,
+                boot: 0x1122,
                 pairing_code: 0x0000_ABCD,
                 fw_version: "aquila-node 1.0.0".to_string(),
             }),
@@ -591,6 +613,8 @@ fn generated_c_header_pins_the_layout() {
         "#define AQ_CSI_BODY_FIXED_LEN 28u",
         "#define AQ_CSI_MAX_SUBCARRIERS 714u",
         "#define AQ_CSI_OFF_MAGIC 0u",
+        "#define AQ_CSI_OFF_FLAGS 15u",
+        "#define AQ_CSI_FLAG_FIRST_WORD_INVALID 1u",
         "#define AQ_CSI_BODY_OFF_IQ 28u",
         "#define AQ_SUBCARRIER_FORMAT_INT8_IQ 1u",
         "#define AQ_OP_SYNC_ECHO 0x09u",
@@ -627,7 +651,8 @@ prop_compose! {
          i_q in prop::collection::vec(any::<i8>(), 2 * n..=2 * n),
          rssi_dbm: i8,
          noise_floor_dbm: i8,
-         phy: u16)
+         phy: u16,
+         first_word_invalid: bool)
         -> CsiFrame {
         CsiFrame {
             node_id: NodeId(node_id),
@@ -642,6 +667,7 @@ prop_compose! {
             rssi_dbm,
             noise_floor_dbm,
             phy: PhyFlags(phy),
+            first_word_invalid,
         }
     }
 }

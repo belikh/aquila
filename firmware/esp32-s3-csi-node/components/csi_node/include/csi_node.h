@@ -19,7 +19,7 @@ extern "C" {
 /* The CSI configuration the node applies (`capture-and-firmware.md` §9.1). */
 typedef struct {
     uint16_t node_id;      /* dense on-air node id (AQCI node_id) */
-    uint32_t boot;         /* random boot epoch, u32 on the control plane */
+    uint16_t boot;         /* random boot epoch, u16 on the wire and control plane */
     uint8_t channel;       /* 802.11 primary channel */
     uint8_t bandwidth_mhz; /* 20, 40, 80 or 160 */
     uint8_t secondary;     /* 0 none, 1 above, 2 below */

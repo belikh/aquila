@@ -188,8 +188,9 @@ missing input is hardware (`evaluation.md` §5.1–§5.2).
 
 One received 802.11 packet's raw channel state information from a single node:
 the esp-csi **signed int8 I/Q** sample per subcarrier plus capture metadata. The
-modem's native form, carried verbatim; amplitude and phase are **derived** in the
-core, never stored (ADR-0005).
+modem's native form, carried verbatim; the sample is interleaved
+**imaginary-first** (`[Q0, I0, Q1, I1, …]`), as esp-csi emits it (ADR-0006).
+Amplitude and phase are **derived** in the core, never stored (ADR-0005).
 
 **Fields**
 
@@ -203,14 +204,17 @@ core, never stored (ADR-0005).
 | `channel` | `u8` | channel | 1–14 (2.4 GHz); 32–177 (5 GHz) |
 | `bandwidth_mhz` | `u8` | MHz | 20 or 40 |
 | `subcarrier_offset` | `i16` | index | Index of the first interleaved sample below |
-| `i_q` | `Vec<i8>` | raw counts | Interleaved `I, Q` per subcarrier, ascending index |
+| `i_q` | `Vec<i8>` | raw counts | Interleaved `Q, I` per subcarrier (**imaginary first**), ascending index |
 | `rssi_dbm` | `i8` | dBm | Whole-frame RSSI |
 | `noise_floor_dbm` | `i8` | dBm | Whole-frame noise floor |
 | `phy` | `PhyFlags` | bitset | See below |
+| `first_word_invalid` | `bool` | — | ESP32 quirk: the leading complex sample (two bytes) is unreliable. Carried on the wire as header `flags` bit 0 (§9.1) |
 
 `n_subcarriers` is **derived** (`i_q.len() / 2`) and is not a separate stored
 field, so it cannot disagree with the sample. Amplitude (`√(I²+Q²)`) and phase
-(`atan2(Q, I)`) are derived accessors on the frame, not stored fields.
+(`atan2(Q, I)`) are derived accessors on the frame, not stored fields; they read
+the in-phase byte as the *second* byte of each pair and the quadrature byte as
+the *first* (imaginary-first).
 
 ```rust
 bitflags-like newtype (u16):
@@ -223,8 +227,9 @@ pub struct PhyFlags(pub u16);
 
 1. `i_q.len()` is even and `>= 2` (`n_subcarriers >= 1`).
 2. `i_q` is in **ascending subcarrier index** order, contiguous, starting at
-   `subcarrier_offset`: `[I0, Q0, I1, Q1, …]`. Null/guard subcarriers may appear
-   as the pair `(0, 0)`; downstream DSP decides whether to use them.
+   `subcarrier_offset`: `[Q0, I0, Q1, I1, …]` (imaginary first). Null/guard
+   subcarriers may appear as the pair `(0, 0)`; downstream DSP decides whether to
+   use them.
 3. Every element is a signed int8, so its derived amplitude and phase are finite
    by construction; there is no range check to fail.
 4. `device_time_us` is non-decreasing within a `boot_epoch`.
@@ -257,10 +262,11 @@ pub struct CsiFrame {
     pub channel: u8,
     pub bandwidth_mhz: u8,
     pub subcarrier_offset: i16,
-    pub i_q: Vec<i8>, // interleaved I, Q per subcarrier
+    pub i_q: Vec<i8>, // interleaved Q, I (imaginary first) per subcarrier
     pub rssi_dbm: i8,
     pub noise_floor_dbm: i8,
     pub phy: PhyFlags,
+    pub first_word_invalid: bool,
 }
 impl CsiFrame {
     pub fn n_subcarriers(&self) -> usize { self.i_q.len() / 2 }
@@ -819,7 +825,8 @@ These are frozen names owned by `aquila-types`. A second declaration anywhere
 defect:
 
 1. **`CsiFrame`** — and its subcarrier representation (raw signed int8 `i_q`,
-   interleaved `I, Q`, ascending index). Amplitude and phase are derived, never
+   interleaved `Q, I` — **imaginary first** — ascending index), plus the
+   `first_word_invalid` impairment flag. Amplitude and phase are derived, never
    stored. The firmware emits the wire form; it does not own a competing struct.
 2. **`CsiEnvelope`**, **`SensingFrame`**, `SensingScope`, `ClockGrid` — the only
    core-side wrappers; do not add second versions.
@@ -856,13 +863,13 @@ application layer.
 | 4 | 1 | `wire_major` | `u8` |
 | 5 | 1 | `wire_minor` | `u8` |
 | 6 | 1 | `msg_type` | `u8` (1 = `CsiFrame`) |
-| 7 | 1 | `sc_format` | `u8` (1 = raw signed int8 I/Q) |
+| 7 | 1 | `sc_format` | `u8` (1 = raw signed int8 I/Q, imaginary first) |
 | 8 | 2 | `node_id` | `u16` |
 | 10 | 2 | `payload_len` | `u16` (bytes after the header) |
 | 12 | 1 | `band` | `u8` (0 = 2.4 GHz, 1 = 5 GHz, 255 = unknown) |
 | 13 | 1 | `channel` | `u8` |
 | 14 | 1 | `bandwidth_mhz` | `u8` |
-| 15 | 1 | `reserved` | `u8` = 0 |
+| 15 | 1 | `flags` | `u8`; bit 0 = `first_word_invalid` (leading complex sample unreliable); other bits reserved = 0 |
 
 **Body (msg_type 1) — 28-byte fixed part, then `2 × n` bytes**
 
@@ -877,14 +884,17 @@ application layer.
 | 23 | 1 | `noise_floor_dbm` (`i8`) |
 | 24 | 2 | `phy_flags` (`u16`) |
 | 26 | 2 | reserved = 0 |
-| 28 | 2n | `i_q[0..2n]` (interleaved signed int8 `I, Q` per subcarrier) |
+| 28 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
 
 Rules: a receiver validates `magic`, `wire_major`, `payload_len` and
 `payload_len == 28 + 2 * n_subcarriers` before trusting any field. `wire_minor`
 mismatches are accepted (additive); `wire_major` mismatches are rejected and
 counted once per `(node_id, boot_epoch)`. The `magic` is `AQCI` and the payload
-is the raw signed int8 I/Q sample (ADR-0005). The `aquila-wire` crate provides
-`encode_datagram`/`decode_datagram`; `postcard` is **not** used on the wire.
+is the raw signed int8 I/Q sample, **imaginary byte first** (ADR-0005,
+ADR-0006). Header `flags` bit 0 (`first_word_invalid`) marks a frame whose
+leading complex sample (two bytes) the driver reported unreliable. The
+`aquila-wire` crate provides `encode_datagram`/`decode_datagram`; `postcard` is
+**not** used on the wire.
 
 ### 9.2 On disk
 

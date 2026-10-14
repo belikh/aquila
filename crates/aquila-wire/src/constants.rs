@@ -29,9 +29,15 @@ pub const CONTROL_VERSION: u8 = WIRE_MAJOR;
 /// The only CSI message type: a `CsiFrame`.
 pub const CSI_MESSAGE_TYPE: u8 = 1;
 
-/// The only subcarrier format: interleaved signed int8 `I, Q` pairs, two bytes
-/// per subcarrier (ADR-0005).
+/// The only subcarrier format: interleaved signed int8 `Q, I` pairs
+/// (imaginary first), two bytes per subcarrier (ADR-0005).
 pub const SUBCARRIER_FORMAT_INT8_IQ: u8 = 1;
+
+/// The CSI header flags byte's bit 0: the leading `I/Q` pair is unreliable.
+///
+/// The node nulls the first complex sample (two bytes) when it sets this; the
+/// core repeats the nulling and records the flag when decoding.
+pub const CSI_FLAG_FIRST_WORD_INVALID: u8 = 0x01;
 
 /// The fixed CSI header length in bytes.
 pub const CSI_HEADER_LEN: usize = 16;
@@ -151,8 +157,8 @@ pub(crate) mod csi_offset {
     pub(crate) const CHANNEL: usize = 13;
     /// Bandwidth in MHz (`u8`).
     pub(crate) const BANDWIDTH_MHZ: usize = 14;
-    /// Reserved, zero (`u8`).
-    pub(crate) const RESERVED: usize = 15;
+    /// Flags byte (`u8`): bit 0 is [`super::CSI_FLAG_FIRST_WORD_INVALID`].
+    pub(crate) const FLAGS: usize = 15;
 }
 
 /// Byte offsets within the fixed part of the CSI body.

@@ -53,6 +53,7 @@ fn csi_frame() -> CsiFrame {
         rssi_dbm: -40,
         noise_floor_dbm: -90,
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
+        first_word_invalid: false,
     }
 }
 
@@ -498,7 +499,8 @@ fn csi_frame_invariants() {
     assert_eq!(frame.phase().len(), 3);
     assert!(frame.amplitude().iter().all(|a| a.is_finite()));
     assert!(frame.phase().iter().all(|p| p.is_finite()));
-    // Subcarrier 0 is (0, 0): amplitude 0, and subcarrier 1 is (2, 1).
+    // The sample is imaginary-first: subcarrier 0 is (I, Q) = (0, 0), so its
+    // amplitude is 0, and subcarrier 1 is (I, Q) = (1, 2).
     assert!((frame.amplitude_at(0)).abs() < 1e-6);
     assert!((frame.amplitude_at(1) - 5.0_f32.sqrt() / 64.0).abs() < 1e-6);
 }

@@ -3,7 +3,8 @@
 //! The layout is the canonical on-air format of `data-contracts.md` §9.1,
 //! carried under the `AQCI` magic named by `capture-and-firmware.md` §5.1 and
 //! the interface register. The payload is the raw signed int8 I/Q sample the
-//! node captured (ADR-0005): interleaved `I, Q`, two bytes per subcarrier.
+//! node captured (ADR-0005): interleaved `Q, I` (**imaginary first**), two
+//! bytes per subcarrier.
 //!
 //! ```text
 //! offset size field
@@ -17,7 +18,7 @@
 //!     12    1 band
 //!     13    1 channel
 //!     14    1 bandwidth_mhz
-//!     15    1 reserved = 0
+//!     15    1 flags: bit0 = first_word_invalid
 //!     16    8 sequence
 //!     24    8 device_time_us
 //!     32    2 boot_epoch
@@ -27,14 +28,14 @@
 //!     39    1 noise_floor_dbm (i8)
 //!     40    2 phy_flags
 //!     42    2 reserved = 0
-//!     44   2n i_q[0..2n] (i8, interleaved I,Q per subcarrier)
+//!     44   2n i_q[0..2n] (i8, interleaved Q,I per subcarrier)
 //! ```
 
 use aquila_types::{Band, CsiFrame, NodeId, PhyFlags};
 
 use crate::constants::{
-    CSI_BODY_FIXED_LEN, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_SUBCARRIERS,
-    SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
+    CSI_BODY_FIXED_LEN, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE,
+    MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
 };
 use crate::cursor::{Reader, Writer};
 use crate::error::WireError;
@@ -94,7 +95,12 @@ pub fn encode_datagram(frame: &CsiFrame) -> Vec<u8> {
     w.u8(band_to_u8(frame.band));
     w.u8(frame.channel);
     w.u8(frame.bandwidth_mhz);
-    w.u8(0); // reserved
+    let flags = if frame.first_word_invalid {
+        CSI_FLAG_FIRST_WORD_INVALID
+    } else {
+        0
+    };
+    w.u8(flags);
 
     // Fixed body.
     w.u64(frame.sequence);
@@ -107,7 +113,7 @@ pub fn encode_datagram(frame: &CsiFrame) -> Vec<u8> {
     w.u16(frame.phy.0);
     w.u16(0); // reserved
 
-    // Interleaved signed int8 I/Q, I then Q per subcarrier.
+    // Interleaved signed int8 I/Q, imaginary (Q) then real (I) per subcarrier (ADR-0006).
     for i in 0..2 * n {
         w.i8(frame.i_q.get(i).copied().unwrap_or(0));
     }
@@ -154,7 +160,7 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
     let band = band_from_u8(r.u8()?);
     let channel = r.u8()?;
     let bandwidth_mhz = r.u8()?;
-    let _reserved = r.u8()?;
+    let flags = r.u8()?;
 
     // Fail early, with a clean truncation, if the declared payload is not all
     // present.
@@ -212,5 +218,6 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         rssi_dbm,
         noise_floor_dbm,
         phy,
+        first_word_invalid: flags & CSI_FLAG_FIRST_WORD_INVALID != 0,
     })
 }

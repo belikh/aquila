@@ -55,11 +55,12 @@ pub struct CsiFrame {
     pub bandwidth_mhz: u8,
     /// The subcarrier index of the first interleaved sample in `i_q`.
     pub subcarrier_offset: i16,
-    /// The raw complex channel sample per subcarrier, interleaved `I, Q` in
-    /// ascending subcarrier index order: `[I0, Q0, I1, Q1, …]`. Each element is
-    /// the signed int8 the esp-csi capture produced; the node does not convert
-    /// it. `n_subcarriers == i_q.len() / 2`. Amplitude and phase are derived
-    /// from this sample ([`CsiFrame::amplitude`], [`CsiFrame::phase`]).
+    /// The raw complex channel sample per subcarrier, interleaved `Q, I`
+    /// (**imaginary first**) in ascending subcarrier index order:
+    /// `[Q0, I0, Q1, I1, …]`, matching the esp-csi sample. Each element is the
+    /// signed int8 the capture produced; the node does not convert it.
+    /// `n_subcarriers == i_q.len() / 2`. Amplitude and phase are derived from
+    /// this sample ([`CsiFrame::amplitude`], [`CsiFrame::phase`]).
     pub i_q: Vec<i8>,
     /// Whole-frame received signal strength, in dBm.
     pub rssi_dbm: i8,
@@ -67,6 +68,12 @@ pub struct CsiFrame {
     pub noise_floor_dbm: i8,
     /// PHY status flags.
     pub phy: PhyFlags,
+    /// ESP32 quirk: the leading `I/Q` pair is unreliable. The node marks the
+    /// frame and nulls the first complex sample (two bytes); the core repeats
+    /// the nulling and records the flag when decoding ([`crate::CsiFrame`] is
+    /// the pure node frame, so the flag travels on the wire header's flags
+    /// byte, bit 0).
+    pub first_word_invalid: bool,
 }
 
 impl CsiFrame {
@@ -79,22 +86,28 @@ impl CsiFrame {
     /// The derived in-phase component of subcarrier `k`, in the core's working
     /// unit (raw counts divided by [`IQ_COUNTS_PER_UNIT`]).
     ///
+    /// The sample is imaginary-first, so the in-phase byte of subcarrier `k` is
+    /// the *second* byte of its pair (`i_q[2k + 1]`).
+    ///
     /// Returns `0.0` when `k` is out of range.
     #[must_use]
     pub fn i_at(&self, k: usize) -> f32 {
         self.i_q
-            .get(2 * k)
+            .get(2 * k + 1)
             .map_or(0.0, |v| f32::from(*v) / IQ_COUNTS_PER_UNIT)
     }
 
     /// The derived quadrature component of subcarrier `k`, in the core's
     /// working unit (raw counts divided by [`IQ_COUNTS_PER_UNIT`]).
     ///
+    /// The sample is imaginary-first, so the quadrature byte of subcarrier `k`
+    /// is the *first* byte of its pair (`i_q[2k]`).
+    ///
     /// Returns `0.0` when `k` is out of range.
     #[must_use]
     pub fn q_at(&self, k: usize) -> f32 {
         self.i_q
-            .get(2 * k + 1)
+            .get(2 * k)
             .map_or(0.0, |v| f32::from(*v) / IQ_COUNTS_PER_UNIT)
     }
 

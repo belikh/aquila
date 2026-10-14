@@ -137,12 +137,12 @@ static void send_result(uint32_t request_id, uint8_t status, const char *detail)
 
 static void send_join_request(void)
 {
-    uint8_t body[6 + 4 + 4 + 1 + 32];
+    uint8_t body[6 + 2 + 4 + 1 + 32];
     size_t offset = 0;
     memcpy(&body[offset], s_mac, 6);
     offset += 6;
-    aq_put_u32_le(&body[offset], s_config.boot);
-    offset += 4;
+    aq_put_u16_le(&body[offset], s_config.boot);
+    offset += 2;
     aq_put_u32_le(&body[offset], s_config.pairing_code);
     offset += 4;
     size_t fw_len = strlen(s_config.fw_version);
@@ -158,12 +158,12 @@ static void send_join_request(void)
 
 static void send_status(uint32_t request_id)
 {
-    uint8_t body[8 + 4 + 8 + 4 + 2 + 2 + 4 + 4];
+    uint8_t body[8 + 2 + 8 + 4 + 2 + 2 + 4 + 4];
     size_t offset = 0;
     aq_put_u64_le(&body[offset], (uint64_t)(esp_timer_get_time() / 1000));
     offset += 8;
-    aq_put_u32_le(&body[offset], s_config.boot);
-    offset += 4;
+    aq_put_u16_le(&body[offset], s_config.boot);
+    offset += 2;
     aq_put_u64_le(&body[offset], csi_node_last_sequence());
     offset += 8;
     aq_put_u32_le(&body[offset], csi_node_dropped());

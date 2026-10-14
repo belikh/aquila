@@ -66,6 +66,7 @@ fn frame(node: u16, sequence: u64) -> CsiFrame {
         rssi_dbm: -40,
         noise_floor_dbm: -90,
         phy: PhyFlags(PhyFlags::HT),
+        first_word_invalid: false,
     }
 }
 

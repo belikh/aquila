@@ -21,7 +21,7 @@ extern "C" {
 /* The wiring the control task needs. */
 typedef struct {
     uint16_t node_id;       /* dense node id */
-    uint32_t boot;          /* boot epoch */
+    uint16_t boot;          /* boot epoch (u16 on the wire) */
     const char *core_host;  /* the core's IPv4 literal */
     uint16_t core_port;     /* the control port (default AQ_CONTROL_PORT) */
     uint32_t pairing_code;  /* the short-lived pairing code, 0 if none */

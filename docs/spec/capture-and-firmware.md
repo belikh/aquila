@@ -89,38 +89,19 @@ are genuinely interchangeable and the seam is real, not speculative.
 ```rust
 // aquila-sources
 
-/// Stable node identity: the ESP32-S3 factory base MAC (six bytes).
-/// The home model maps it to a floor and room; it is the only node id on the wire.
-pub type NodeId = MacAddr; // [u8; 6]
+use aquila_types::{CsiEnvelope, CsiFrame};
 
-/// A node's power-cycle epoch. Random per boot; sequence resets to zero per boot.
-pub type BootId = u32;
-
-/// Per-boot monotonic frame counter. Assigned on the node at capture time.
-pub type Sequence = u64;
-
-/// One decoded CSI frame plus host-side ingest metadata.
-pub struct CsiFrame {
-    pub node: NodeId,
-    pub boot: BootId,
-    pub sequence: Sequence,
-    /// Node monotonic clock at capture, microseconds. Never disciplined.
-    pub device_ts_us: u64,
-    /// Host clock when the source ingested the frame, microseconds.
-    pub host_arrival_us: u64,
-    /// 802.11 TSF if the driver reported it; None otherwise.
-    pub tsf_us: Option<u32>,
-    /// Channel, bandwidth, MCS, RSSI, noise floor, antenna (see §5).
-    pub phy: PhyInfo,
-    /// The driver marked the first CSI word invalid; consumers must treat the
-    /// first four CSI bytes as unusable.
-    pub first_word_invalid: bool,
-    /// Transmitter of the frame that elicited this CSI, when known.
-    pub source_mac: Option<MacAddr>,
-    /// Raw complex coefficients, interleaved signed 8-bit I, Q, I, Q, …
-    /// Subcarrier count is `csi.len() / 2`.
-    pub csi: CsiBuffer,
-}
+// The seam yields the one canonical contract frame, `aquila_types::CsiFrame`
+// (raw signed int8 I/Q, interleaved `Q, I` — **imaginary first**, `[Q0, I0, …]`
+// — `data-contracts.md` §2, ADR-0005/ADR-0006), wrapped with host arrival data
+// on `aquila_types::CsiEnvelope`. There is **no** second `CsiFrame` at the seam;
+// the firmware emits the wire form and does not own a competing struct.
+//
+// Node identity on the wire is the dense `NodeId(u16)`; the ESP32-S3 factory
+// `MacAddr` is mapped to and from it at the seam by `aquila-wire`'s
+// node-identity map (ADR-0003 §3). The wire carries neither `tsf_us` nor
+// `host_arrival_us` (ADR-0004/ADR-0005); host arrival is added core-side from
+// the injected `Clock` (§4), on the envelope, never on the frame.
 
 /// A CSI source yields frames, or reports clean end-of-stream for finite sources.
 pub enum FrameOrEnd {
@@ -244,8 +225,8 @@ out of order across nodes. The core reconciles this into one grid:
    core computes an NTP-style offset and round-trip delay; the minimum-RTT
    sample is the anchor.
 2. **Stream regression (data plane).** Over many frames the core fits an affine
-   map `device_ts_us → host_ts` per node by least squares on `(device_ts_us,
-   host_arrival_us)` pairs, giving offset and skew (drift).
+   map `device_time_us → host_ts` per node by least squares on
+   `(device_time_us, host_arrival_us)` pairs, giving offset and skew (drift).
 3. The estimator exposes the current map and its residual for the dashboard's
    `node.health` and `system.health` (`drift estimate` in `dashboard.md`).
 
@@ -265,7 +246,8 @@ Rust and the firmware (§9.4).
 Little-endian, packed, no trailing padding. This is exactly the
 `data-contracts.md` §9.1 layout carried under the `AQCI` magic (ADR-0004): the
 payload is the frozen `CsiFrame` contract (`data-contracts.md` §2) as the raw
-signed `int8` I/Q sample the esp-csi capture produced (ADR-0005), **not** a
+signed `int8` I/Q sample the esp-csi capture produced (ADR-0005), interleaved
+`Q, I` — **imaginary first** (`[Q0, I0, Q1, I1, …]`, ADR-0006) — **not** a
 derived `f32` amplitude/phase pair. Max datagram is 1472 bytes (under a
 1500-byte MTU); oversized frames are dropped and counted, never fragmented at
 the application layer.
@@ -278,13 +260,13 @@ the application layer.
 | 4 | 1 | `wire_major` | `u8` |
 | 5 | 1 | `wire_minor` | `u8` |
 | 6 | 1 | `msg_type` | `u8` (1 = `CsiFrame`) |
-| 7 | 1 | `sc_format` | `u8` (1 = raw signed int8 I/Q) |
+| 7 | 1 | `sc_format` | `u8` (1 = raw signed int8 I/Q, imaginary first) |
 | 8 | 2 | `node_id` | `u16` (dense contract identity; ADR-0003 §3) |
 | 10 | 2 | `payload_len` | `u16` (bytes after the header) |
 | 12 | 1 | `band` | `u8` (0 = 2.4 GHz, 1 = 5 GHz, 255 = unknown) |
 | 13 | 1 | `channel` | `u8` |
 | 14 | 1 | `bandwidth_mhz` | `u8` |
-| 15 | 1 | `reserved` | `u8` = 0 |
+| 15 | 1 | `flags` | `u8`; bit 0 = `first_word_invalid` (leading complex sample unreliable); other bits reserved = 0 |
 
 **Body (`msg_type` 1) — 28-byte fixed part, then `2 × n` bytes**
 
@@ -299,7 +281,7 @@ the application layer.
 | 23 | 1 | `noise_floor_dbm` (`i8`) |
 | 24 | 2 | `phy_flags` (`u16`) |
 | 26 | 2 | reserved = 0 |
-| 28 | 2n | `i_q[0..2n]` (interleaved signed int8 `I, Q` per subcarrier) |
+| 28 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
 
 A receiver validates `magic`, `wire_major`, `payload_len` and
 `payload_len == 28 + 2 * n_subcarriers` before trusting any field. A `wire_minor`
@@ -307,8 +289,10 @@ mismatch is accepted (additive); a `wire_major` mismatch is rejected and counted
 once per `(node_id, boot_epoch)`, never guessed. The wire carries the dense
 `node_id`; the factory `MacAddr` is translated at the seam by `aquila-wire`'s
 node-identity map (ADR-0003 §3, ADR-0004 §2). The payload is copied from the
-receive buffer verbatim: the node performs no floating-point conversion
-(ADR-0005). The codec is `aquila-wire`'s
+receive buffer verbatim — interleaved `Q, I`, imaginary byte first (ADR-0005,
+ADR-0006) — so the node performs no floating-point conversion. Header `flags`
+bit 0 (`first_word_invalid`) marks a frame whose leading complex sample (two
+bytes) the driver reported unreliable. The codec is `aquila-wire`'s
 `encode_datagram`/`decode_datagram`; `postcard` is not used on the wire
 (`data-contracts.md` §9.1).
 
@@ -439,7 +423,7 @@ reproduced from committed inputs without a node.
 
 The simulator is a pure function of `(scene script, seed, virtual start time,
 tick schedule)`. It reads no wall clock, spawns no threads, and uses only a
-seeded PRNG. It drives a **virtual clock**: `device_ts_us` comes from a virtual
+seeded PRNG. It drives a **virtual clock**: `device_time_us` comes from a virtual
 node clock (with modelled skew), and `host_arrival_us` from a virtual host
 clock. Same inputs ⇒ byte-identical frames, on any machine. The digest of a
 synthesised Session is asserted in CI (`replay.digest`, deterministic class).
@@ -494,8 +478,9 @@ sim-based metrics; it is not a runtime input (§8.5).
 
 Per-node clock skew (ppm) applied to timestamps; network jitter, loss and
 reordering applied at the datagram layer; random first-word corruption (the
-leading subcarrier zeroed, the internal esp-csi quirk); and the subcarrier count
-implied by bandwidth. Fakes for the whole pipeline — including
+first complex sample — two bytes, one subcarrier — zeroed and the
+`first_word_invalid` flag set, the internal esp-csi quirk); and the subcarrier
+count implied by bandwidth. Fakes for the whole pipeline — including
 a fake `Clock` and a fake `Sink` — are ordinary structs, not fixtures.
 
 ## 8. Session format (recorded fixtures)
@@ -582,13 +567,16 @@ crate; it lives under `firmware/esp32-s3-csi-node/`.
    produce CSI.
 3. In the CSI callback: copy the CSI buffer, snapshot `rx_ctrl`, read
    `esp_timer_get_time()` (monotonic µs), assign the per-boot `sequence`, record
-   the internal first-word-invalid quirk, and enqueue into the ring. No
-   allocation, no logging, no floating point.
+   the internal first-word-invalid quirk (the first complex sample — two bytes —
+   is unreliable; the node nulls it and sets the header `flags` bit 0), and
+   enqueue into the ring. No allocation, no logging, no floating point.
 4. A sender task drains the ring to the core's UDP endpoint, one CSI frame per
    datagram, subject to `max_tx_rate_hz`; drop-and-count on overflow (§5.4). The
-   sender copies the raw signed int8 I/Q buffer into the payload verbatim; the
-   node performs no conversion (ADR-0005).
-5. `boot` = random `u32` at boot; `sequence` resets per boot.
+   sender copies the raw signed int8 I/Q buffer into the payload verbatim —
+   interleaved `Q, I`, imaginary byte first — so the node performs no conversion
+   (ADR-0005, ADR-0006).
+5. `boot_epoch` (a `u16`, matching the contract frame and the control-plane
+   `boot` field) = random at boot; `sequence` resets per boot.
 6. Serve the control channel: pairing, config, status, sync echo, reboot,
    identify, factory reset (§6).
 7. Send a periodic `STATUS` heartbeat (§6.4).

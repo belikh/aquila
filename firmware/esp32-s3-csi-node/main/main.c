@@ -95,7 +95,7 @@ void app_main(void)
 
     csi_node_config_t csi = csi_node_default_config();
     csi.node_id = (uint16_t)CONFIG_AQUILA_NODE_ID;
-    csi.boot = esp_random();
+    csi.boot = (uint16_t)esp_random();
     csi.channel = 6u;
     csi.bandwidth_mhz = 20u;
     csi.csi_enable = true;

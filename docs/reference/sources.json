@@ -11,6 +11,7 @@
     { "id": "hf-triplet", "type": "weights", "title": "wifi-densepose-pretrained", "url": "https://huggingface.co/ruvnet/wifi-densepose-pretrained", "licence": "MIT", "verified": true },
     { "id": "hf-mmfi-pose", "type": "weights", "title": "wifi-densepose-mmfi-pose", "url": "https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose", "licence": "CC-BY-NC-4.0", "verified": true },
     { "id": "esp-csi", "type": "project", "title": "espressif/esp-csi", "url": "https://github.com/espressif/esp-csi", "licence": "Apache-2.0", "verified": true },
+    { "id": "esp-csi-csi", "type": "docs", "title": "esp-csi CSI data format — imaginary byte first", "url": "https://github.com/espressif/esp-csi/blob/master/examples/get-started/README.md", "licence": "Apache-2.0", "verified": true, "note": "wifi_csi_info_t.buf: int8 per-subcarrier pairs, imaginary part stored first ([Im, Re])" },
     { "id": "espectre", "type": "project", "title": "ESPectre", "url": "https://github.com/francescopace/espectre", "licence": "see-repo", "verified": true },
     { "id": "espargos", "type": "project", "title": "ESPARGOS / esp-sdr", "url": "https://espargos.net", "licence": "see-repo", "verified": true },
     { "id": "openmac", "type": "project", "title": "esp32-open-mac", "url": "https://github.com/ESPARGOS/esp32-open-mac", "licence": "see-repo", "verified": true },

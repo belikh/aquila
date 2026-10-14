@@ -53,6 +53,7 @@
 //!     rssi_dbm: -40,
 //!     noise_floor_dbm: -90,
 //!     phy: PhyFlags(PhyFlags::HT),
+//!     first_word_invalid: false,
 //! };
 //!
 //! let bytes = encode_datagram(&frame);
@@ -75,9 +76,9 @@ mod tests;
 pub use c_header::generate_c_header;
 pub use constants::{
     Opcode, CONTROL_HEADER_LEN, CONTROL_MAGIC, CONTROL_PORT, CONTROL_VERSION, CSI_BODY_FIXED_LEN,
-    CSI_DATA_PORT, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_CONTROL_STRING,
-    MAX_DATAGRAM_LEN, MAX_SOURCE_MACS, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR,
-    WIRE_MINOR,
+    CSI_DATA_PORT, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE,
+    MAX_CONTROL_STRING, MAX_DATAGRAM_LEN, MAX_SOURCE_MACS, MAX_SUBCARRIERS,
+    SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
 };
 pub use control::{
     decode_control, encode_control, message_mac, result_message, Ack, AckStatus, ControlBody,

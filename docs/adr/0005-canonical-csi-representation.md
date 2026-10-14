@@ -1,7 +1,9 @@
 # ADR-0005: The canonical CSI sample is raw signed int8 I/Q
 
 - Date: 2026-10-14
-- Status: Accepted
+- Status: Accepted; superseded in part by
+  [ADR-0006](0006-csi-iq-byte-order.md) (the sample byte order only — see the
+  banner below; the raw signed int8 payload decision stands)
 - Supersedes: the payload decision of
   [`docs/adr/0004-on-air-csi-layout.md`](0004-on-air-csi-layout.md) (the `AQCI`
   magic and the header/body field set are retained)
@@ -9,6 +11,14 @@
   §5, §7, §9; `docs/spec/signal.md` §4.1; `docs/spec/interface-register.md`
 - Implemented by: `crates/aquila-types`, `crates/aquila-wire`,
   `crates/aquila-signal`, `crates/aquila-simulator`
+
+> **Superseded in part.** [ADR-0006](0006-csi-iq-byte-order.md) corrects the
+> **sample byte order** printed below: the canonical sample is
+> interleaved `Q, I` (**imaginary first**), `[Q0, I0, Q1, I1, …]`, as esp-csi
+> emits it — not the `[I0, Q0, …]` real-first order written here. Every other
+> decision below (raw signed int8, one node-side `memcpy`, derived
+> amplitude/phase, `IQ_COUNTS_PER_UNIT`) is retained; do not follow this ADR's
+> byte-order wording.
 
 ## Context
 

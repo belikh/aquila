@@ -39,15 +39,17 @@ fn envelope(node: u16, sequence: u64, arrival_ns: u64) -> CsiEnvelope {
                 .flat_map(|k| {
                     let a = 1.0 + (k as f32) * 0.01;
                     let ph = (k as f32 / 64.0) - 0.5;
+                    // Imaginary-first: Q then I per subcarrier.
                     [
-                        (a * ph.cos() * 64.0).round() as i8,
                         (a * ph.sin() * 64.0).round() as i8,
+                        (a * ph.cos() * 64.0).round() as i8,
                     ]
                 })
                 .collect(),
             rssi_dbm: -40,
             noise_floor_dbm: -90,
             phy: PhyFlags(PhyFlags::HT),
+            first_word_invalid: false,
         },
         host_rx_mono_ns: arrival_ns,
         host_rx_unix_ms: 0,

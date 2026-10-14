@@ -225,13 +225,19 @@ fn centre_freq_hz(band: Band, channel: u8) -> u32 {
 /// Decode the canonical contract frame into the conditioning representation.
 ///
 /// This is the one conversion from the on-air/on-disk `aquila_types::CsiFrame`
-/// (a raw signed int8 I/Q sample, interleaved `I, Q`, `data-contracts.md` §2 and
-/// ADR-0005) to a [`ComplexFrame`] (per-subcarrier [`Complex32`] bins). Each
-/// pair `[I, Q]` becomes one [`Complex32`], divided by
-/// [`aquila_types::IQ_COUNTS_PER_UNIT`] to recover the core's working unit; the
-/// conversion is exact and introduces no clamping or `NaN` (`signal.md` D3). The
-/// old on-node amplitude/phase derivation (`√(I²+Q²)`, `atan2(Q, I)`) now lives
-/// here, in the core.
+/// (a raw signed int8 I/Q sample, interleaved `Q, I` — **imaginary first** —
+/// `data-contracts.md` §2 and ADR-0005) to a [`ComplexFrame`] (per-subcarrier
+/// [`Complex32`] bins). The frame's derived accessors
+/// ([`aquila_types::CsiFrame::i_at`], [`aquila_types::CsiFrame::q_at`]) apply the
+/// imaginary-first order, so each complex sample becomes one [`Complex32`],
+/// divided by [`aquila_types::IQ_COUNTS_PER_UNIT`] to recover the core's working
+/// unit; the conversion is exact and introduces no clamping or `NaN`
+/// (`signal.md` D3). The old on-node amplitude/phase derivation (`√(I²+Q²)`,
+/// `atan2(Q, I)`) now lives here, in the core.
+///
+/// When the frame's `first_word_invalid` flag is set (the leading pair is
+/// unreliable), the first [`Complex32`] bin is zeroed and
+/// [`FrameFlags::first_word_zeroed`] is recorded, matching [`decode_record`].
 ///
 /// # Errors
 ///
@@ -263,13 +269,19 @@ pub fn decode_csi(frame: &ContractFrame) -> Result<ComplexFrame, DecodeError> {
         bandwidth,
         rssi_dbm: frame.rssi_dbm,
         noise_floor_dbm: frame.noise_floor_dbm,
-        first_word_invalid: false,
+        first_word_invalid: frame.first_word_invalid,
     };
-    let flags = FrameFlags {
+    let mut flags = FrameFlags {
         first_word_zeroed: false,
         rssi_anomaly: !(-100..=0).contains(&frame.rssi_dbm),
         noise_floor_anomaly: !(-120..=0).contains(&frame.noise_floor_dbm),
     };
+    if frame.first_word_invalid {
+        if let Some(first) = bins.first_mut() {
+            *first = Complex32::ZERO;
+        }
+        flags.first_word_zeroed = true;
+    }
 
     Ok(ComplexFrame { meta, bins, flags })
 }

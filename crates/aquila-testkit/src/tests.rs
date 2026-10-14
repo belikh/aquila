@@ -2064,8 +2064,9 @@ fn int8_iq_derivation_is_exercised_end_to_end() {
     assert_eq!(complex.bins.len(), decoded.n_subcarriers());
     let full_scale = aquila_types::IQ_COUNTS_PER_UNIT;
     for k in 0..decoded.n_subcarriers() {
-        let i = f32::from(decoded.i_q[2 * k]) / full_scale;
-        let q = f32::from(decoded.i_q[2 * k + 1]) / full_scale;
+        // Imaginary-first: the first byte of each pair is Q, the second is I.
+        let q = f32::from(decoded.i_q[2 * k]) / full_scale;
+        let i = f32::from(decoded.i_q[2 * k + 1]) / full_scale;
         assert!((complex.bins[k].re - i).abs() < 1e-6);
         assert!((complex.bins[k].im - q).abs() < 1e-6);
     }
@@ -2075,9 +2076,63 @@ fn int8_iq_derivation_is_exercised_end_to_end() {
     let amplitude = decoded.amplitude();
     let phase = decoded.phase();
     for k in 0..decoded.n_subcarriers() {
-        let i = f32::from(decoded.i_q[2 * k]) / full_scale;
-        let q = f32::from(decoded.i_q[2 * k + 1]) / full_scale;
+        let q = f32::from(decoded.i_q[2 * k]) / full_scale;
+        let i = f32::from(decoded.i_q[2 * k + 1]) / full_scale;
         assert!((amplitude[k] - (i * i + q * q).sqrt()).abs() < 1e-6);
         assert!((phase[k] - q.atan2(i)).abs() < 1e-6);
     }
+}
+
+/// The I/Q order is imaginary-first: a known complex sample survives the wire
+/// and decodes to a [`ComplexFrame`](aquila_signal::ComplexFrame) whose phase
+/// **sign** is the one the sample encodes.
+///
+/// The sample is I = +64, Q = −64 (phase −π/4). Stored imaginary-first it is the
+/// two bytes `[Q, I] = [−64, +64]`. If the codec or the decoder assumed
+/// real-first, the same bytes would decode as I = −64, Q = +64, a phase of
+/// +3π/4, so asserting the sign of the phase fails loudly on an order swap.
+#[test]
+fn phase_sign_is_imaginary_first_end_to_end() {
+    use aquila_types::{CsiFrame, PhyFlags};
+    use aquila_wire::{decode_datagram, encode_datagram};
+
+    let frame = CsiFrame {
+        node_id: NodeId(1),
+        boot_epoch: 3,
+        sequence: 0,
+        device_time_us: 0,
+        band: Band::B2G4,
+        channel: 6,
+        bandwidth_mhz: 20,
+        subcarrier_offset: 0,
+        // Imaginary-first interleaved sample: [Q0, I0].
+        i_q: vec![-64, 64],
+        rssi_dbm: -40,
+        noise_floor_dbm: -90,
+        phy: PhyFlags(PhyFlags::HT),
+        first_word_invalid: false,
+    };
+    frame.validate().expect("valid frame");
+
+    // The full round trip: raw sample → AQCI wire → contract frame → core bins.
+    let decoded = decode_datagram(&encode_datagram(&frame)).expect("wire round trip");
+    assert_eq!(decoded, frame, "the raw sample must survive the wire verbatim");
+
+    let complex = aquila_signal::decode_csi(&decoded).expect("decode_csi");
+    assert_eq!(complex.bins.len(), 1);
+    let full_scale = aquila_types::IQ_COUNTS_PER_UNIT;
+    assert!((complex.bins[0].re - 64.0 / full_scale).abs() < 1e-6);
+    assert!((complex.bins[0].im - (-64.0 / full_scale)).abs() < 1e-6);
+
+    let phase = decoded.phase();
+    assert!(
+        phase[0] < 0.0,
+        "imaginary-first I=+64, Q=−64 must have a negative phase, got {}",
+        phase[0]
+    );
+    assert!(
+        (phase[0] - (-core::f32::consts::FRAC_PI_4)).abs() < 1e-6,
+        "expected −π/4, got {}",
+        phase[0]
+    );
 }

@@ -125,7 +125,7 @@ impl ControlBody {
         match self {
             Self::JoinRequest(b) => {
                 w.bytes(&b.node.0);
-                w.u32(b.boot);
+                w.u16(b.boot);
                 w.u32(b.pairing_code);
                 w.string_u8(&b.fw_version)?;
             }
@@ -141,7 +141,7 @@ impl ControlBody {
             }
             Self::Status(b) => {
                 w.u64(b.uptime_ms);
-                w.u32(b.boot);
+                w.u16(b.boot);
                 w.u64(b.last_sequence);
                 w.u32(b.dropped);
                 w.u16(b.ring_depth);
@@ -195,7 +195,7 @@ impl ControlBody {
         let decoded = match opcode {
             Opcode::JoinRequest => Self::JoinRequest(JoinRequest {
                 node: MacAddr(r.array::<6>()?),
-                boot: r.u32()?,
+                boot: r.u16()?,
                 pairing_code: r.u32()?,
                 fw_version: r.string_u8()?,
             }),
@@ -211,7 +211,7 @@ impl ControlBody {
             }),
             Opcode::Status => Self::Status(Status {
                 uptime_ms: r.u64()?,
-                boot: r.u32()?,
+                boot: r.u16()?,
                 last_sequence: r.u64()?,
                 dropped: r.u32()?,
                 ring_depth: r.u16()?,
@@ -287,8 +287,8 @@ impl ControlBody {
 pub struct JoinRequest {
     /// The node's factory base MAC.
     pub node: MacAddr,
-    /// The node's boot epoch.
-    pub boot: u32,
+    /// The node's boot epoch (`u16`, matching the CSI contract frame).
+    pub boot: u16,
     /// The short-lived pairing code entered by the operator.
     pub pairing_code: u32,
     /// The node firmware version string.
@@ -322,8 +322,8 @@ pub struct Ack {
 pub struct Status {
     /// Node uptime in milliseconds.
     pub uptime_ms: u64,
-    /// The node's boot epoch.
-    pub boot: u32,
+    /// The node's boot epoch (`u16`, matching the CSI contract frame).
+    pub boot: u16,
     /// The last CSI `sequence` assigned.
     pub last_sequence: u64,
     /// Frames dropped because the ring was full.

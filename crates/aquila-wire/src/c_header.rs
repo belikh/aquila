@@ -17,8 +17,9 @@ use core::fmt::Write as _;
 
 use crate::constants::{
     control_offset, csi_body_offset, csi_offset, Opcode, CONTROL_MAGIC, CONTROL_PORT,
-    CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE,
-    MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
+    CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN, CSI_MAGIC,
+    CSI_MESSAGE_TYPE, MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR,
+    WIRE_MINOR,
 };
 
 /// Render the canonical layout as a C header (`node_wire.h`).
@@ -49,6 +50,10 @@ pub fn generate_c_header() -> String {
         s,
         "#define AQ_SUBCARRIER_FORMAT_INT8_IQ {SUBCARRIER_FORMAT_INT8_IQ}u"
     );
+    let _ = writeln!(
+        s,
+        "#define AQ_CSI_FLAG_FIRST_WORD_INVALID {CSI_FLAG_FIRST_WORD_INVALID}u"
+    );
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* Ports and size limits. */");
@@ -64,7 +69,7 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "/* Variable-length CSI payload. */");
     let _ = writeln!(
         s,
-        "/* Interleaved signed int8 I/Q, I then Q per subcarrier; 2 bytes per subcarrier. */"
+        "/* Interleaved signed int8 I/Q, Q then I (imaginary first) per subcarrier; 2 bytes per subcarrier. */"
     );
     let _ = writeln!(s, "#define AQ_CSI_PAYLOAD_BYTES_PER_SUBCARRIER 2u");
     let _ = writeln!(
@@ -112,7 +117,7 @@ pub fn generate_c_header() -> String {
         "AQ_CSI_OFF_BANDWIDTH_MHZ",
         csi_offset::BANDWIDTH_MHZ,
     );
-    emit_offset(&mut s, "AQ_CSI_OFF_RESERVED", csi_offset::RESERVED);
+    emit_offset(&mut s, "AQ_CSI_OFF_FLAGS", csi_offset::FLAGS);
     let _ = writeln!(s);
 
     let _ = writeln!(
@@ -193,7 +198,7 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "    uint8_t  band;");
     let _ = writeln!(s, "    uint8_t  channel;");
     let _ = writeln!(s, "    uint8_t  bandwidth_mhz;");
-    let _ = writeln!(s, "    uint8_t  reserved;");
+    let _ = writeln!(s, "    uint8_t  flags; /* bit0 = AQ_CSI_FLAG_FIRST_WORD_INVALID */");
     let _ = writeln!(s, "}} aq_csi_header_t;");
     let _ = writeln!(s);
     let _ = writeln!(s, "typedef struct {{");
