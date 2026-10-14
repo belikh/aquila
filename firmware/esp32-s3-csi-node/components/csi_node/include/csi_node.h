@@ -27,8 +27,9 @@ typedef struct {
     bool lltf_enable;
     bool ht_ltf_enable;
     bool stbc_ht_ltf_enable;
-    uint16_t csi_len_cap;  /* maximum CSI payload in bytes */
+    uint16_t csi_len_cap;  /* maximum raw int8 CSI bytes (2 per subcarrier) */
     uint32_t max_tx_rate_hz; /* transmit-rate cap; frames over it are dropped */
+    uint32_t heartbeat_ms; /* STATUS cadence in ms; SET_CONFIG may override */
 } csi_node_config_t;
 
 /* The v1 defaults for a freshly booted node. */

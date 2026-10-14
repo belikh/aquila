@@ -9,4 +9,7 @@ idf_component_register(
         nvs_flash
         freertos
         lwip
+    PRIV_REQUIRES
+        mbedtls   # HMAC-SHA256 control-message authentication (F21)
+        driver    # internal temperature sensor (F31) and IDENTIFY GPIO (F33)
 )

@@ -549,6 +549,68 @@ fn control_encode_limits_are_typed_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// Control-plane authentication (capture-and-firmware.md §6.3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn authenticated_control_round_trips_with_an_extra_trailer() {
+    let token = [0x5Au8; 32];
+    for message in control_fixtures() {
+        let plain = encode_control(&message).expect("plain encode");
+        let authed = encode_control_authenticated(&message, &token).expect("auth encode");
+        assert_eq!(authed.len(), plain.len() + CONTROL_AUTH_LEN);
+        assert_eq!(&authed[..plain.len()], plain.as_slice());
+        assert_eq!(
+            decode_control_authenticated(&authed, &token).expect("auth decode"),
+            message
+        );
+    }
+}
+
+#[test]
+fn authenticated_control_rejects_tampering_wrong_key_and_plain_frames() {
+    let token = [0x5Au8; 32];
+    let message = control_fixtures()[5].clone(); // SET_CONFIG
+    let authed = encode_control_authenticated(&message, &token).expect("encode");
+
+    // A plain (untagged) frame is not accepted as authenticated.
+    let plain = encode_control(&message).expect("plain");
+    assert_eq!(
+        decode_control_authenticated(&plain, &token),
+        Err(WireError::AuthenticationFailed)
+    );
+
+    // A tampered body changes the tag input.
+    let mut tampered = authed.clone();
+    tampered[CONTROL_HEADER_LEN + 4] ^= 0xFF;
+    assert_eq!(
+        decode_control_authenticated(&tampered, &token),
+        Err(WireError::AuthenticationFailed)
+    );
+
+    // A tampered trailer fails.
+    let mut bad_tag = authed.clone();
+    let last = bad_tag.len() - 1;
+    bad_tag[last] ^= 0x01;
+    assert_eq!(
+        decode_control_authenticated(&bad_tag, &token),
+        Err(WireError::AuthenticationFailed)
+    );
+
+    // A different token fails.
+    assert_eq!(
+        decode_control_authenticated(&authed, &[0x00u8; 32]),
+        Err(WireError::AuthenticationFailed)
+    );
+
+    // A buffer shorter than the trailer cannot be split.
+    assert!(matches!(
+        decode_control_authenticated(&authed[..CONTROL_AUTH_LEN - 1], &token),
+        Err(WireError::Truncated { .. })
+    ));
+}
+
+// ---------------------------------------------------------------------------
 // Identity mapping
 // ---------------------------------------------------------------------------
 
@@ -618,6 +680,7 @@ fn generated_c_header_pins_the_layout() {
         "#define AQ_CSI_BODY_OFF_IQ 28u",
         "#define AQ_SUBCARRIER_FORMAT_INT8_IQ 1u",
         "#define AQ_OP_SYNC_ECHO 0x09u",
+        "#define AQ_CONTROL_AUTH_LEN 32u",
         "#define AQ_CSI_DATA_PORT 9100u",
         "_Static_assert(sizeof(aq_csi_header_t) == AQ_CSI_HEADER_LEN",
         "#define AQ_CSI_FRAME_SIZE(n_subcarriers)",

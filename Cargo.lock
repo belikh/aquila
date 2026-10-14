@@ -203,6 +203,7 @@ version = "0.0.0"
 dependencies = [
  "aquila-types",
  "proptest",
+ "sha2",
  "thiserror",
 ]
 

@@ -1,7 +1,15 @@
 /*
  * node_control.c — the AQCC control-channel server (docs/spec/capture-and-
- * firmware.md §6). Reference implementation; NOT compiled, flashed or tested in
- * this repository.
+ * firmware.md §6). Compile-verified with ESP-IDF v5.5.2 (`nix develop .#esp`);
+ * not flashed or run on hardware.
+ *
+ * Security (F21): after pairing, every inbound control command must carry the
+ * 32-byte HMAC-SHA256 trailer defined in `capture-and-firmware.md` §6.1, keyed
+ * by the pairing token issued in `JOIN_ACK`. The datagram source must also be
+ * the pinned core endpoint, and a recent `request_id` is rejected as a replay
+ * (§6.1). `JOIN_ACK` is the one message accepted before pairing, because it is
+ * what delivers the token. Until the core sends tagged commands, the node fails
+ * closed: it refuses everything but pairing.
  */
 
 #include "node_control.h"
@@ -10,6 +18,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "driver/gpio.h"
+#include "driver/temperature_sensor.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -18,6 +28,7 @@
 #include "freertos/task.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
+#include "mbedtls/md.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -32,6 +43,7 @@ static const char *TAG = "node_control";
 #define JOIN_RETRY_MS 3000
 #define NVS_NAMESPACE "aquila"
 #define IDENTIFY_GPIO (-1) /* set to a valid GPIO to enable LED blink */
+#define REPLAY_WINDOW 16u  /* recent request_ids kept to reject retransmits */
 
 static node_control_config_t s_config;
 static int s_sock = -1;
@@ -42,11 +54,79 @@ static atomic_uint s_config_version;
 static uint32_t s_heartbeat_ms;
 static uint8_t s_token[32];
 
-static atomic_uint s_last_rtt_us;
+/* The node's own SYNC_PING echo turnaround (t3 - t2), microseconds. The core
+ * computes the true RTT; the node can only report its own turnaround (F32). */
+static atomic_uint s_echo_turnaround_us;
+
+/* The internal temperature sensor; NULL when it could not be installed. */
+static temperature_sensor_handle_t s_temperature_sensor;
+
+/* A bounded ring of recently seen request_ids, for retransmit deduplication
+ * (`capture-and-firmware.md` §6.1, F8). */
+static uint32_t s_seen_ids[REPLAY_WINDOW];
+static size_t s_seen_count;
+static size_t s_seen_next;
 
 uint32_t node_control_config_version(void)
 {
     return atomic_load(&s_config_version);
+}
+
+/* ------------------------------------------------------------------ */
+/* Authentication (F21)                                                */
+/* ------------------------------------------------------------------ */
+
+/* Constant-time byte comparison, so the tag check leaks no position. */
+static bool constant_time_eq(const uint8_t *a, const uint8_t *b, size_t len)
+{
+    uint8_t difference = 0u;
+    for (size_t i = 0; i < len; ++i) {
+        difference |= (uint8_t)(a[i] ^ b[i]);
+    }
+    return difference == 0u;
+}
+
+/*
+ * Verify the 32-byte HMAC-SHA256 trailer over `frame_len` bytes of `frame`,
+ * keyed by the stored pairing token. mbedtls is the ESP-IDF crypto backend.
+ * Returns true only on an exact match.
+ */
+static bool verify_control_tag(const uint8_t *frame, size_t frame_len,
+                               const uint8_t *tag)
+{
+    const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if (md == NULL) {
+        return false;
+    }
+    uint8_t computed[32];
+    if (mbedtls_md_hmac(md, s_token, sizeof(s_token), frame, frame_len,
+                        computed) != 0) {
+        return false;
+    }
+    return constant_time_eq(computed, tag, sizeof(computed));
+}
+
+/* True when the datagram source is the pinned core endpoint. */
+static bool from_core(const struct sockaddr_in *from)
+{
+    return from->sin_addr.s_addr == s_core.sin_addr.s_addr &&
+           from->sin_port == s_core.sin_port;
+}
+
+/* True when `request_id` was seen in the replay window; records it otherwise. */
+static bool request_is_duplicate(uint32_t request_id)
+{
+    for (size_t i = 0; i < s_seen_count; ++i) {
+        if (s_seen_ids[i] == request_id) {
+            return true;
+        }
+    }
+    s_seen_ids[s_seen_next] = request_id;
+    s_seen_next = (s_seen_next + 1u) % REPLAY_WINDOW;
+    if (s_seen_count < REPLAY_WINDOW) {
+        ++s_seen_count;
+    }
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -74,20 +154,47 @@ static void load_state(void)
     uint32_t heartbeat = 0;
     if (nvs_get_u32(handle, "heartbeat_ms", &heartbeat) == ESP_OK && heartbeat > 0) {
         s_heartbeat_ms = heartbeat;
+        s_config.csi.heartbeat_ms = heartbeat;
+    }
+    /* The persisted CSI config (capture-and-firmware.md §9.3, F9). */
+    uint8_t channel = 0;
+    if (nvs_get_u8(handle, "csi_channel", &channel) == ESP_OK && channel != 0u) {
+        s_config.csi.channel = channel;
+    }
+    uint8_t bandwidth = 0;
+    if (nvs_get_u8(handle, "csi_bandwidth", &bandwidth) == ESP_OK && bandwidth != 0u) {
+        s_config.csi.bandwidth_mhz = bandwidth;
+    }
+    uint8_t secondary = 0;
+    if (nvs_get_u8(handle, "csi_secondary", &secondary) == ESP_OK) {
+        s_config.csi.secondary = secondary;
+    }
+    uint16_t cap = 0;
+    if (nvs_get_u16(handle, "csi_len_cap", &cap) == ESP_OK && cap != 0u) {
+        s_config.csi.csi_len_cap = cap;
+    }
+    uint32_t rate = 0;
+    if (nvs_get_u32(handle, "max_tx_rate_hz", &rate) == ESP_OK && rate > 0u) {
+        s_config.csi.max_tx_rate_hz = rate;
     }
     nvs_close(handle);
 }
 
-static void save_paired(bool paired)
+static void save_state(void)
 {
     nvs_handle_t handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
         return;
     }
-    nvs_set_u8(handle, "paired", paired ? 1u : 0u);
+    nvs_set_u8(handle, "paired", atomic_load(&s_paired) ? 1u : 0u);
     nvs_set_blob(handle, "token", s_token, sizeof(s_token));
     nvs_set_u32(handle, "config_version", atomic_load(&s_config_version));
     nvs_set_u32(handle, "heartbeat_ms", s_heartbeat_ms);
+    nvs_set_u8(handle, "csi_channel", s_config.csi.channel);
+    nvs_set_u8(handle, "csi_bandwidth", s_config.csi.bandwidth_mhz);
+    nvs_set_u8(handle, "csi_secondary", s_config.csi.secondary);
+    nvs_set_u16(handle, "csi_len_cap", s_config.csi.csi_len_cap);
+    nvs_set_u32(handle, "max_tx_rate_hz", s_config.csi.max_tx_rate_hz);
     nvs_commit(handle);
     nvs_close(handle);
 }
@@ -156,6 +263,23 @@ static void send_join_request(void)
     send_message(AQ_OP_JOIN_REQUEST, 0u, body, (uint16_t)offset);
 }
 
+/* Read the internal temperature sensor, scaled by 100. Returns 0 when the
+ * sensor is unavailable; `*valid` reports which (F31). */
+static int16_t read_temperature_c_x100(bool *valid)
+{
+    if (s_temperature_sensor == NULL) {
+        *valid = false;
+        return 0;
+    }
+    float celsius = 0.0f;
+    if (temperature_sensor_get_celsius(s_temperature_sensor, &celsius) != ESP_OK) {
+        *valid = false;
+        return 0;
+    }
+    *valid = true;
+    return (int16_t)(celsius * 100.0f);
+}
+
 static void send_status(uint32_t request_id)
 {
     uint8_t body[8 + 2 + 8 + 4 + 2 + 2 + 4 + 4];
@@ -170,11 +294,16 @@ static void send_status(uint32_t request_id)
     offset += 4;
     aq_put_u16_le(&body[offset], csi_node_ring_depth());
     offset += 2;
-    aq_put_i16_le(&body[offset], 0); /* temperature, unimplemented here */
+    bool temperature_valid = false;
+    int16_t temperature = read_temperature_c_x100(&temperature_valid);
+    (void)temperature_valid; /* 0 already means "unavailable" on the wire */
+    aq_put_i16_le(&body[offset], temperature);
     offset += 2;
     aq_put_u32_le(&body[offset], atomic_load(&s_config_version));
     offset += 4;
-    aq_put_u32_le(&body[offset], atomic_load(&s_last_rtt_us));
+    /* Field named `last_rtt_us` in the contract; the node reports its own
+     * echo turnaround (t3 - t2). Only the core can measure the true RTT. */
+    aq_put_u32_le(&body[offset], atomic_load(&s_echo_turnaround_us));
     offset += 4;
     send_message(AQ_OP_STATUS, request_id, body, (uint16_t)offset);
 }
@@ -193,7 +322,7 @@ static void handle_join_ack(const uint8_t *body, uint16_t body_len)
     uint32_t version = aq_get_u32_le(&body[38]);
     atomic_store(&s_config_version, version);
     atomic_store(&s_paired, true);
-    save_paired(true);
+    save_state();
     ESP_LOGI(TAG, "paired; config version %u", (unsigned)version);
 }
 
@@ -202,7 +331,7 @@ static void handle_set_config(uint32_t request_id, const uint8_t *body,
 {
     /* version u32 | hash[32] | channel bw secondary csi lltf ht stbc |
        csi_len_cap u16 | max_tx_rate u32 | heartbeat u32 | count u8 | macs */
-    if (body_len < 55u) {
+    if (body_len < 54u) {
         send_result(request_id, 1u, "short SET_CONFIG body");
         return;
     }
@@ -211,6 +340,11 @@ static void handle_set_config(uint32_t request_id, const uint8_t *body,
         send_result(request_id, 1u, "stale config version");
         return;
     }
+    /*
+     * `config_hash` (body[4..36]) is carried but not yet verified: v1 defines no
+     * canonical config-hash algorithm on the core side, so the node cannot
+     * recompute it (F7). It is reserved until that algorithm is pinned.
+     */
     csi_node_config_t cfg = s_config.csi;
     cfg.channel = body[36];
     cfg.bandwidth_mhz = body[37];
@@ -222,47 +356,48 @@ static void handle_set_config(uint32_t request_id, const uint8_t *body,
     cfg.csi_len_cap = aq_get_u16_le(&body[43]);
     cfg.max_tx_rate_hz = aq_get_u32_le(&body[45]);
     uint32_t heartbeat_ms = aq_get_u32_le(&body[49]);
+    if (heartbeat_ms > 0u) {
+        cfg.heartbeat_ms = heartbeat_ms;
+    }
 
     csi_node_apply_config(&cfg);
     s_config.csi = cfg;
-    if (heartbeat_ms > 0u) {
-        s_heartbeat_ms = heartbeat_ms;
-    }
+    s_heartbeat_ms = cfg.heartbeat_ms > 0u ? cfg.heartbeat_ms : 5000u;
     atomic_store(&s_config_version, version);
-    save_paired(atomic_load(&s_paired));
+    save_state();
     send_result(request_id, 0u, "config applied");
 }
 
+/*
+ * `handle_message` runs only for a datagram that has already passed the
+ * authenticated-path checks in `control_task`: magic, version, framing, the
+ * pinned source, the HMAC trailer (once paired) and the replay window.
+ */
 static void handle_message(const uint8_t *datagram, int length)
 {
-    if (length < AQ_CONTROL_HEADER_LEN) {
-        return;
-    }
-    if (datagram[AQ_CONTROL_OFF_MAGIC + 0] != AQ_CONTROL_MAGIC_0 ||
-        datagram[AQ_CONTROL_OFF_MAGIC + 1] != AQ_CONTROL_MAGIC_1 ||
-        datagram[AQ_CONTROL_OFF_MAGIC + 2] != AQ_CONTROL_MAGIC_2 ||
-        datagram[AQ_CONTROL_OFF_MAGIC + 3] != AQ_CONTROL_MAGIC_3) {
-        return;
-    }
-    if (datagram[AQ_CONTROL_OFF_VERSION] != AQ_WIRE_MAJOR) {
-        return;
-    }
     uint8_t opcode = datagram[AQ_CONTROL_OFF_OPCODE];
     uint16_t body_len = aq_get_u16_le(&datagram[AQ_CONTROL_OFF_BODY_LEN]);
     uint32_t request_id = aq_get_u32_le(&datagram[AQ_CONTROL_OFF_REQUEST_ID]);
     const uint8_t *body = datagram + AQ_CONTROL_OFF_BODY;
-    if ((size_t)length < AQ_CONTROL_HEADER_LEN + (size_t)body_len) {
-        return;
-    }
+    (void)length;
 
     switch (opcode) {
     case AQ_OP_JOIN_ACK:
         handle_join_ack(body, body_len);
         break;
     case AQ_OP_GET_CONFIG: {
-        char detail[32];
-        snprintf(detail, sizeof(detail), "config_version=%u",
-                 (unsigned)atomic_load(&s_config_version));
+        csi_node_config_t cfg = s_config.csi;
+        char detail[192];
+        snprintf(detail, sizeof(detail),
+                 "config_version=%u channel=%u bandwidth_mhz=%u secondary=%u "
+                 "csi=%u lltf=%u ht_ltf=%u stbc=%u csi_len_cap=%u "
+                 "max_tx_rate_hz=%u heartbeat_ms=%u",
+                 (unsigned)atomic_load(&s_config_version), (unsigned)cfg.channel,
+                 (unsigned)cfg.bandwidth_mhz, (unsigned)cfg.secondary,
+                 cfg.csi_enable ? 1u : 0u, cfg.lltf_enable ? 1u : 0u,
+                 cfg.ht_ltf_enable ? 1u : 0u, cfg.stbc_ht_ltf_enable ? 1u : 0u,
+                 (unsigned)cfg.csi_len_cap, (unsigned)cfg.max_tx_rate_hz,
+                 (unsigned)cfg.heartbeat_ms);
         send_result(request_id, 0u, detail);
         break;
     }
@@ -286,7 +421,9 @@ static void handle_message(const uint8_t *datagram, int length)
         uint8_t echo[24];
         aq_put_u64_le(&echo[0], t1);
         aq_put_u64_le(&echo[8], t2);
-        aq_put_u64_le(&echo[16], (uint64_t)esp_timer_get_time());
+        uint64_t t3 = (uint64_t)esp_timer_get_time();
+        aq_put_u64_le(&echo[16], t3);
+        atomic_store(&s_echo_turnaround_us, (uint32_t)(t3 - t2));
         send_message(AQ_OP_SYNC_ECHO, request_id, echo, sizeof(echo));
         break;
     }
@@ -296,6 +433,15 @@ static void handle_message(const uint8_t *datagram, int length)
         esp_restart();
         break;
     case AQ_OP_IDENTIFY:
+#if IDENTIFY_GPIO >= 0
+        gpio_set_direction(IDENTIFY_GPIO, GPIO_MODE_OUTPUT);
+        for (int i = 0; i < 3; ++i) {
+            gpio_set_level(IDENTIFY_GPIO, 1);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            gpio_set_level(IDENTIFY_GPIO, 0);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+#endif
         send_result(request_id, 0u, "identified");
         break;
     case AQ_OP_FACTORY_RESET:
@@ -307,6 +453,65 @@ static void handle_message(const uint8_t *datagram, int length)
     default:
         break;
     }
+}
+
+/*
+ * Validate one received datagram and, if it is admissible, dispatch it.
+ *
+ * Admissible means: the fixed framing is well formed; either it is a `JOIN_ACK`
+ * delivered before pairing, or the node is paired, the source is the pinned
+ * core endpoint, the frame carries a valid HMAC trailer, and the `request_id`
+ * is not a replay. Anything else is dropped without a reply.
+ */
+static void receive_message(const uint8_t *datagram, int length,
+                            const struct sockaddr_in *from)
+{
+    if (length < AQ_CONTROL_HEADER_LEN) {
+        return;
+    }
+    if (datagram[AQ_CONTROL_OFF_MAGIC + 0] != AQ_CONTROL_MAGIC_0 ||
+        datagram[AQ_CONTROL_OFF_MAGIC + 1] != AQ_CONTROL_MAGIC_1 ||
+        datagram[AQ_CONTROL_OFF_MAGIC + 2] != AQ_CONTROL_MAGIC_2 ||
+        datagram[AQ_CONTROL_OFF_MAGIC + 3] != AQ_CONTROL_MAGIC_3) {
+        return;
+    }
+    if (datagram[AQ_CONTROL_OFF_VERSION] != AQ_WIRE_MAJOR) {
+        return;
+    }
+    uint8_t opcode = datagram[AQ_CONTROL_OFF_OPCODE];
+    uint16_t body_len = aq_get_u16_le(&datagram[AQ_CONTROL_OFF_BODY_LEN]);
+    size_t frame_len = (size_t)AQ_CONTROL_HEADER_LEN + (size_t)body_len;
+    if ((size_t)length < frame_len) {
+        return;
+    }
+
+    if (opcode == AQ_OP_JOIN_ACK) {
+        /* Pairing is the bootstrap: the token is delivered here, so this one
+         * message is accepted before the node is paired. */
+        if (!atomic_load(&s_paired) && from_core(from)) {
+            handle_message(datagram, length);
+        }
+        return;
+    }
+
+    if (!atomic_load(&s_paired) || !from_core(from)) {
+        return;
+    }
+    if ((size_t)length != frame_len + (size_t)AQ_CONTROL_AUTH_LEN) {
+        return;
+    }
+    if (!verify_control_tag(datagram, frame_len,
+                            datagram + frame_len)) {
+        ESP_LOGW(TAG, "dropped control opcode %u with a bad tag",
+                 (unsigned)opcode);
+        return;
+    }
+    uint32_t request_id = aq_get_u32_le(&datagram[AQ_CONTROL_OFF_REQUEST_ID]);
+    if (request_is_duplicate(request_id)) {
+        ESP_LOGD(TAG, "dropped duplicate control request %u", (unsigned)request_id);
+        return;
+    }
+    handle_message(datagram, length);
 }
 
 static void control_task(void *arg)
@@ -322,7 +527,7 @@ static void control_task(void *arg)
         int length = recvfrom(s_sock, datagram, sizeof(datagram), 0,
                               (struct sockaddr *)&from, &from_len);
         if (length > 0) {
-            handle_message(datagram, length);
+            receive_message(datagram, length, &from);
         }
 
         int64_t now_us = esp_timer_get_time();
@@ -348,7 +553,9 @@ int node_control_start(const node_control_config_t *config)
     s_heartbeat_ms = config->csi.heartbeat_ms > 0u ? config->csi.heartbeat_ms : 5000u;
     atomic_init(&s_paired, false);
     atomic_init(&s_config_version, 0);
-    atomic_init(&s_last_rtt_us, 0u);
+    atomic_init(&s_echo_turnaround_us, 0u);
+    s_seen_count = 0;
+    s_seen_next = 0;
     load_state();
 
     esp_wifi_get_mac(WIFI_IF_STA, s_mac);
@@ -359,6 +566,21 @@ int node_control_start(const node_control_config_t *config)
     if (inet_pton(AF_INET, config->core_host, &s_core.sin_addr) != 1) {
         ESP_LOGE(TAG, "core host %s is not an IPv4 literal", config->core_host);
         return -1;
+    }
+
+    /* The internal temperature sensor is best-effort: if it cannot be
+     * installed the STATUS field reads 0, logged once (F31). */
+    temperature_sensor_config_t temperature_config =
+        TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    if (temperature_sensor_install(&temperature_config, &s_temperature_sensor) ==
+        ESP_OK) {
+        if (temperature_sensor_enable(s_temperature_sensor) != ESP_OK) {
+            ESP_LOGW(TAG, "temperature sensor could not be enabled");
+            s_temperature_sensor = NULL;
+        }
+    } else {
+        ESP_LOGW(TAG, "temperature sensor unavailable; STATUS reports 0");
+        s_temperature_sensor = NULL;
     }
 
     s_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);

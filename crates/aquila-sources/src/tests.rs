@@ -267,6 +267,36 @@ fn control_round_trips_over_loopback() {
 }
 
 #[test]
+fn authenticated_control_carries_a_verifiable_trailer() {
+    use aquila_wire::{decode_control_authenticated, SetCsi, CONTROL_AUTH_LEN};
+
+    let token = [0x5Au8; 32];
+    let core = NodeControl::bind_any().unwrap().with_token(token);
+    let node = UdpSocket::bind("127.0.0.1:0").unwrap();
+    node.set_read_timeout(None).unwrap();
+
+    let message = ControlMessage {
+        request_id: 0x1234,
+        body: ControlBody::SetCsi(SetCsi { enable: true }),
+    };
+    core.send(node.local_addr().unwrap(), &message).unwrap();
+
+    let mut buffer = vec![0u8; 512];
+    let (len, _) = node.recv_from(&mut buffer).unwrap();
+    assert_eq!(
+        len,
+        encode_control(&message).unwrap().len() + CONTROL_AUTH_LEN,
+        "an authenticated message carries the trailer"
+    );
+    assert_eq!(
+        decode_control_authenticated(&buffer[..len], &token).unwrap(),
+        message
+    );
+    // A different token cannot verify it, so the node would reject it.
+    assert!(decode_control_authenticated(&buffer[..len], &[0u8; 32]).is_err());
+}
+
+#[test]
 fn control_request_skips_unrelated_replies_and_matches_the_id() {
     let mut core = NodeControl::bind_any().unwrap();
     let core_addr = core.local_addr().unwrap();

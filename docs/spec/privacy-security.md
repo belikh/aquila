@@ -56,7 +56,7 @@ is asserted.
 | G4 | Management HTTP+WS is loopback/ingress only, never `0.0.0.0`, never host-published. |
 | G5 | Management requires a valid HA ingress session; no separate login. |
 | G6 | Only enrolled nodes enter the pipeline; everything else is dropped. |
-| G7 | Ingest and control are authenticated per node and replay-resistant. |
+| G7 | Control commands are authenticated per node and replay-resistant; CSI ingest authentication is deferred in v1 (see §5). |
 | G8 | No public API, SDK, or MCP surface exists in v1. |
 | G9 | No imposed retention: Aquila never deletes or expires user data on its own. |
 | G10 | Export and erasure are explicit, local, user-initiated operations. |
@@ -110,13 +110,14 @@ messages only, never CSI payloads.
 
 **Test.** (a) DAG test asserts no network-egress `Sink` exists. (b) Run a full
 capture replay and assert the set of transmitted payloads observed on the wire
-contains no CSI frame bytes (control + ingest ACKs only). (c) The CSI payload
-framing is AEAD-sealed with the per-node key (see G7), so another LAN device
-sharing the WLAN cannot recover subcarriers from captured traffic.
+contains no CSI frame bytes (control + ingest ACKs only).
 
-Note: On-the-air exposure depends on the WLAN's link-layer encryption. Aquila
-recommends WPA3 and a dedicated node SSID/VLAN; the AEAD sealing in G7 is what
-makes confidentiality hold even on a shared PSK.
+**v1 limitation (honest).** The CSI payload is **not** AEAD-sealed in v1; it
+travels as plaintext in the `AQCI` UDP datagram. On-the-air confidentiality
+therefore depends entirely on the WLAN's link-layer encryption. On a WPA2/WPA3
+personal network this still keeps subcarriers out of reach of an off-network
+observer, but a device sharing the same PSK (or an open network) could recover
+them. Per-node sealing is deferred; see G7 and §5.
 
 ### G4 — Management HTTP+WS is loopback/ingress only
 
@@ -149,34 +150,51 @@ refused. (c) Assert the add-on ships no password/user database. Deterministic.
 ### G6 — Only enrolled nodes enter the pipeline
 
 **Statement.** A node must be enrolled before any of its packets are processed.
-Unenrolled, unknown, or spoofed sources are dropped before parsing and counted;
-they cannot influence sensing, calibration, or measurement.
+Unenrolled or unknown sources are dropped before parsing and counted; they cannot
+influence sensing, calibration, or measurement. **v1 limitation:** because ingest
+is not authenticated (G7), a source that spoofs an *enrolled* node's address is
+not distinguishable from that node in v1; spoofed-source detection on the data
+plane is deferred with ingest authentication.
 
 **Enforcement.** Enrolment is an out-of-band pairing step (user-triggered in the
-dashboard; node presents a one-time secret). The core maintains a per-node key
-set; the ingest path is allowlist-first, default-deny.
+dashboard; node presents a one-time secret). The core maintains the per-node
+pairing token (used to authenticate **control** commands) and an enrolled-node
+**address** allowlist; the ingest path is allowlist-first, default-deny.
 
 **Test.** Send CSI-shaped UDP from an unenrolled source → zero frames enter the
 pipeline, the drop counter increments, and the sensing output is unchanged. Then
 enrol and assert frames are accepted. Deterministic.
 
-### G7 — Authenticated, replay-resistant ingest and control
+### G7 — Authenticated, replay-resistant control; ingest authentication deferred
 
-**Statement.** Every ingested CSI packet and every control command is
-authenticated with the per-node key, and the node's identity is taken from the
-cryptographic key, never from attacker-controllable packet fields. Replayed
-packets and replayed commands are rejected.
+**Statement (v1, honest).** Control commands from the core to a node are
+authenticated per node and replay-resistant. CSI **ingest** is **not**
+authenticated in v1: the ingest path trusts the source address of an enrolled
+node, which an on-LAN attacker can spoof, and no packet-level MAC or seal is
+present. This is a stated v1 limitation, not an enforced guarantee.
 
-**Enforcement.** AEAD (sealed CSI payload) plus a monotonic per-node sequence
-number and software-clock timestamps; the node control channel is mutually
-authenticated with the same per-node identity (pinned, no broadcast). Malformed or
-oversized frames are rejected by a bounded, total parser.
+**Enforcement (control).** A paired node authenticates every inbound command
+with a 32-byte HMAC-SHA256 trailer keyed by the pairing token issued in
+`JOIN_ACK` (`capture-and-firmware.md` §6.1, §6.3), pins the core's address, and
+rejects a `request_id` seen in a bounded replay window. The trailer is verified
+in constant time; a message with no tag, the wrong tag length, or a wrong tag is
+rejected before any handler runs. The node **fails closed** until the core's
+sender attaches the trailer, so v1 authenticates the core → node direction only;
+node → core replies and `STATUS` are not yet authenticated, and "mutually
+authenticated" is a target, not a v1 property.
 
-**Test.** (a) Tamper a packet → rejected, no pipeline entry. (b) Replay a valid
-packet → rejected by sequence/clock check. (c) Forged source address with a valid
-enrolled key for a different node → identity resolves to the key's node. (d)
-Fuzz the frame parser with malformed/oversized input under a memory-safety harness
-(Rust) → no panic, no unsafe behaviour. Deterministic.
+**Enforcement (ingest, deferred).** v1 relies on the **G6** enrolment allowlist
+and network placement: raw CSI is confined to the LAN (G3 niche below), a
+recommended dedicated node SSID/VLAN limits who can inject, and frames are
+parsed by a bounded, total parser. There is no per-node seal, key-derived
+identity, or authenticated sequence number on the data plane in v1.
+
+**Test.** (a) A control command with a tampered body or tag → rejected, no state
+change. (b) A control command with a stale `request_id` → rejected as a replay.
+(c) Fuzz the control and ingest parsers with malformed/oversized input under a
+memory-safety harness (Rust) → no panic, no unsafe behaviour. Ingest
+authentication has no v1 test because there is no v1 mechanism; the deferred
+mechanism must land with its own negative tests (§5). Deterministic.
 
 ### G8 — No public API, SDK, or MCP surface
 
@@ -224,6 +242,10 @@ minimum required for node ingest/control.
 
 **Enforcement.** Add-on manifest declares no extra capabilities, no privileged
 mode, no Docker socket; the data directory is the only writable path.
+**v1 limitation:** the read-only root filesystem and dropped-capability runtime
+flags are set by the image/packaging (ticket #11, `aquila_core/Dockerfile`),
+which is not built in this repository; the shipped `config.yaml` requests no
+extras, but the runtime hardening is unverified until that build exists (F25).
 
 **Test.** Inspect the add-on manifest and the running container: assert the
 capability set is empty (or exactly the documented minimum), the user is non-root,
@@ -240,6 +262,10 @@ validation.
 **Enforcement.** Served from the same ingress origin with a CSP such as
 `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self';
 connect-src 'self'; img-src 'self' data:; frame-ancestors <HA>`; no external CDNs.
+**v1 limitation:** the dashboard crate is a host-buildable stub and the add-on
+does not yet serve it (ticket #10), so no CSP header is emitted in v1 and this
+guarantee is not yet exercised; the CSP header lands with the dashboard server
+(F25). The JSON API serves no HTML, so there is nothing to sandbox yet.
 
 **Test.** (a) Assert the served CSP header matches the policy and contains no
 `unsafe-inline` or remote origins. (b) Assert the built WASM imports no
@@ -341,21 +367,25 @@ Everything else is in-process or on-disk on the host.
 Threats: spoofed CSI injection to poison fusion or calibration; replay; flood /
 resource exhaustion; malformed-packet parser bugs.
 
-Mitigations: **G6** enrolment allowlist (default-deny) and **G7** per-node AEAD,
-sequence numbers, clock checks, key-derived identity, a bounded total parser, Rust
-memory safety, rate limits, and bounded buffers; unenrolled packets are counted,
-not parsed. A rogue node can at worst pollute its own contribution — mitigated by
-per-node attribution in fusion and by the measurement ledger flagging anomalies.
+Mitigations: **G6** enrolment allowlist (default-deny) — frames from a source
+that is not an enrolled node's address are dropped and counted, not parsed —
+plus a bounded total parser, Rust memory safety, rate limits, and bounded
+buffers. **v1 limitation:** ingest is not authenticated, so an on-LAN attacker
+that spoofs an enrolled node's address can inject CSI-shaped datagrams; a
+sequence number is present but unauthenticated. A rogue node can at worst
+pollute its own contribution — mitigated by per-node attribution in fusion and
+by the measurement ledger flagging anomalies.
 
 ### 3.4 Node control (core → node, LAN)
 
 Threats: command injection; rogue core; downgrade or MITM on the LAN.
 
-Mitigations: mutually authenticated, pinned per-node channel (**G7**); no
-broadcast; the command set is allowlisted and minimal; nodes reject
-unauthenticated or unsigned control. A rogue core is out of scope beyond the LAN
-confidentiality boundary, because control confers no access to management or to
-other nodes' keys.
+Mitigations: a pinned per-node channel whose commands are authenticated with the
+pairing token (**G7**); no broadcast; the command set is allowlisted and
+minimal; nodes reject unauthenticated control and fail closed. v1 authenticates
+core → node only (node → core replies are not yet authenticated). A rogue core is
+out of scope beyond the LAN confidentiality boundary, because control confers no
+access to management or to other nodes' keys.
 
 ### 3.5 Management (HTTP+WS via ingress)
 
@@ -434,10 +464,16 @@ must say so.
 
 - **Compromised host** is out of scope for v1: if the host is owned, all bets are
   off. G11 limits blast radius; it does not defend an already-root host.
-- **Shared WLAN.** If AEAD sealing of CSI payloads is deferred past v1, raw CSI
-  confidentiality falls back to the WLAN's link-layer encryption; on a shared PSK,
-  another LAN device could observe subcarriers. This is a v1 design dependency to
-  resolve, and must be stated honestly until it is.
+- **Unsealed CSI ingest (v1).** Per-node AEAD sealing of CSI payloads is
+  **deferred past v1**: the data plane is plaintext `AQCI` over UDP and its
+  sequence number is unauthenticated. Confidentiality therefore rests on the
+  WLAN's link-layer encryption; on a shared PSK, an open network, or to an
+  on-LAN attacker that spoofs an enrolled node's address, subcarriers are
+  exposed and injectable. This is the single largest v1 residual risk and is
+  stated in G7 and §3.3 rather than hidden behind an AEAD claim.
+- **Unidirectional control authentication (v1).** Control commands are
+  authenticated core → node; node → core replies and `STATUS` are not yet
+  authenticated, so mutual authentication remains a follow-up.
 - **Node hardware.** The ESP32-S3 reference device may not enable secure boot and
   flash encryption in v1; a physical attacker could then extract a node key and
   impersonate one node. Blast radius is one node's contribution; keys are

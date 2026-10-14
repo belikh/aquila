@@ -10,8 +10,8 @@
  * (§9.1.3). The payload is the raw signed int8 I/Q buffer, copied verbatim
  * (ADR-0005); the node performs no amplitude/phase conversion.
  *
- * This file is a reference implementation. It is NOT compiled, flashed or
- * tested in this repository (see the firmware README).
+ * Compile-verified with ESP-IDF v5.5.2 (`nix develop .#esp`); not flashed or
+ * run on hardware (see the firmware README).
  */
 
 #include "csi_node.h"
@@ -45,8 +45,6 @@ typedef struct {
     uint64_t device_ts_us;
     uint8_t band;
     uint8_t channel;
-    uint8_t bandwidth_mhz;
-    uint8_t secondary;
     int8_t rssi;
     int8_t noise_floor;
     uint16_t phy_flags;
@@ -135,8 +133,6 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     slot->device_ts_us = (uint64_t)esp_timer_get_time();
     slot->band = band_from_channel(info->rx_ctrl.channel);
     slot->channel = info->rx_ctrl.channel;
-    slot->bandwidth_mhz = 20u; /* refined from config below at send time */
-    slot->secondary = info->rx_ctrl.secondary_channel;
     slot->rssi = info->rx_ctrl.rssi;
     slot->noise_floor = info->rx_ctrl.noise_floor;
     slot->phy_flags = phy_flags_from_rx(&info->rx_ctrl);
@@ -163,7 +159,7 @@ static void apply_esp_csi(const csi_node_config_t *cfg)
     wifi_csi_config_t csi_config = {
         .lltf_en = cfg->lltf_enable,
         .htltf_en = cfg->ht_ltf_enable,
-        .stbc_htltf_en = cfg->stbc_ht_ltf_enable,
+        .stbc_htltf2_en = cfg->stbc_ht_ltf_enable,
         .ltf_merge_en = true,
         .channel_filter_en = false,
         .manu_scale = false,
@@ -250,8 +246,9 @@ csi_node_config_t csi_node_default_config(void)
         .lltf_enable = true,
         .ht_ltf_enable = true,
         .stbc_ht_ltf_enable = false,
-        .csi_len_cap = (uint16_t)AQ_CSI_MAX_DATAGRAM_LEN,
+        .csi_len_cap = (uint16_t)CSI_RAW_MAX,
         .max_tx_rate_hz = 200u,
+        .heartbeat_ms = 5000u,
     };
     return cfg;
 }
@@ -310,6 +307,7 @@ void csi_node_apply_config(const csi_node_config_t *config)
     s_config.stbc_ht_ltf_enable = config->stbc_ht_ltf_enable;
     s_config.csi_len_cap = config->csi_len_cap;
     s_config.max_tx_rate_hz = config->max_tx_rate_hz;
+    s_config.heartbeat_ms = config->heartbeat_ms;
     portEXIT_CRITICAL(&s_cfg_mux);
 
     s_raw_cap = config->csi_len_cap < CSI_RAW_MAX ? config->csi_len_cap
@@ -317,7 +315,17 @@ void csi_node_apply_config(const csi_node_config_t *config)
     atomic_store(&s_streaming, config->csi_enable);
     apply_esp_csi(config);
     if (config->channel != 0u) {
-        esp_wifi_set_channel(config->channel, WIFI_SECOND_CHAN_NONE);
+        /* `secondary` (0 none, 1 above, 2 below) selects the 40 MHz offset;
+         * anything unrecognised falls back to no secondary channel (F5). */
+        wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+        if (config->bandwidth_mhz > 20u) {
+            if (config->secondary == 1u) {
+                second = WIFI_SECOND_CHAN_ABOVE;
+            } else if (config->secondary == 2u) {
+                second = WIFI_SECOND_CHAN_BELOW;
+            }
+        }
+        esp_wifi_set_channel(config->channel, second);
     }
 }
 

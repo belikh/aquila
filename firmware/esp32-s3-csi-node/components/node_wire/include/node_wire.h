@@ -28,6 +28,7 @@
 #define AQ_CSI_MAX_SUBCARRIERS 714u
 #define AQ_CSI_MAX_DATAGRAM_LEN 1472u
 #define AQ_CONTROL_HEADER_LEN 12
+#define AQ_CONTROL_AUTH_LEN 32u
 
 /* Variable-length CSI payload. */
 /* Interleaved signed int8 I/Q, Q then I (imaginary first) per subcarrier; 2 bytes per subcarrier. */

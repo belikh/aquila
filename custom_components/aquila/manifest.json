@@ -8,7 +8,7 @@
   "integration_type": "hub",
   "iot_class": "local_polling",
   "version": "0.1.0",
-  "dependencies": ["frontend", "http"],
+  "dependencies": ["http"],
   "requirements": [],
   "loggers": ["custom_components.aquila"]
 }

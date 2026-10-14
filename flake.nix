@@ -1,5 +1,5 @@
 {
-  description = "Aquila — reproducible dev environments (host + wasm32 + HA)";
+  description = "Aquila — reproducible dev environments (host + wasm32 + HA + ESP-IDF)";
 
   inputs = {
     nixpkgs.url = "nixpkgs";
@@ -7,9 +7,11 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # ESP-IDF toolchain for compiling the ESP32-S3 firmware (no flashing here).
+    nixpkgs-esp-dev.url = "github:mirrexagon/nixpkgs-esp-dev";
   };
 
-  outputs = { self, nixpkgs, rust-overlay }:
+  outputs = { self, nixpkgs, rust-overlay, nixpkgs-esp-dev }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -66,9 +68,14 @@
             echo "Aquila HA shell — python $(python3 --version | cut -d' ' -f2); aiohttp/voluptuous/pytest/pyyaml + homeassistant"
           '';
         };
+
+        # ESP-IDF for compiling the ESP32-S3 firmware. `nix develop .#esp`,
+        # then: cd firmware/esp32-s3-csi-node && idf.py set-target esp32s3 build
+        # (compiles it; flashing needs hardware).
+        esp = nixpkgs-esp-dev.devShells.${system}.esp32s3-idf;
       };
 
-      # `nix run .#test` / `nix run .#dashboard`.
+      # `nix run .#test` / `nix run .#dashboard` / `nix run .#firmware`.
       apps.${system} = {
         test = {
           type = "app";

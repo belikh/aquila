@@ -14,6 +14,11 @@ There is no `cargo` on the bare PATH. Always work inside a dev shell.
   `make`, `pkg-config`.
 - `nix develop .#ha` — Python 3 with `aiohttp`, `voluptuous`, `pytest`,
   `pytest-asyncio`, `pyyaml`, and Home Assistant, for the HACS component.
+- `nix develop .#esp` — ESP-IDF **v5.5.2** and the `xtensa-esp32s3` toolchain,
+  for compiling the ESP32-S3 firmware. It **does** compile (the earlier "cannot
+  compile" note was false): `nix develop .#esp --command bash -c 'cd
+  firmware/esp32-s3-csi-node && idf.py set-target esp32s3 && idf.py build'`.
+  Flashing needs hardware and is not possible here.
 - Test everything: `nix develop --command cargo test --workspace`.
 - Build the dashboard: `nix run .#dashboard`
   (equivalently `nix develop --command bash -c 'cd crates/aquila-dashboard && trunk build --release'`).

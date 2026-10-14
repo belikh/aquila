@@ -357,10 +357,32 @@ core relays it through `aquila-api` inside the `aquila-addon` composition root
 | 6 | 2 | `body_len` | |
 | 8 | 4 | `request_id` | caller nonce; replies echo it |
 | 12 | `body_len` | `body` | opcode-specific, little-endian |
+| `12 + body_len` | 32 | `auth` | optional; present only on an authenticated message (§6.3) |
 
 Bodies are small fixed C-compatible structs, not JSON or CBOR, so the firmware
 needs no parser. Every request is idempotent and keyed by `(node, request_id)`;
 a retransmit is deduplicated by the node within a bounded window.
+
+**Authentication trailer (v1).** Once a node is paired, every control command
+carries an `auth` trailer: 32 bytes of HMAC-SHA256 keyed by the pairing token
+issued in `JOIN_ACK`, computed over the header and body bytes (everything before
+the trailer). A receiver verifies the tag in constant time and rejects a message
+whose tag is absent, the wrong length, or does not match
+(`decode_control_authenticated` in `aquila-wire` emits
+`WireError::AuthenticationFailed`). The trailer is **additive**: the plain
+framing is unchanged, so a codec that does not speak it still frames the same
+header and body. `JOIN_ACK` is the one message that carries no trailer, because
+it is what delivers the token.
+
+**Honest v1 scope.** The node implements this verification and **fails closed**.
+The wire codec (`encode_control_authenticated` / `decode_control_authenticated`)
+and the `NodeControl` sender (an optional pairing token) both support the
+trailer, but the running `aquila-addon` composition root does not yet wire the
+node control plane, so no live core sends tagged commands and a paired node
+refuses every command but pairing. v1 authenticates the core → node direction
+only; node → core replies and `STATUS` are not yet authenticated, so "mutually
+authenticated" is a target, not a v1 property. The CSI **data plane** is not
+sealed or authenticated in v1 at all (see `privacy-security.md` §5).
 
 ### 6.2 Opcodes
 
@@ -390,9 +412,12 @@ a retransmit is deduplicated by the node within a bounded window.
 `0x0E`–`0x14` are the firmware-OTA extension of this table; their bodies and
 rules are specified in `docs/spec/firmware-ota.md` §5 and summarised in §9.5.
 
-`SET_CONFIG` carries a `config_version` and a `config_hash`; the node
-validates, applies atomically, and replies `ACTIVE` or `REJECTED` with a
-reason. Indicative fields: channel, bandwidth, secondary, csi enable,
+`SET_CONFIG` carries a `config_version` and a `config_hash`; the node rejects a
+stale `config_version`, applies atomically, and replies `ACTIVE` or `REJECTED`
+with a reason. **v1 limitation:** the `config_hash` is carried but **not**
+verified — no canonical config-hash algorithm is defined on the core side, so
+the node has nothing to recompute against (F7). It is reserved until that
+algorithm is pinned. Indicative fields: channel, bandwidth, secondary, csi enable,
 LLTF/HT-LTF/STBC-HT-LTF enables, CSI length cap, `max_tx_rate_hz`,
 `heartbeat_ms`, and an optional allow-list of source MACs.
 
@@ -403,15 +428,21 @@ short-lived code; the operator flashes a node and enters it. The node, once
 associated, sends `JOIN_REQUEST {node, boot, pairing_code, fw_version}` to the
 core endpoint. The core marks the node **pending** (visible in the dashboard);
 on operator approval the core replies `JOIN_ACK {node, token, config}`. The node
-stores the token in NVS and is paired; subsequent control frames authenticate
-with it. Approval is where the node is assigned to a room, in the home model.
+stores the token in NVS and is paired; every subsequent control frame
+authenticates with it by carrying the HMAC-SHA256 trailer of §6.1, and the node
+also pins the core endpoint and rejects a replayed `request_id`. Approval is
+where the node is assigned to a room, in the home model.
 
 ### 6.4 Heartbeat and health
 
 The node sends `STATUS` every `heartbeat_ms` (default 5000 ms, ~0.2 Hz, matching
 the dashboard's `node.health` rate): uptime, `boot`, last `sequence`, `dropped`,
-ring depth, temperature, `config_version`, and last measured core RTT. This is
-the node's only self-report; it carries no CSI and no inference.
+ring depth, temperature (the internal on-die sensor, or `0` when it is
+unavailable), `config_version`, and a latency field. That field is the node's own
+`SYNC_PING` echo turnaround (`t3 − t2`); only the core can measure the true
+round-trip time, so the node reports what it can observe rather than a fabricated
+RTT (F32). This is the node's only self-report; it carries no CSI and no
+inference.
 
 ## 7. Deterministic CSI simulator
 
@@ -614,9 +645,12 @@ Compile-time: firmware version and chip target.
 ### 9.4 One wire layout, two languages
 
 `aquila-wire` (Rust) and `node_wire` (C) MUST implement one identical layout.
-`aquila-wire` owns the definition and generates `node_wire.h`; CI checks the
-committed header matches and runs shared golden vectors through both
-implementations, so the two ends cannot silently drift.
+`aquila-wire` owns the definition and generates `node_wire.h`. CI currently
+checks only that the committed **header text** matches the generator; it does
+**not** compile or run the C framing helpers, so `node_wire_util.c` could still
+drift from the declared layout. Shared golden vectors run through both
+implementations — the check that would close this — are planned, not yet
+present (F37).
 
 ### 9.5 Firmware update (OTA)
 

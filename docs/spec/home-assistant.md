@@ -91,12 +91,17 @@ ports_description:
 options:
   log_level: info
   calibration_profile: default
-  retention_days: 30
+  retention_days: 0   # 0 = retain indefinitely (G9); a positive value opts in
 schema:
   log_level: list(trace|debug|info|notice|warning|error|fatal)
   calibration_profile: str
-  retention_days: int(1,365)
+  retention_days: int(0,3650)
 ```
+
+`retention_days` defaults to `0`, meaning **retain indefinitely**: no retention
+window is imposed (G9). A positive value is an explicit, user-chosen opt-in to
+automatic expiry, which the core may then run; the shipped default never deletes
+data on its own.
 
 - **Supported arches:** `amd64` (HA OS / Supervised on x86-64) and `aarch64`
   (HA OS on Raspberry Pi 4/5 64-bit, HA Yellow/Green CM4). `armv7`/`armhf`
@@ -132,7 +137,7 @@ Installed by HACS as an `integration`; runs inside the HA Core container.
 
 ```
 custom_components/aquila/
-├── __init__.py          # async_setup_entry / async_unload_entry, panel registration
+├── __init__.py          # async_setup_entry / async_unload_entry, services
 ├── manifest.json
 ├── const.py             # DOMAIN, defaults, metric vocabulary
 ├── api.py               # aiohttp REST client (private HTTP API)
@@ -144,9 +149,10 @@ custom_components/aquila/
 ├── update.py            # per-node firmware update entity (see firmware-ota.md)
 ├── diagnostics.py       # config-entry diagnostics (redacted)
 ├── strings.json
-├── translations/en.json
-└── brand/icon.png       # custom-integration branding
+└── translations/en.json
 ```
+> The branded `brand/icon.png` is **not** shipped yet (`brand/` contains only a
+> README); it is deferred with the component panel (§8).
 
 `manifest.json`:
 
@@ -255,7 +261,8 @@ at `belikh/aquila`:
 - **Local push is sufficient.** The core and component are on the same host and
   the same Docker network. The cost MQTT avoids (a shared broker between
   unreliable remote clients) does not apply. The HA-recommended alternative for a
-  same-host hub is a direct local API with a WS push, which is what we do.
+  same-host hub is a direct local API; v1 polls it and adds a WS push when the
+  stream lands (`core-api.md` §10).
 - Non-goal reasoning: MQTT would also be the first step toward exposing Aquila
   state to arbitrary external consumers, which v1 explicitly forbids (no public
   API, in-tree only).
@@ -429,44 +436,30 @@ class AquilaCoordinator(DataUpdateCoordinator[dict]):
 
 ## 8. Sidebar panel registration
 
-Two layers, intentionally:
+**v1 has one panel: the add-on ingress panel.** Because the add-on sets
+`ingress: true` with `panel_icon`/`panel_title`, HA automatically adds a
+**management** sidebar entry (admin-only via `panel_admin: true`) pointing at the
+ingress dashboard. This works even before the HACS component is installed, and it
+is the single source of truth for the management UI.
 
-1. **Add-on ingress panel (baseline, zero-component-cost).** Because the add-on
-   sets `ingress: true` with `panel_icon`/`panel_title`, HA automatically adds a
-   **management** sidebar entry (admin-only via `panel_admin: true`) pointing at
-   the ingress dashboard. This works even before the HACS component is
-   installed.
-2. **Component panel (integration-owned).** In `async_setup`, the component
-   registers a `panel_custom` after `async_setup_entry`, gated on admin and on
-   `hass.data[DOMAIN]` being ready:
-
-   ```python
-   from homeassistant.components import panel_custom
-   panel_custom.async_register_panel(
-       hass, webcomponent_path="aquila-panel.js",
-       frontend_url_path="aquila", sidebar_title="Aquila",
-       sidebar_icon="mdi:radar", config={"instance_id": instance_id},
-       admin_only=True, require_admin=True,
-   )
-   ```
-
-   The web component frames core status (connection, node count, calibration
-   state) from the component itself and deep-links to the ingress dashboard for
-   the full management UI. The component only registers the panel once for all
-   cases of the domain; `async_unload_entry` removes it when the last entry is
-   unloaded, guarded by `hass.data[DOMAIN]` ref-counting.
-
-The split keeps the heavy Rust/WASM UI in the add-on (single source of truth,
-updates with the core) while the component owns the HA-native, admin-gated
-navigation entry and the connection health shown to HA users.
+A second, integration-owned `panel_custom` (framing core status and deep-linking
+to the ingress dashboard) was specified but is **deferred**: it depends on an
+`aquila-panel.js` web component that is not shipped (`sister-issues-firmware-ha.md`
+F30, and the dashboard work is ticket #10). Registering a `panel_custom` whose
+asset is absent only produces a silently failing panel, so the component does not
+register one in v1. When the asset lands, the component will register it once per
+domain and remove it when the last entry unloads, guarded by `hass.data[DOMAIN]`
+ref-counting. Until then, the entry point to management is the add-on ingress
+panel above.
 
 ## 9. Install and upgrade flow
 
 **Install (fresh host):**
 
 1. Add the add-on repository `https://github.com/belikh/aquila`;
-   install **Aquila Core**; set options (`log_level`, `calibration_profile`,
-   `retention_days`); start it. On first start the core generates `instance_id`,
+   install **Aquila Core**; set options (`log_level`, `calibration_profile`; leave
+   `retention_days` at its `0` default to retain everything, G9); start it. On
+   first start the core generates `instance_id`,
    initialises `/data` (ledger, calibration store, drift state, model cache),
    binds UDP `9100`/`9101` and serves ingress on `8099`.
 2. Provision nodes with the core's host address and UDP port (unicast).

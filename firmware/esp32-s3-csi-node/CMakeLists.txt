@@ -6,8 +6,8 @@
 #   idf.py build
 #   idf.py -p /dev/ttyUSB0 flash monitor
 #
-# This project is a reference implementation; it is not built, flashed or tested
-# in the Aquila repository (see README.md).
+# Compile-verified with ESP-IDF v5.5.2 via `nix develop .#esp`; not flashed or
+# run on hardware (see README.md).
 cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

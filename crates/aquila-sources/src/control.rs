@@ -10,7 +10,10 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
-use aquila_wire::{decode_control, encode_control, ControlMessage, MAX_DATAGRAM_LEN};
+use aquila_wire::{
+    decode_control, encode_control, encode_control_authenticated, ControlMessage, CONTROL_AUTH_LEN,
+    MAX_DATAGRAM_LEN,
+};
 
 use crate::error::SourceError;
 
@@ -19,10 +22,16 @@ use crate::error::SourceError;
 /// A control message is keyed by a caller nonce; a reply echoes it
 /// (`capture-and-firmware.md` §6.1). A caller sends its request and matches the
 /// reply by `request_id`.
+///
+/// When a per-node pairing token is set ([`with_token`](Self::with_token)), every
+/// message this endpoint sends carries the 32-byte HMAC-SHA256 authentication
+/// trailer (`capture-and-firmware.md` §6.3), so a paired node accepts it. Without
+/// a token the plain framing is used.
 #[derive(Debug)]
 pub struct NodeControl {
     socket: UdpSocket,
     buffer: Vec<u8>,
+    token: Option<[u8; CONTROL_AUTH_LEN]>,
 }
 
 impl NodeControl {
@@ -36,7 +45,30 @@ impl NodeControl {
         Ok(Self {
             socket,
             buffer: vec![0u8; MAX_DATAGRAM_LEN],
+            token: None,
         })
+    }
+
+    /// Set the per-node pairing token this endpoint authenticates its messages
+    /// with (`capture-and-firmware.md` §6.3). Builder form.
+    #[must_use]
+    pub fn with_token(mut self, token: [u8; CONTROL_AUTH_LEN]) -> Self {
+        self.token = Some(token);
+        self
+    }
+
+    /// Set or clear the per-node pairing token.
+    pub fn set_token(&mut self, token: Option<[u8; CONTROL_AUTH_LEN]>) {
+        self.token = token;
+    }
+
+    /// Encode `message`, attaching the authentication trailer when a token is
+    /// set.
+    fn encode(&self, message: &ControlMessage) -> Result<Vec<u8>, SourceError> {
+        match self.token {
+            Some(token) => Ok(encode_control_authenticated(message, &token)?),
+            None => Ok(encode_control(message)?),
+        }
     }
 
     /// Bind an ephemeral control socket on loopback; useful in tests.
@@ -73,7 +105,7 @@ impl NodeControl {
     /// Returns [`SourceError::Decode`] if the message cannot be encoded, or
     /// [`SourceError::Io`] if the datagram cannot be sent.
     pub fn send(&self, to: SocketAddr, message: &ControlMessage) -> Result<(), SourceError> {
-        let bytes = encode_control(message)?;
+        let bytes = self.encode(message)?;
         self.socket.send_to(&bytes, to)?;
         Ok(())
     }

@@ -1,17 +1,27 @@
 menu "Aquila CSI node"
 
+    # Every option below is a factory default only. The node loads its real
+    # provisioning (SSID, password, core host/ports, node id, pairing code) from
+    # NVS first; these values are used only when the corresponding NVS key is
+    # absent (capture-and-firmware.md §8.3, §9.1.8, §9.3).
+
     config AQUILA_WIFI_SSID
-        string "WiFi SSID"
+        string "WiFi SSID (factory default)"
         default "aquila-home"
         help
             The network the node associates with. An ESP-IDF association
             detail; it confers no Aquila role (capture-and-firmware.md §9.1).
+            This is only a factory default: the operator-provisioned value in
+            NVS (`aquila-capture provision`) overrides it, and it is never the
+            only source (G13).
 
     config AQUILA_WIFI_PASSWORD
-        string "WiFi password"
+        string "WiFi password (factory default)"
         default ""
         help
-            The network password; empty for an open network.
+            The network password; empty for an open network. A factory default
+            only: provision the real credential into NVS at flash time so it is
+            not baked into a distributed image (G13, F1/F23).
 
     config AQUILA_CORE_HOST
         string "Core IPv4 address"

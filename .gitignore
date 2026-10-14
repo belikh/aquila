@@ -6,6 +6,11 @@
 /result
 /result-*
 
+# ESP-IDF firmware build output
+firmware/**/build/
+firmware/**/sdkconfig
+firmware/**/sdkconfig.old
+
 # Agent scaffolding (repo policy: never committed)
 .claude/
 .claude-flow/

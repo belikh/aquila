@@ -16,10 +16,10 @@
 use core::fmt::Write as _;
 
 use crate::constants::{
-    control_offset, csi_body_offset, csi_offset, Opcode, CONTROL_MAGIC, CONTROL_PORT,
-    CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN, CSI_MAGIC,
-    CSI_MESSAGE_TYPE, MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR,
-    WIRE_MINOR,
+    control_offset, csi_body_offset, csi_offset, Opcode, CONTROL_AUTH_LEN, CONTROL_MAGIC,
+    CONTROL_PORT, CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN,
+    CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ,
+    WIRE_MAJOR, WIRE_MINOR,
 };
 
 /// Render the canonical layout as a C header (`node_wire.h`).
@@ -64,6 +64,7 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "#define AQ_CSI_MAX_SUBCARRIERS {MAX_SUBCARRIERS}u");
     let _ = writeln!(s, "#define AQ_CSI_MAX_DATAGRAM_LEN {MAX_DATAGRAM_LEN}u");
     let _ = writeln!(s, "#define AQ_CONTROL_HEADER_LEN {}", control_offset::BODY);
+    let _ = writeln!(s, "#define AQ_CONTROL_AUTH_LEN {CONTROL_AUTH_LEN}u");
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* Variable-length CSI payload. */");

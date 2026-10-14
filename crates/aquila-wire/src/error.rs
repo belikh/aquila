@@ -115,6 +115,11 @@ pub enum WireError {
     /// A length-prefixed control field was not valid UTF-8.
     #[error("control string is not valid UTF-8")]
     InvalidUtf8,
+    /// A control message's authentication trailer was absent, the wrong length,
+    /// or did not verify against the per-node token (`capture-and-firmware.md`
+    /// §6.3). The message is rejected before it is decoded.
+    #[error("control message authentication failed")]
+    AuthenticationFailed,
     /// A node identity mapping was asked to bind a key that is already bound to
     /// a different counterpart.
     #[error("node identity conflict on {kind}")]

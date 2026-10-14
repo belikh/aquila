@@ -66,6 +66,14 @@ pub const MAX_SUBCARRIERS: u16 =
 /// The fixed control header length in bytes.
 pub const CONTROL_HEADER_LEN: usize = 12;
 
+/// The length of the AQCC control-plane authentication trailer in bytes.
+///
+/// An authenticated control message is the `AQCC` header and body followed by
+/// this HMAC-SHA256 tag, keyed by the per-node pairing token
+/// (`capture-and-firmware.md` §6.3). The plain framing is unchanged when the
+/// trailer is absent, so the tag is purely additive.
+pub const CONTROL_AUTH_LEN: usize = 32;
+
 /// The maximum length of a length-prefixed control string (a one-byte prefix).
 pub const MAX_CONTROL_STRING: usize = u8::MAX as usize;
 

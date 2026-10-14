@@ -18,7 +18,7 @@
 use aquila_types::MacAddr;
 
 use crate::constants::{
-    Opcode, CONTROL_HEADER_LEN, CONTROL_MAGIC, CONTROL_VERSION, MAX_SOURCE_MACS,
+    Opcode, CONTROL_AUTH_LEN, CONTROL_HEADER_LEN, CONTROL_MAGIC, CONTROL_VERSION, MAX_SOURCE_MACS,
 };
 use crate::cursor::{Reader, Writer};
 use crate::error::WireError;
@@ -472,6 +472,47 @@ pub fn decode_control(bytes: &[u8]) -> Result<ControlMessage, WireError> {
     let body = &bytes[CONTROL_HEADER_LEN..total];
     let body = ControlBody::decode_from(opcode, body)?;
     Ok(ControlMessage { request_id, body })
+}
+
+/// Encode one control message with its per-node authentication trailer.
+///
+/// The body is encoded exactly as [`encode_control`], then a 32-byte
+/// HMAC-SHA256 tag over the header and body (keyed by `token`) is appended. A
+/// node that has completed pairing verifies this tag before decoding
+/// (`capture-and-firmware.md` §6.3).
+pub fn encode_control_authenticated(
+    message: &ControlMessage,
+    token: &[u8; CONTROL_AUTH_LEN],
+) -> Result<Vec<u8>, WireError> {
+    let mut bytes = encode_control(message)?;
+    let tag = crate::auth::control_auth_tag(token, &bytes);
+    bytes.extend_from_slice(&tag);
+    Ok(bytes)
+}
+
+/// Decode one authenticated `AQCC` datagram.
+///
+/// The final [`CONTROL_AUTH_LEN`] bytes are treated as the authentication
+/// trailer; the tag is verified in constant time against `token` before the
+/// header and body are decoded. A message without a trailer, with a tag of the
+/// wrong length, or with a tag that does not verify is rejected with
+/// [`WireError::AuthenticationFailed`] and never decoded.
+pub fn decode_control_authenticated(
+    bytes: &[u8],
+    token: &[u8; CONTROL_AUTH_LEN],
+) -> Result<ControlMessage, WireError> {
+    if bytes.len() < CONTROL_AUTH_LEN {
+        return Err(WireError::Truncated {
+            needed: CONTROL_AUTH_LEN,
+            actual: bytes.len(),
+        });
+    }
+    let split = bytes.len() - CONTROL_AUTH_LEN;
+    let (frame, tag) = bytes.split_at(split);
+    if !crate::auth::verify_control_auth(token, frame, tag) {
+        return Err(WireError::AuthenticationFailed);
+    }
+    decode_control(frame)
 }
 
 /// The node identity a control message is keyed by, when it names one.

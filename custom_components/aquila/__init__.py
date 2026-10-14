@@ -13,7 +13,6 @@ from collections.abc import Iterator
 
 import voluptuous as vol
 
-from homeassistant.components import frontend, panel_custom
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import (
@@ -56,7 +55,6 @@ _LOGGER = logging.getLogger(__name__)
 __all__ = ["async_setup", "async_setup_entry", "async_unload_entry", "async_migrate_entry"]
 
 # Reserved keys in ``hass.data[DOMAIN]``; entries are keyed by ``entry_id``.
-_PANEL_FLAG = "_panel_registered"
 _SERVICES_FLAG = "_services_registered"
 
 SERVICE_INSTALL_FIRMWARE_SCHEMA = vol.Schema(
@@ -130,7 +128,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    _async_register_panel(hass, instance_id)
     _async_register_services(hass)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -154,7 +151,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         and other.state is ConfigEntryState.LOADED
     ]
     if not remaining:
-        _remove_panel(hass)
         _async_unregister_services(hass)
     return True
 
@@ -162,40 +158,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the entry when its options change (home-assistant.md §7)."""
     await hass.config_entries.async_reload(entry.entry_id)
-
-
-def _async_register_panel(hass: HomeAssistant, instance_id: str) -> None:
-    """Register the admin-gated sidebar panel once for the domain (home-assistant.md §8)."""
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get(_PANEL_FLAG):
-        return
-    try:
-        panel_custom.async_register_panel(
-            hass,
-            webcomponent_path="aquila-panel.js",
-            frontend_url_path=DOMAIN,
-            sidebar_title="Aquila",
-            sidebar_icon="mdi:radar",
-            config={"instance_id": instance_id},
-            admin_only=True,
-            require_admin=True,
-        )
-    except Exception as err:  # noqa: BLE001 - panel registration is best-effort
-        _LOGGER.warning("Could not register the Aquila panel: %s", err)
-        return
-    domain_data[_PANEL_FLAG] = True
-
-
-def _remove_panel(hass: HomeAssistant) -> None:
-    """Remove the component panel when the last entry unloads."""
-    domain_data = hass.data.get(DOMAIN, {})
-    if not domain_data.get(_PANEL_FLAG):
-        return
-    try:
-        frontend.async_remove_panel(hass, DOMAIN)
-    except Exception as err:  # noqa: BLE001 - teardown must not fail the unload
-        _LOGGER.debug("Could not remove the Aquila panel: %s", err)
-    domain_data[_PANEL_FLAG] = False
 
 
 def _async_register_services(hass: HomeAssistant) -> None:

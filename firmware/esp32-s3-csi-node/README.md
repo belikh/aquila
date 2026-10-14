@@ -3,16 +3,18 @@
 A reference ESP-IDF (C) firmware for a single fixed **ESP32-S3** node that
 streams raw WiFi CSI to the Aquila core.
 
-> **This firmware is not flashed or tested on hardware in this repository.**
-> It is a reference source tree: it has never been built with a real ESP-IDF
-> toolchain, never flashed to a board and never observed streaming. Treat it as
-> a starting point, not as verified code. The Rust side of the wire is tested;
-> the C side is not.
+> **Compile status.** This firmware is **compile-verified with ESP-IDF v5.5.2**
+> via the repository dev shell `nix develop .#esp` (see *Build and flash* below).
+> It is **not flashed and not run on hardware in this repository**: it has never
+> been flashed to a board and never observed streaming, so its on-device
+> behaviour is unverified. The Rust side of the wire is tested; the C side is
+> compile-verified only.
 
 It implements the node end of `docs/spec/capture-and-firmware.md` §5 (CSI data
-plane), §6 (node control channel) and §9 (firmware responsibilities and
-MUST-NOTs), under the wire layout of ADR-0004 (magic and framing) and ADR-0005
-(the raw int8 I/Q payload), and `ADR-0003` §7/§9.4.
+plane), §6 (node control channel, including the per-node token authentication
+of §6.3) and §9 (firmware responsibilities and MUST-NOTs), under the wire layout
+of ADR-0004 (magic and framing), ADR-0005 (the raw int8 I/Q payload) and
+ADR-0006 (the imaginary-first byte order), and `ADR-0003` §7/§9.4.
 
 ## Target
 
@@ -63,12 +65,31 @@ nix-shell --run 'cargo test -p aquila-capture emit_node_wire_header -- --ignored
 
 Copy that file to `components/node_wire/include/node_wire.h`. A CI test
 (`aquila-capture`, `committed_node_wire_header_is_current`) asserts the
-committed header equals `aquila_wire::generate_c_header()`, so the two languages
-cannot silently drift (`capture-and-firmware.md` §9.4).
+committed header equals `aquila_wire::generate_c_header()` — it compares the
+**header text** only. It does not compile or run the C framing, so
+`node_wire_util.c` could still drift from the layout the header declares; a
+shared golden-vector test that feeds fixed inputs through the C framing and
+compares bytes with the Rust encoder is planned, not yet present (F37,
+`capture-and-firmware.md` §9.4).
 
 ## Build and flash
 
-Install ESP-IDF v5.x and export its environment:
+### Compile in the repository dev shell (ESP-IDF v5.5.2)
+
+The repository pins ESP-IDF v5.5.2 and the `xtensa-esp32s3` toolchain in the
+`esp` dev shell, so no host-wide ESP-IDF install is needed to **compile**:
+
+```sh
+nix develop .#esp --command bash -c \
+  'cd firmware/esp32-s3-csi-node && idf.py set-target esp32s3 && idf.py build'
+```
+
+This is the exact path by which the firmware is compile-verified, and it emits
+`build/bootloader/bootloader.bin`, `build/partition_table/partition-table.bin`
+and `build/aquila_esp32s3_csi_node.bin`. Compiling needs no hardware; **flashing
+does**, and flashing is not possible in this repository (there is no board).
+
+### Or install ESP-IDF v5.x yourself
 
 ```sh
 git clone --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
@@ -85,20 +106,25 @@ idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
 `idf.py menuconfig` exposes the node settings declared in
-`main/Kconfig.projbuild`:
+`main/Kconfig.projbuild`. Every value is a **factory default only**: the node
+loads its real provisioning from NVS first and falls back to these when the
+corresponding key is absent (`capture-and-firmware.md` §8.3, §9.1.8, §9.3).
 
 | Option | Meaning |
 | --- | --- |
-| `AQUILA_WIFI_SSID` / `AQUILA_WIFI_PASSWORD` | the home network to join |
+| `AQUILA_WIFI_SSID` / `AQUILA_WIFI_PASSWORD` | factory-default network credentials (provision the real ones into NVS) |
 | `AQUILA_CORE_HOST` | the add-on's IPv4 literal (the node talks only to it) |
 | `AQUILA_CORE_DATA_PORT` | CSI data plane, default `9100` |
 | `AQUILA_CORE_CONTROL_PORT` | node control plane, default `9101` |
 | `AQUILA_NODE_ID` | dense node id, provisioned by the operator |
 | `AQUILA_PAIRING_CODE` | the short-lived pairing code, `0` to skip join |
 
-The `aquila-capture provision` subcommand writes the equivalent provisioning
-payload (SSID, password, core endpoint) as JSON for an operator to flash into
-NVS; pairing itself happens on the control channel.
+The `aquila-capture provision` subcommand writes the provisioning payload
+(SSID, password, core endpoint) as JSON for an operator to flash into NVS under
+the `aquila` namespace (`wifi_ssid`, `wifi_pass`, `core_host`,
+`core_data_port`, `core_control_port`, `node_id`, `pairing_code`); pairing itself
+happens on the control channel. Because the credentials live in NVS, a
+distributed image does not carry the network password (G13).
 
 ## Behaviour
 
@@ -114,22 +140,38 @@ NVS; pairing itself happens on the control channel.
   `GET_CONFIG`/`SET_CONFIG`/`SET_CSI`, `STATUS` heartbeats, `SYNC_PING` →
   `SYNC_ECHO`, `REBOOT`, `IDENTIFY` and `FACTORY_RESET`, persisting the pairing
   token and config version in NVS.
+- **Control authentication** (`capture-and-firmware.md` §6.3, F21). After
+  pairing, every inbound command must carry the 32-byte HMAC-SHA256 trailer
+  keyed by the pairing token, must come from the pinned core endpoint, and must
+  present a `request_id` not seen in the recent-replay window. `JOIN_ACK` is the
+  one message accepted before pairing, because it delivers the token. Until the
+  core attaches the same trailer (the wire codec provides
+  `encode_control_authenticated`), the node **fails closed**: it refuses every
+  command. Node→core replies and `STATUS` are not yet authenticated, so the
+  control channel is authenticated core→node only in v1.
 - **MUST NOTs** (§9.2): the node performs no DSP, inference, fusion,
   calibration, filtering or FFT; never disciplines its clock; never transmits
   elicitation waveforms; and uses no ESP-NOW, MQTT, Matter, Zigbee, BLE or mesh.
 
 ## What is untested
 
-Everything in C under this directory. In particular:
+The C under this directory **compiles** (ESP-IDF v5.5.2, `nix develop .#esp`),
+but none of it is exercised on hardware. In particular:
 
 - the `esp-csi` raw buffer layout copied verbatim as the int8 I/Q payload
   (`[imag, real]` versus `[real, imag]` per subcarrier, and `first_word_invalid`
   nulling the first subcarrier) — verify the byte order against the ESP-IDF
   version on the board;
 - `wifi_pkt_rx_ctrl_t` field names used for the PHY flags (`sig_mode`, `cwb`,
-  `stbc`, `fec_coding`, `sgi`) — these vary across ESP-IDF versions;
-- the NVS provisioning path and `IDENTIFY` LED (currently disabled: set
-  `IDENTIFY_GPIO` in `node_control.c` to a valid GPIO);
+  `stbc`, `fec_coding`, `sgi`) — these vary across ESP-IDF versions. The v1
+  contract has only one "HT" bit, so VHT/HE frames cannot be distinguished;
+- the NVS provisioning path;
+- the control-channel HMAC-SHA256 verification and replay window
+  (`mbedtls_md_hmac`), and the matching core-side trailer;
+- the internal temperature-sensor read used by `STATUS` (the sensor may be
+  unavailable, in which case the field reads `0`);
+- the `IDENTIFY` LED (currently disabled: set `IDENTIFY_GPIO` in
+  `node_control.c` to a valid GPIO);
 - on-hardware streaming, loss, rate and timing.
 
 The Rust core, wire codec and the virtual-node tracer (`aquila-testkit`) are the
