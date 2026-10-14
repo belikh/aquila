@@ -12,6 +12,7 @@ aquila-sources = { path = "../aquila-sources" }
 aquila-sensing = { path = "../aquila-sensing" }
 aquila-metrics = { path = "../aquila-metrics" }
 aquila-simulator = { path = "../aquila-simulator" }
+aquila-evaluation = { path = "../aquila-evaluation" }
 
 [lints]
 workspace = true

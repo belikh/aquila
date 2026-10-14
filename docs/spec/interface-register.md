@@ -7,9 +7,9 @@ does not duplicate spec content. Any crate name not listed here is a defect.
 
 - **Contract version:** `1.0` (`CONTRACT_VERSION`), per `data-contracts.md`.
 - **Wire version:** `1.0` (`WIRE_MAJOR`/`WIRE_MINOR`), per `data-contracts.md`.
-- **DAG data:** `tools/dag.toml`, enforced by `cargo xtask dag-check` (ADR-0002).
-  *Not yet in-tree:* `xtask` and `tools/dag.toml` are declared here but not yet
-  implemented (audit #21), so the DAG rule is currently checked only by review.
+- **DAG data:** `tools/dag.toml`, enforced by `cargo run -p xtask -- dag-check`
+  (ADR-0002). The `xtask` tooling crate and `tools/dag.toml` are in-tree and the
+  guardrail runs on every check (audit #21/#33 resolved).
 
 Level is the integer ordering the DAG check uses (a crate may depend only on a
 strictly lower level); layer is the six-layer name from `architecture.md`.

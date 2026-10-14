@@ -35,6 +35,7 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "#define AQUILA_NODE_WIRE_H");
     let _ = writeln!(s);
     let _ = writeln!(s, "#include <stdint.h>");
+    let _ = writeln!(s, "#include <stddef.h>");
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* Versions and magics. */");
@@ -57,6 +58,26 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "#define AQ_CSI_MAX_SUBCARRIERS {MAX_SUBCARRIERS}u");
     let _ = writeln!(s, "#define AQ_CSI_MAX_DATAGRAM_LEN {MAX_DATAGRAM_LEN}u");
     let _ = writeln!(s, "#define AQ_CONTROL_HEADER_LEN {}", control_offset::BODY);
+    let _ = writeln!(s);
+
+    let _ = writeln!(s, "/* Variable-length CSI payload. */");
+    let _ = writeln!(
+        s,
+        "/* Interleaved f32 amplitude[n], then f32 phase[n]; 8 bytes per subcarrier. */"
+    );
+    let _ = writeln!(s, "#define AQ_CSI_FLOAT_BYTES 4u");
+    let _ = writeln!(
+        s,
+        "#define AQ_CSI_PAYLOAD_FLOATS(n_subcarriers) (2u * (n_subcarriers))"
+    );
+    let _ = writeln!(
+        s,
+        "#define AQ_CSI_PAYLOAD_BYTES(n_subcarriers) (8u * (n_subcarriers))"
+    );
+    let _ = writeln!(
+        s,
+        "#define AQ_CSI_FRAME_SIZE(n_subcarriers) \\\n    (AQ_CSI_HEADER_LEN + AQ_CSI_BODY_FIXED_LEN + AQ_CSI_PAYLOAD_BYTES(n_subcarriers))"
+    );
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* Control opcodes. */");
@@ -206,11 +227,35 @@ pub fn generate_c_header() -> String {
 
     let _ = writeln!(
         s,
+        "/* The variable-length AQCI body: the fixed fields, then the payload array. */"
+    );
+    let _ = writeln!(s, "typedef struct {{");
+    let _ = writeln!(s, "    aq_csi_body_fixed_t fixed;");
+    let _ = writeln!(s, "    float payload[]; /* C99 flexible array member */");
+    let _ = writeln!(s, "}} aq_csi_body_t;");
+    let _ = writeln!(s);
+    let _ = writeln!(
+        s,
+        "/* Accessors: amplitude is payload[0..n), phase is payload[n..2n). */"
+    );
+    let _ = writeln!(s, "#define AQ_CSI_AMPLITUDE(body) ((body)->payload)");
+    let _ = writeln!(
+        s,
+        "#define AQ_CSI_PHASE(body) ((body)->payload + (body)->fixed.n_subcarriers)"
+    );
+    let _ = writeln!(s);
+
+    let _ = writeln!(
+        s,
         "_Static_assert(sizeof(aq_csi_header_t) == AQ_CSI_HEADER_LEN, \"AQCI header size\");"
     );
     let _ = writeln!(
         s,
         "_Static_assert(sizeof(aq_csi_body_fixed_t) == AQ_CSI_BODY_FIXED_LEN, \"AQCI body size\");"
+    );
+    let _ = writeln!(
+        s,
+        "_Static_assert(offsetof(aq_csi_body_t, payload) == AQ_CSI_BODY_FIXED_LEN, \"AQCI payload offset\");"
     );
     let _ = writeln!(s, "_Static_assert(sizeof(aq_control_header_t) == AQ_CONTROL_HEADER_LEN, \"AQCC header size\");");
     let _ = writeln!(s);

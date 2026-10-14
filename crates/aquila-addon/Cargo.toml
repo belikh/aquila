@@ -1,0 +1,19 @@
+[package]
+name = "aquila-addon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Aquila composition root: wires the sensing core to the loopback API."
+
+[dependencies]
+aquila-types = { path = "../aquila-types" }
+aquila-geometry = { path = "../aquila-geometry" }
+aquila-sources = { path = "../aquila-sources" }
+aquila-simulator = { path = "../aquila-simulator" }
+aquila-sensing = { path = "../aquila-sensing" }
+aquila-metrics = { path = "../aquila-metrics" }
+aquila-api = { path = "../aquila-api" }
+
+[lints]
+workspace = true

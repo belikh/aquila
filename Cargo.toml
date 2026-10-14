@@ -14,6 +14,10 @@ members = [
     "crates/aquila-evaluation",
     "crates/aquila-testkit",
     "crates/aquila-capture",
+    "crates/aquila-ha",
+    "crates/aquila-api",
+    "crates/aquila-addon",
+    "xtask",
 ]
 
 [workspace.package]

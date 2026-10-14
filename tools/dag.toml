@@ -1,0 +1,56 @@
+# Dependency-DAG allow-list. Single source of truth for the allowed
+# intra-workspace `aquila-*` dependency edges, mirroring the authoritative
+# "Dependency edges" block of `docs/spec/interface-register.md` (settled by
+# `docs/adr/0003-interface-reconciliation.md`).
+#
+# `cargo run -p xtask -- dag-check` fails on:
+#   - any normal/build edge not listed here,
+#   - any edge whose dependency is not in a strictly lower level,
+#   - any cycle in the workspace dependency graph,
+#   - any workspace member not registered below (in `[levels]` or `[exempt]`),
+#   - a module crate taking a normal dependency on `aquila-testkit`, or any
+#     crate taking a normal dependency on `xtask` or `aquila-addon`.
+#
+# Ratified by: docs/adr/0003-interface-reconciliation.md
+rev = 1
+
+[levels]
+"aquila-types"      = 0
+"aquila-wire"       = 1
+"aquila-signal"     = 1
+"aquila-geometry"   = 1
+"aquila-metrics"    = 1
+"aquila-session"    = 2
+"aquila-inference"  = 2
+"aquila-sources"    = 3
+"aquila-simulator"  = 4
+"aquila-sensing"    = 5
+"aquila-evaluation" = 6
+"aquila-ha"         = 6
+"aquila-api"        = 7
+"aquila-dashboard"  = 8
+
+[exempt]
+"aquila-addon"   = "composition root; may depend on any module"
+"aquila-capture" = "dev binary; regenerates node_wire.h, no product dependency"
+"aquila-testkit" = "dev-only; never a normal dependency"
+"xtask"          = "repo tooling; never a product dependency"
+
+[edges]
+"aquila-types"      = []
+"aquila-wire"       = ["aquila-types"]
+"aquila-signal"     = ["aquila-types"]
+"aquila-geometry"   = ["aquila-types"]
+"aquila-metrics"    = ["aquila-types"]
+"aquila-session"    = ["aquila-types", "aquila-wire"]
+"aquila-inference"  = ["aquila-types"]
+"aquila-sources"    = ["aquila-types", "aquila-wire", "aquila-session"]
+"aquila-simulator"  = ["aquila-types", "aquila-wire", "aquila-session", "aquila-sources"]
+"aquila-sensing"    = ["aquila-types", "aquila-geometry", "aquila-signal",
+                       "aquila-sources", "aquila-inference", "aquila-metrics"]
+"aquila-evaluation" = ["aquila-types", "aquila-sources", "aquila-sensing",
+                       "aquila-metrics", "aquila-simulator"]
+"aquila-ha"         = ["aquila-types", "aquila-geometry", "aquila-sensing"]
+"aquila-api"        = ["aquila-types", "aquila-geometry", "aquila-sensing",
+                       "aquila-sources", "aquila-ha"]
+"aquila-dashboard"  = ["aquila-types", "aquila-api"]

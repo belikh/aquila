@@ -22,6 +22,7 @@ this spec uses. Numbers and external claims cite `../reference/sources.json`.
 | `home-assistant.md` | The add-on packaging and the HACS component, entity model, naming. |
 | `privacy-security.md` | The local-first guarantees (G1–G16) and the threat model. |
 | `repository-tooling.md` | Monorepo layout, toolchain, CI, guardrail checks. |
+| `interface-register.md` | The canonical crate/interface register: crate list, layers, seams, ports and the authoritative dependency edges (settled by ADR-0003). |
 | `testing.md` | Test tiers, `aquila-testkit`, fixtures, the honest-claims contract. |
 | `roadmap.md` | Nine tracer-bullet slices and the v1 exit criteria. |
 | `risks.md` | Risk register and the open questions the tickets must resolve. |
@@ -33,5 +34,7 @@ data/control ports, `aquila-types` vs `aquila-contracts`, the source-seam name,
 and the `sensing frame` definition — are **resolved** by
 `../adr/0003-interface-reconciliation.md`. The canonical crate list, seams,
 dependency edges, ports and contract version are registered in
-`interface-register.md`; `tools/dag.toml` enforces the graph. Any crate name or
-port not in the register is a defect. The file table above is unchanged.
+`interface-register.md`; `tools/dag.toml` enforces the graph via
+`cargo run -p xtask -- dag-check`. Any crate name or port not in the register is
+a defect. The file table above now indexes `interface-register.md` and
+`firmware-ota.md` (audit #20).

@@ -1,9 +1,10 @@
 //! `CollectorSink`: the evaluation adapter for the `Sink` seam.
 //!
-//! It captures every emitted [`Event`] for scoring while remaining a real
-//! adapter behind the same trait the production sinks implement
-//! (`testing.md` §1, `architecture.md` §6). The captured events are shared, so a
-//! test can hand a clone to the core and keep reading after every `step`.
+//! It captures every emitted [`Event`](aquila_types::Event) for scoring while
+//! remaining a real adapter behind the same trait the production sinks
+//! implement (`architecture.md` §6, `interface-register.md`). The captured
+//! events are shared, so a caller can hand a clone to the sensing core and keep
+//! reading after every step.
 
 use std::sync::{Arc, Mutex};
 

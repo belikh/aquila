@@ -1,0 +1,13 @@
+# Tracked-path patterns forbidden by `xtask check-scaffolding`
+# (`repository-tooling.md` §8). One pattern per line; `#` starts a comment.
+# A trailing `*` is a prefix wildcard; a bare directory name matches the
+# directory and everything under it.
+.claude
+.claude-flow
+.swarm
+CLAUDE.md
+AGENTS.local.md
+.cursor
+.aider*
+.continue
+.specstory

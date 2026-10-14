@@ -19,7 +19,6 @@ mod generator;
 mod metrics;
 mod models;
 mod scoring;
-mod sink;
 mod virtual_node;
 
 #[cfg(test)]
@@ -35,5 +34,8 @@ pub use scoring::{
     home_presence_f1, presence_f1, room_attribution_accuracy, torso_pck20, torso_span, vitals_mae,
     vitals_reference, window_index, FloorRooms, PckScore, PresenceScore, TorsoPoint,
 };
-pub use sink::CollectorSink;
+// The evaluation `Sink` adapter has one canonical home — `aquila-evaluation`
+// (`interface-register.md` "Seams and their adapters"); testkit re-exports it so
+// existing tests need not change.
+pub use aquila_evaluation::CollectorSink;
 pub use virtual_node::{VirtualNode, VirtualNodeConfig, VirtualNodeError};

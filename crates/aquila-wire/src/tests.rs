@@ -597,6 +597,11 @@ fn generated_c_header_pins_the_layout() {
         "#define AQ_OP_SYNC_ECHO 0x09u",
         "#define AQ_CSI_DATA_PORT 9100u",
         "_Static_assert(sizeof(aq_csi_header_t) == AQ_CSI_HEADER_LEN",
+        "#define AQ_CSI_FRAME_SIZE(n_subcarriers)",
+        "float payload[];",
+        "#define AQ_CSI_AMPLITUDE(body)",
+        "#define AQ_CSI_PHASE(body)",
+        "_Static_assert(offsetof(aq_csi_body_t, payload) == AQ_CSI_BODY_FIXED_LEN",
     ] {
         assert!(
             header.contains(needle),
