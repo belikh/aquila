@@ -125,7 +125,7 @@ pub(crate) fn run(options: &Options) -> Result<(), CaptureError> {
             git_sha: concat!("aquila-capture/", env!("CARGO_PKG_VERSION")).to_string(),
             dirty: false,
         },
-        config_hash: [0u8; 32],
+        config_hash: None,
         seed: 0,
         artifacts: vec![],
         ground_truth: None,

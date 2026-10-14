@@ -30,6 +30,13 @@ pub enum Authority {
     Measured,
     /// Produced from committed recorded fixtures or replay (sim-first).
     Replayed,
+    /// Produced from a **synthetic** fixture generator, never real hardware.
+    ///
+    /// This is the honest provenance for a headline metric measured only against
+    /// a deterministic simulator: the number is real and reproducible, but it is
+    /// not hardware evidence and cannot be read as a real-world accuracy claim
+    /// (`evaluation.md` §5, `testing.md`; `sister-issues-core.md` S4, S5).
+    Synthetic,
     /// Computed from other measurements, for example a mutation score.
     Derived,
     /// Brought in from an external system, for example an OpenTelemetry feed.

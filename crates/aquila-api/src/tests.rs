@@ -24,7 +24,7 @@ fn topology() -> Topology {
     let room = slug("living-room");
     let firmware = FirmwareRef {
         version: "test".to_string(),
-        sha256: [0u8; 32],
+        sha256: None,
     };
     Topology::load(aquila_types::Topology {
         home: Home {

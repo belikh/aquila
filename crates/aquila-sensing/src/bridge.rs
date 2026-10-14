@@ -1,8 +1,8 @@
 //! The contract ↔ signal-representation bridge.
 //!
 //! `aquila-sensing` is the boundary where the one canonical contract frame
-//! (`aquila_types::CsiFrame`: ordered `amplitude`/`phase` arrays) meets
-//! `aquila-signal`'s internal conditioning representation
+//! (`aquila_types::CsiFrame`: a raw signed int8 I/Q sample, imaginary-first)
+//! meets `aquila-signal`'s internal conditioning representation
 //! (`aquila_signal::ComplexFrame`: per-subcarrier `Complex32` bins). The
 //! conversion itself lives in `aquila-signal` as `decode_csi`; this module is
 //! the thin envelope-mapping adapter so `aquila-signal` need not know about
@@ -20,8 +20,9 @@ use aquila_types::CsiEnvelope;
 ///
 /// # Errors
 ///
-/// Returns [`DecodeError`] when the contract frame carries no subcarriers,
-/// mismatched `amplitude`/`phase` lengths, or a non-finite sample.
+/// Returns [`DecodeError::EmptyFrame`] when the contract frame carries no
+/// subcarriers, or [`DecodeError::OddIqLength`] when its interleaved I/Q sample
+/// has an odd length.
 pub fn to_signal_frame(frame: &aquila_types::CsiFrame) -> Result<ComplexFrame, DecodeError> {
     aquila_signal::decode_csi(frame)
 }

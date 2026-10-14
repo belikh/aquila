@@ -184,6 +184,11 @@ pub struct NodeFeatures {
     pub amplitude_rms: Vec<f32>,
     /// Per-usable-subcarrier motion energy, in usable order.
     pub motion_energy: Vec<f32>,
+    /// Per-usable-subcarrier noise-floor power, in usable order: the out-of-band
+    /// residual power the motion bandpass left behind. This is the real noise
+    /// term behind the SNR subcarrier selection (`signal.md` §4.11,
+    /// `sister-issues-core.md` S6); it is never a hardcoded zero.
+    pub noise_power: Vec<f32>,
     /// Breathing-rate candidates over time.
     pub breathing: Vec<BvpSample>,
     /// Heart-rate candidates over time.
@@ -421,6 +426,7 @@ pub fn process(
 
         let mut amplitude_rms = Vec::with_capacity(n_use);
         let mut motion_energy = Vec::with_capacity(n_use);
+        let mut noise_power = Vec::with_capacity(n_use);
         let mut motion_series: Vec<Vec<f32>> = Vec::with_capacity(n_use);
         for b in 0..n_use {
             let amp_grid = resample_uniform(&amp_series[b], &t_us, cfg.uniform_fs_hz)
@@ -431,13 +437,18 @@ pub fn process(
             let motion = bandpass(&phase_grid, &motion_coeffs);
             let energy: f32 = motion_features(&motion, cfg.stft_window).into_iter().sum();
             motion_energy.push(energy);
+            // A real per-subcarrier noise floor: the out-of-band residual power
+            // of the phase series, i.e. what the motion bandpass left behind
+            // (`sister-issues-core.md` S6). The old code passed a hardcoded zero,
+            // so the documented SNR score degenerated to raw band power.
+            noise_power.push(residual_noise_power(&phase_grid, &motion));
             motion_series.push(motion);
         }
 
         let matrix = SubcarrierFeatureMatrix::new(
             usable.clone(),
             motion_energy.clone(),
-            vec![0.0; n_use],
+            noise_power.clone(),
         );
         let selected = select_subcarriers(&matrix, cfg.select_k).selected;
 
@@ -481,6 +492,7 @@ pub fn process(
             selected,
             amplitude_rms,
             motion_energy,
+            noise_power,
             breathing,
             heart,
             vitals,
@@ -492,4 +504,32 @@ pub fn process(
         anomalies,
         calibration: cal.state,
     })
+}
+
+/// The out-of-band residual power of a phase series, a real per-subcarrier
+/// noise-floor estimate (`signal.md` §4.11).
+///
+/// `residual = signal − filtered` is what the motion bandpass left behind; its
+/// variance is the power the signal band does not explain, so `band / noise` in
+/// [`select_subcarriers`] is a genuine SNR, not a raw-power fallback.
+#[must_use]
+fn residual_noise_power(signal: &[f32], filtered: &[f32]) -> f32 {
+    let n = signal.len().min(filtered.len());
+    if n == 0 {
+        return 0.0;
+    }
+    let mut mean = 0.0_f64;
+    let mut sumsq = 0.0_f64;
+    for i in 0..n {
+        let residual = f64::from(signal[i] - filtered[i]);
+        mean += residual;
+        sumsq += residual * residual;
+    }
+    let mean = mean / n as f64;
+    let variance = (sumsq / n as f64) - mean * mean;
+    if variance.is_finite() && variance > 0.0 {
+        variance as f32
+    } else {
+        0.0
+    }
 }

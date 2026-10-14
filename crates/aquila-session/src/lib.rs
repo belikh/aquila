@@ -40,7 +40,7 @@
 //!     ended_unix_ms: None,
 //!     contract: ContractVersion::new(1, 0),
 //!     build: BuildId { git_sha: "deadbeef".into(), dirty: false },
-//!     config_hash: [0; 32],
+//!     config_hash: None,
 //!     seed: 1,
 //!     artifacts: vec![],
 //!     ground_truth: None,

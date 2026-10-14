@@ -84,7 +84,7 @@ fn session_bytes(frames: &[CsiFrame]) -> Vec<u8> {
             git_sha: "deadbeef".into(),
             dirty: false,
         },
-        config_hash: [0u8; 32],
+        config_hash: None,
         seed: 7,
         artifacts: vec![],
         ground_truth: None,

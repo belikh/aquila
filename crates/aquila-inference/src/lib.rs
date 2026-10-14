@@ -65,7 +65,8 @@ pub use model::{
     WeightsTrained,
 };
 pub use seam::{
-    PoseModel, PoseOutcome, PoseRequest, VitalsModel, VitalsRequest, DEFAULT_MAX_BATCH_SIZE,
+    PoseModel, PoseNodeSeries, PoseOutcome, PoseRequest, VitalsModel, VitalsRequest,
+    DEFAULT_MAX_BATCH_SIZE,
 };
 
 #[cfg(feature = "onnx")]

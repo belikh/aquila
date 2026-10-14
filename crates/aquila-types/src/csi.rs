@@ -33,6 +33,34 @@ use crate::time::TimeSpan;
 /// is a count-per-unit constant, not a data-dependent gain.
 pub const IQ_COUNTS_PER_UNIT: f32 = 64.0;
 
+/// The nominal centre frequency of an 802.11 channel, in MHz.
+///
+/// This is the one channel→frequency map (`sister-issues-core.md` S12). The
+/// 2.4 GHz band is `2407 + 5·channel` for channels 1–13, but channel 14 is
+/// 2484 MHz, **not** the linear `2407 + 5·14 = 2477`. The 5 GHz band is
+/// `5000 + 5·channel` for the standard UNII channels. `Band::Unknown` and
+/// channel 0 map to 0 (unknown), never a fabricated frequency.
+#[must_use]
+pub const fn channel_centre_freq_mhz(band: Band, channel: u8) -> u32 {
+    match band {
+        Band::B2G4 => {
+            if channel == 14 {
+                2484
+            } else {
+                2407 + channel as u32 * 5
+            }
+        }
+        Band::B5G => {
+            if channel == 0 {
+                0
+            } else {
+                5000 + channel as u32 * 5
+            }
+        }
+        Band::Unknown => 0,
+    }
+}
+
 /// The capture metadata for one CSI frame (fields other than the raw sample).
 ///
 /// The number of subcarriers is **derived** from `i_q.len() / 2` and is not a

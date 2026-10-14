@@ -45,7 +45,10 @@ mod vitals;
 mod tests;
 
 pub use calibration::{Baseline, BaselineScope, Calibration, ClockModel, PairCorrection};
-pub use csi::{ClockGrid, CsiEnvelope, CsiFrame, SensingFrame, SensingScope, IQ_COUNTS_PER_UNIT};
+pub use csi::{
+    channel_centre_freq_mhz, ClockGrid, CsiEnvelope, CsiFrame, SensingFrame, SensingScope,
+    IQ_COUNTS_PER_UNIT,
+};
 pub use detection::{
     Detection, DetectionKind, DetectionScope, DetectionValue, Event, EventKind, EventPayload,
     EventScope, MAX_COUNT_V1,
@@ -60,7 +63,10 @@ pub use ids::{
 pub use ledger::{
     DatasetRef, EnvFingerprint, Interval, LedgerRecord, MetricKind, ModelRef, Split,
 };
-pub use pose::{Keypoint, KeypointId, Pose, KEYPOINT_COUNT};
+pub use pose::{
+    Keypoint, KeypointId, Pose, KEYPOINT_COUNT, TORSO_DITHER_BAND_HZ,
+    TORSO_DITHER_MIN_SEPARATION_HZ, TORSO_SCATTERER_COUNT,
+};
 pub use primitives::{
     Band, Confidence, NodeQuality, PhyFlags, Quality, SecondaryChannel, Witness,
 };

@@ -81,7 +81,8 @@ pub use fusion::{
     NodeTorsoRanges, TorsoEstimate, TorsoGeometry, TORSO_KEYPOINT_SCATTERS,
 };
 pub use pose::{
-    estimate_room_pose, extract_torso_ranges, PoseNodeInput, DEFAULT_TORSO_DITHER_HZ,
+    estimate_room_pose, extract_torso_ranges, DitherSearch, DspPoseModel, PoseNodeInput,
+    DEFAULT_DITHER_SEARCH_STEP_HZ,
 };
 pub use sink::Sink;
 pub use time::{NodeClockFit, TimeSync};

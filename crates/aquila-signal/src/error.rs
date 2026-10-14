@@ -23,8 +23,8 @@ pub enum DecodeError {
     /// The raw length in bytes is odd, so it cannot be whole `I/Q` pairs.
     #[error("CSI record length {0} is odd")]
     OddLength(usize),
-    /// The raw length exceeds the 612-byte on-air maximum.
-    #[error("CSI record length {0} exceeds the 612-byte maximum")]
+    /// The raw length exceeds the 1428-byte on-air maximum (714 subcarriers).
+    #[error("CSI record length {0} exceeds the 1428-byte maximum")]
     TooLarge(usize),
     /// The number of decoded bins does not match the layout.
     #[error("CSI record carries {found} bins, expected {expected}")]

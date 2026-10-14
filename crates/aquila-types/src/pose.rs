@@ -14,6 +14,28 @@ use crate::primitives::Witness;
 /// The number of keypoints in the COCO-17 schema.
 pub const KEYPOINT_COUNT: usize = 17;
 
+/// The number of coarse-pose torso scatterers: left and right shoulder, left
+/// and right hip, in that order.
+pub const TORSO_SCATTERER_COUNT: usize = 4;
+
+/// The torso pose-dither band, in hertz, `[lo, hi]`.
+///
+/// The synthetic coarse-pose fixture gives each torso scatterer its own radial
+/// micro-motion frequency, drawn **per seed** from this band. The band (and the
+/// scatterer count) is the only pose-dither knowledge shared between the
+/// simulator that injects the signature and the estimator that recovers it:
+/// the estimator must *search* the band and find the actual peaks, so the pose
+/// test is not keyed to a private per-scatterer constant. This lives in the
+/// level-0 contract crate so the two sides share one declaration
+/// (`sister-issues-core.md` S4, S7).
+pub const TORSO_DITHER_BAND_HZ: [f64; 2] = [2.5, 9.5];
+
+/// The minimum separation between two torso-scatterer dither frequencies, in
+/// hertz, so a band search can resolve them as distinct peaks. The simulation
+/// draws frequencies at least this far apart, and the estimator enforces the
+/// same separation when it selects peaks.
+pub const TORSO_DITHER_MIN_SEPARATION_HZ: f64 = 0.7;
+
 /// A named body joint within a pose. The fixed COCO-17 order; discriminants are
 /// the wire order and must never be renumbered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

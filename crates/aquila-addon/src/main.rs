@@ -189,7 +189,7 @@ fn topology_for_scene(script: &SceneScript) -> Topology {
     let floor: Slug = Slug("ground".to_string());
     let firmware = FirmwareRef {
         version: "addon".to_string(),
-        sha256: [0u8; 32],
+        sha256: None,
     };
     let mut rooms: Vec<RoomId> = Vec::new();
     for node in &script.nodes {

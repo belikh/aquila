@@ -31,7 +31,7 @@ use aquila_wire::{decode_datagram, encode_datagram};
 
 use crate::error::SimError;
 use crate::rng::{signed4, unit4};
-use crate::scene::{SceneScript, SPEED_OF_LIGHT_MPS};
+use crate::scene::{Body, SceneScript, SPEED_OF_LIGHT_MPS};
 
 /// The scattering strength of each dynamic term (torso/limbs).
 const ACTOR_SCATTER: f64 = 0.7;
@@ -41,23 +41,35 @@ const ACTOR_SCATTER: f64 = 0.7;
 /// single point is weaker than the point-actor [`ACTOR_SCATTER`].
 const ACTOR_TORSO_SCATTER: f64 = 0.5;
 
-/// The int8 counts one unit of synthesised complex CSI maps to.
+/// The modelled esp-csi fixed-point gain: the int8 counts one unit of the
+/// synthesised linear field maps to.
 ///
-/// The simulator synthesises `H_k` in the core's working linear unit and then
-/// **quantises** it to the raw signed int8 `I/Q` the hardware produces
-/// (ADR-0005), so the whole pipeline — including the core's `int8 → f32`
-/// derivation — is exercised by tests. The scale is the reference node's
-/// fixed-point gain: it matches [`aquila_types::IQ_COUNTS_PER_UNIT`], large
-/// enough that a quiet breather's sub-radian phase modulation survives
-/// quantisation, and small enough that a multi-scatterer scene does not
-/// saturate the int8 range.
-fn iq_scale() -> f64 {
-    f64::from(aquila_types::IQ_COUNTS_PER_UNIT)
-}
+/// The real receiver selects a gain so a typical frame fills a useful fraction
+/// of the int8 range without clipping (ADR-0005). The simulator models that as a
+/// **fixed gain sized to the scene's bounded field**: baseline and scatterers
+/// sum coherently to at most ~3.5 units, so a gain of 28 maps the busiest frame
+/// to ~100 counts and leaves headroom. This replaces the old gain that drove the
+/// composite field past 127 and silently saturated (`sister-issues-core.md`
+/// S10). The core divides by `aquila_types::IQ_COUNTS_PER_UNIT` regardless, so
+/// the modelled gain sets the absolute amplitude scale, never the derived phase.
+const SIM_IQ_SCALE: f64 = 28.0;
 
-/// Quantise one synthesised complex component to the raw int8 the node emits.
-fn quantise_i8(value: f64) -> i8 {
-    (value * iq_scale()).round().clamp(-128.0, 127.0) as i8
+/// The modelled receiver noise floor, in dBm. The reported RSSI is this floor
+/// plus the frame's signal-to-noise ratio, so it is derived from a link budget
+/// rather than a tuned clamp of the quantised mean (`sister-issues-core.md`
+/// S10).
+const SIM_NOISE_FLOOR_DBM: f64 = -95.0;
+
+/// The int8 magnitude at which the quantiser would clip; reaching it is flagged
+/// on the frame rather than left silent.
+const IQ_CLIP_LIMIT: f64 = 127.0;
+
+/// Quantise one synthesised complex component to the raw int8 the node emits,
+/// reporting whether the modelled gain drove it past the int8 range.
+fn quantise_i8(value: f64) -> (i8, bool) {
+    let scaled = (value * SIM_IQ_SCALE).round();
+    let clipped = scaled.abs() > IQ_CLIP_LIMIT;
+    (scaled.clamp(-128.0, 127.0) as i8, clipped)
 }
 
 // Stream tags keep independent draws independent.
@@ -104,6 +116,9 @@ impl SimConfig {
 pub struct SimulatorSource {
     script: SceneScript,
     config: SimConfig,
+    /// The per-actor pose bodies with the seed-drawn dither frequencies applied
+    /// (`sister-issues-core.md` S4). `None` for a non-body actor.
+    bodies: Vec<Option<Body>>,
     total_ticks: usize,
     total_frames: usize,
     cursor: usize,
@@ -120,9 +135,23 @@ impl SimulatorSource {
         script.validate()?;
         let total_ticks = total_ticks(&script);
         let total_frames = total_ticks * script.nodes.len();
+        // Draw each body's scatterer dither frequencies per seed, so the
+        // synthetic pose signature is unknown to the estimator (S4).
+        let bodies = script
+            .actors
+            .iter()
+            .enumerate()
+            .map(|(index, actor)| {
+                actor
+                    .body
+                    .as_ref()
+                    .map(|body| body.randomised_dither(config.seed, index))
+            })
+            .collect();
         Ok(Self {
             script,
             config,
+            bodies,
             total_ticks,
             total_frames,
             cursor: 0,
@@ -284,20 +313,33 @@ impl SimulatorSource {
         let t = tick as f64 / self.script.tick_hz;
         let n = self.script.subcarriers;
         let centre_hz = centre_freq_hz(self.script.band, self.script.channel);
+        let noise_scale = self.script.noise_amplitude * self.script.nodes[node_index].noise_scale;
         let mut i_q = Vec::with_capacity(2 * n);
+        let mut field_power = 0.0_f64;
+        let mut saturated = false;
 
         for k in 0..n {
             let f_rf = centre_hz
                 + (k as f64 - n as f64 / 2.0) * self.script.subcarrier_spacing_hz;
             let (mut re, mut im) = self.baseline(node_index, k);
-            for actor in &self.script.actors {
+            for (index, actor) in self.script.actors.iter().enumerate() {
                 if actor.room != node.room || !actor.present(t) {
                     continue;
                 }
-                if let Some(paths) = actor.torso_scatter_path_lengths_m(node.pos_m, t) {
+                if let Some(body) = self.bodies[index].as_ref() {
                     // A body-carrying actor scatters from its four torso
-                    // keypoints, each with its own radial dither, so the CSI
-                    // carries a pose-correlated signature.
+                    // keypoints, each with its own seed-drawn radial dither, so
+                    // the CSI carries a pose-correlated signature.
+                    let common = actor
+                        .breathing
+                        .as_ref()
+                        .map_or(0.0, |rhythm| rhythm.displacement_m(t))
+                        + actor
+                            .heart
+                            .as_ref()
+                            .map_or(0.0, |rhythm| rhythm.displacement_m(t));
+                    let paths =
+                        body.scatter_path_lengths_m(actor.position_at(t), node.pos_m, t, common);
                     for d in paths {
                         let theta = -TAU * f_rf * d / SPEED_OF_LIGHT_MPS;
                         re += ACTOR_TORSO_SCATTER * theta.cos();
@@ -313,10 +355,16 @@ impl SimulatorSource {
             re += self.noise(node_index, tick, k, TAG_NOISE_RE);
             im += self.noise(node_index, tick, k, TAG_NOISE_IM);
 
+            // The unquantised field power, for the link-budget RSSI.
+            field_power += re * re + im * im;
+
             // Model the hardware: quantise the complex sample to signed int8,
             // imaginary-first (Q then I), matching the esp-csi wire order.
-            i_q.push(quantise_i8(im));
-            i_q.push(quantise_i8(re));
+            let (q, q_clipped) = quantise_i8(im);
+            let (i, i_clipped) = quantise_i8(re);
+            saturated |= q_clipped || i_clipped;
+            i_q.push(q);
+            i_q.push(i);
         }
 
         let first_word_invalid = self.is_impaired(node_index, tick);
@@ -329,22 +377,28 @@ impl SimulatorSource {
             i_q[1] = 0;
         }
 
-        // Derive the mean amplitude from the quantised sample, in unit scale, so
-        // the synthetic RSSI tracks the payload the core will actually see.
-        let sum_amplitude: f64 = (0..n)
-            .map(|k| {
-                let i = f64::from(i_q[2 * k]);
-                let q = f64::from(i_q[2 * k + 1]);
-                (i * i + q * q).sqrt()
-            })
-            .sum();
-        let mean = sum_amplitude / (n as f64 * iq_scale());
-        let rssi = (-90.0 + 15.0 * mean).clamp(-120.0, -10.0).round() as i8;
-        let noise_floor = (f64::from(rssi) - 30.0).clamp(-120.0, -10.0).round() as i8;
+        // The reported RSSI comes from a link budget: the modelled noise floor
+        // plus the frame's signal-to-noise ratio, derived from the *unquantised*
+        // field power, never a tuned clamp of the quantised mean
+        // (`sister-issues-core.md` S10).
+        let mean_power = field_power / n as f64;
+        let noise_power = 2.0 * noise_scale * noise_scale;
+        let snr_linear = if noise_power > 0.0 {
+            (mean_power / noise_power).max(1.0)
+        } else {
+            1.0
+        };
+        let rssi =
+            (SIM_NOISE_FLOOR_DBM + 10.0 * snr_linear.log10()).clamp(-120.0, -10.0).round() as i8;
+        let noise_floor = SIM_NOISE_FLOOR_DBM.clamp(-120.0, -10.0).round() as i8;
 
         let mut phy = PhyFlags::HT | PhyFlags::SHORT_GI;
         if self.script.bandwidth_mhz >= 40 {
             phy |= PhyFlags::SECONDARY_PRESENT;
+        }
+        if saturated {
+            // Never silently clip: mark frames the modelled gain could not fit.
+            phy |= PhyFlags::IQ_SATURATED;
         }
 
         CsiFrame {
@@ -411,12 +465,7 @@ impl CsiSource for SimulatorSource {
 /// synthesised CSI carries the physical `2π·f·Δd/c` sensitivity. It mirrors the
 /// transport seam's band/channel mapping.
 fn centre_freq_hz(band: Band, channel: u8) -> f64 {
-    let mhz = match band {
-        Band::B2G4 => 2_407.0 + f64::from(channel) * 5.0,
-        Band::B5G => 5_000.0 + f64::from(channel) * 5.0,
-        Band::Unknown => 0.0,
-    };
-    mhz * 1e6
+    f64::from(aquila_types::channel_centre_freq_mhz(band, channel)) * 1e6
 }
 
 /// The number of ticks a scene covers.
@@ -597,12 +646,12 @@ fn build_session(script: &SceneScript, config: &SimConfig) -> Session {
             git_sha: "simulated".into(),
             dirty: false,
         },
-        config_hash: [0u8; 32],
+        config_hash: None,
         seed: config.seed,
         artifacts: vec![],
         ground_truth: Some(GroundTruthRef {
             path: "ground_truth.jsonl".into(),
-            sha256: [0u8; 32],
+            sha256: None,
             kind: GtKind::Synthetic,
         }),
         notes: "Synthesised by aquila-simulator".into(),

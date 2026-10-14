@@ -12,8 +12,8 @@
 //! floor on the calibrated logit scale.
 
 use crate::calibration::CalibrationArtifact;
-use crate::fusion::{TorsoGeometry, TORSO_KEYPOINT_SCATTERS};
-use crate::pose::DEFAULT_TORSO_DITHER_HZ;
+use crate::fusion::TorsoGeometry;
+use crate::pose::DitherSearch;
 
 /// Provenance recorded on every [`Measurement`](aquila_metrics::Measurement) the
 /// core writes.
@@ -60,7 +60,15 @@ pub struct SensingConfig {
     /// evidence is odds 1:1. A person's motion and breathing make the CSI
     /// amplitude fluctuate above the static multipath, so that variability is
     /// the presence cue; a raw mean-amplitude threshold is not scale-robust.
-    pub presence_motion_threshold: f64,
+    ///
+    /// `None` (the uncalibrated default) means the threshold is **not known**:
+    /// the core refuses to decide presence and reports `p = 0.5` ("unknown"),
+    /// rather than guessing with a synthetic-tuned constant
+    /// (`sister-issues-core.md` S9). A value is an explicitly **declared**
+    /// baseline, which the calibrated path supplies per node from the learned
+    /// empty-home baseline; a synthetic fixture declares its own and is graded
+    /// accordingly.
+    pub presence_motion_threshold: Option<f64>,
     /// The log-odds scale of the presence motion: one unit of amplitude
     /// standard deviation above the threshold adds `1 / presence_motion_scale`
     /// logits.
@@ -121,10 +129,11 @@ pub struct SensingConfig {
     pub pose_enabled: bool,
     /// The minimum contributing frames per node before a pose is attempted.
     pub pose_min_frames: usize,
-    /// The per-scatterer pose-dither frequencies, in hertz, in torso scatterer
-    /// order (left shoulder, right shoulder, left hip, right hip). They must
-    /// match the synthetic signature the observed CSI carries.
-    pub pose_dither_hz: [f64; TORSO_KEYPOINT_SCATTERS],
+    /// The pose-dither **search band**: the estimator does not know the
+    /// scatterer dither frequencies; it searches this band for the dominant
+    /// peaks (S4). The simulation draws its frequencies from the same shared
+    /// band, per seed.
+    pub pose_dither_search: DitherSearch,
     /// The rigid torso geometry the coarse-pose combination fits.
     pub pose_geometry: TorsoGeometry,
     /// The calibration quality `q_n` attributed to a node that carries no
@@ -148,14 +157,11 @@ impl Default for SensingConfig {
             grid_interval_ns: 50_000_000,
             grid_slots: 20,
             min_frames_per_node: 3,
-            // The motion threshold is tuned to the deterministic simulator's
-            // amplitude scale; it is a starting point, not a claim. The cue is
-            // the window's amplitude variability: a moving occupant measures
-            // ~0.22 and an empty room ~0.03 (the physical simulator of
-            // `capture-and-firmware.md` §7.2), so 0.10 sits between them.
-            // Global calibration (slice 3) removes the need for an absolute
-            // per-home level.
-            presence_motion_threshold: 0.10,
+            // No baseline means no decision: an uncalibrated core reports
+            // "unknown", never a synthetic-tuned guess (`sister-issues-core.md`
+            // S9). Global calibration (slice 3), or an explicitly declared
+            // baseline for a synthetic fixture, supplies the threshold.
+            presence_motion_threshold: None,
             presence_motion_scale: 0.03,
             prior_logit: 0.0,
             logit_clamp: 4.0,
@@ -174,7 +180,7 @@ impl Default for SensingConfig {
             calibration_scale_floor_db: 1.0,
             pose_enabled: false,
             pose_min_frames: 8,
-            pose_dither_hz: DEFAULT_TORSO_DITHER_HZ,
+            pose_dither_search: DitherSearch::default(),
             pose_geometry: TorsoGeometry::adult(),
             pose_uncalibrated_quality: 0.0,
             vitals_floor_min_confidence: 0.0,
@@ -205,7 +211,6 @@ impl SensingConfig {
             return Err(bad("min_frames_per_node must be at least 1"));
         }
         for (name, value) in [
-            ("presence_motion_threshold", self.presence_motion_threshold),
             ("presence_motion_scale", self.presence_motion_scale),
             ("prior_logit", self.prior_logit),
             ("logit_clamp", self.logit_clamp),
@@ -216,6 +221,11 @@ impl SensingConfig {
         ] {
             if !value.is_finite() {
                 return Err(bad(&format!("{name} must be finite")));
+            }
+        }
+        if let Some(threshold) = self.presence_motion_threshold {
+            if !threshold.is_finite() {
+                return Err(bad("presence_motion_threshold must be finite when declared"));
             }
         }
         if self.calibration_scale_floor_db <= 0.0 {
@@ -257,12 +267,11 @@ impl SensingConfig {
             if self.pose_min_frames < 4 {
                 return Err(bad("pose_min_frames must be at least 4"));
             }
-            for (j, frequency) in self.pose_dither_hz.iter().enumerate() {
-                if !frequency.is_finite() || *frequency <= 0.0 {
-                    return Err(bad(&format!(
-                        "pose_dither_hz[{j}] must be finite and positive"
-                    )));
-                }
+            if !self.pose_dither_search.is_valid() {
+                return Err(bad(
+                    "pose_dither_search must be a finite, positive-width band with a \
+                     finite, non-negative minimum separation and a positive step",
+                ));
             }
             let geometry = &self.pose_geometry;
             for (name, value) in [

@@ -22,7 +22,7 @@ fn demo_session() -> Session {
             git_sha: "deadbeefdeadbeef".into(),
             dirty: false,
         },
-        config_hash: [0u8; 32],
+        config_hash: None,
         seed: 42,
         artifacts: vec![],
         ground_truth: None,

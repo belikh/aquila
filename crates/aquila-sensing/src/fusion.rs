@@ -186,7 +186,9 @@ pub fn node_fusion_weight(calibration_quality: f64, clock_health: f64) -> f64 {
 
 /// The number of torso scatterer keypoints the coarse-pose model places, in
 /// scatterer order: left shoulder, right shoulder, left hip, right hip.
-pub const TORSO_KEYPOINT_SCATTERS: usize = 4;
+/// Re-exported from the level-0 contract crate so the simulator, fusion and the
+/// estimator share one declaration (`sister-issues-core.md` S7).
+pub const TORSO_KEYPOINT_SCATTERS: usize = aquila_types::TORSO_SCATTERER_COUNT;
 
 /// The rigid planar torso geometry the coarse-pose fusion fits.
 #[derive(Debug, Clone, Copy, PartialEq)]

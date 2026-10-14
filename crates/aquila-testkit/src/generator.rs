@@ -108,7 +108,7 @@ pub fn topology_for(script: &SceneScript) -> Topology {
 
     let firmware = FirmwareRef {
         version: "tracer".to_string(),
-        sha256: [0u8; 32],
+        sha256: None,
     };
 
     Topology {
@@ -188,7 +188,7 @@ pub fn topology_for_floors(script: &SceneScript, floors: &[FloorPlan]) -> Topolo
     let home = script.home.clone();
     let firmware = FirmwareRef {
         version: "tracer".to_string(),
-        sha256: [0u8; 32],
+        sha256: None,
     };
 
     let mut floor_records: Vec<Floor> = floors

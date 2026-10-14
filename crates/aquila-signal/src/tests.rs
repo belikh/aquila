@@ -63,7 +63,7 @@ fn decode_d1_structural_accept_rule() {
             let err = result.expect_err("should reject").clone();
             let expected = if len == 0 {
                 DecodeError::EmptyRecord
-            } else if len > 612 {
+            } else if len > 1428 {
                 DecodeError::TooLarge(len)
             } else if len % 2 == 1 {
                 DecodeError::OddLength(len)
@@ -703,6 +703,36 @@ fn process_packs_the_canonical_feature_vector() {
     );
     assert!(!vector.is_empty());
     assert!(features.feature_vector(NodeId(999)).is_none());
+}
+
+#[test]
+fn process_computes_a_real_noise_floor() {
+    let cfg = Config::default_reference(SubcarrierLayout::ht20());
+    let cal = Calibration {
+        per_node: vec![Complex32::ONE; 64],
+        state: CalibrationState::Calibrated,
+    };
+    // A chunk whose bins alternate sign each frame: pure high-frequency content
+    // the motion bandpass removes, so the out-of-band residual is non-zero.
+    let chunk: Vec<ComplexFrame> = (0..16u32)
+        .map(|k| ComplexFrame {
+            meta: meta(1, k, u64::from(k) * 50_000),
+            bins: (0..64)
+                .map(|b| {
+                    let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+                    Complex32::new(1.0 + sign * 0.5 * (b as f32 * 0.01), sign * 0.5)
+                })
+                .collect(),
+            flags: FrameFlags::default(),
+        })
+        .collect();
+    let features = process(&chunk, &cal, &cfg).unwrap();
+    let node = &features.nodes[0];
+    assert_eq!(node.noise_power.len(), node.motion_energy.len());
+    assert!(
+        node.noise_power.iter().any(|p| *p > 0.0),
+        "the per-subcarrier noise floor must be computed from the data, not hardcoded zero (S6)"
+    );
 }
 
 #[test]

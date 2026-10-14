@@ -136,7 +136,7 @@ fn topology_node(id: u16, room_id: &str) -> Node {
         device: DeviceType::Esp32S3,
         firmware: FirmwareRef {
             version: "1.0.0".to_string(),
-            sha256: [7u8; 32],
+            sha256: Some([7u8; 32]),
         },
         pos_room_m: Some([1.0, 2.0, 2.5]),
         installed_unix_ms: 1_700_000_000_000,
@@ -175,7 +175,7 @@ fn session() -> Session {
             git_sha: "38001ab".to_string(),
             dirty: false,
         },
-        config_hash: [1u8; 32],
+        config_hash: Some([1u8; 32]),
         seed: 7,
         artifacts: vec![SessionArtifact {
             path: "stream.bin".to_string(),
@@ -184,7 +184,7 @@ fn session() -> Session {
         }],
         ground_truth: Some(GroundTruthRef {
             path: "ground_truth.jsonl".to_string(),
-            sha256: [3u8; 32],
+            sha256: Some([3u8; 32]),
             kind: GtKind::Manual,
         }),
         notes: "fixture".to_string(),

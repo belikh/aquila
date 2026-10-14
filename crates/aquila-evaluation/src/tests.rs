@@ -64,7 +64,7 @@ fn topology_for_scene(script: &SceneScript) -> Topology {
     let floor = slug("ground");
     let firmware = FirmwareRef {
         version: "eval".to_string(),
-        sha256: [0u8; 32],
+        sha256: None,
     };
     let mut rooms: Vec<RoomId> = Vec::new();
     for node in &script.nodes {
@@ -144,7 +144,13 @@ fn scores_a_simulated_run() {
         None,
         None,
         topology_for_scene(&script),
-        SensingConfig::default(),
+        SensingConfig {
+            // A declared synthetic-fixture baseline, so the deterministic
+            // generator drives presence decisions (`sister-issues-core.md` S9).
+            presence_motion_threshold: Some(0.04375),
+            presence_motion_scale: 0.013125,
+            ..SensingConfig::default()
+        },
     )
     .expect("valid core");
 

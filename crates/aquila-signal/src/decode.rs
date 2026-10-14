@@ -13,6 +13,17 @@ use aquila_types::{Band, CsiFrame as ContractFrame, NodeId};
 
 use crate::error::DecodeError;
 
+/// The largest raw CSI record the record-level decoder accepts, in bytes.
+///
+/// Derived from the wire's `MAX_SUBCARRIERS` (714), two signed int8 bytes per
+/// subcarrier (`capture-and-firmware.md` §5.1). The superseded 612-byte cap
+/// (`sister-issues-core.md` S13) came from the old 56-byte header layout and
+/// rejected a legal 714-subcarrier frame. `aquila-signal` cannot depend on
+/// `aquila-wire` in the DAG, so the value is mirrored and pinned by the boundary
+/// test.
+const MAX_RECORD_BYTES: usize = 1428;
+
+
 /// Channel width; determines the expected subcarrier count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Bandwidth {
@@ -215,11 +226,7 @@ pub struct ComplexFrame {
 /// derives the same nominal label the transport seam always used. It is never
 /// read by the DSP (`signal.md` §2).
 fn centre_freq_hz(band: Band, channel: u8) -> u32 {
-    match band {
-        Band::B2G4 => 2_407 + u32::from(channel) * 5,
-        Band::B5G => 5_000 + u32::from(channel) * 5,
-        Band::Unknown => 0,
-    }
+    aquila_types::channel_centre_freq_mhz(band, channel)
 }
 
 /// Decode the canonical contract frame into the conditioning representation.
@@ -307,7 +314,7 @@ pub fn decode_record(
     if raw.is_empty() {
         return Err(DecodeError::EmptyRecord);
     }
-    if raw.len() > 612 {
+    if raw.len() > MAX_RECORD_BYTES {
         return Err(DecodeError::TooLarge(raw.len()));
     }
     if !raw.len().is_multiple_of(2) {

@@ -142,6 +142,7 @@ fn pose_request(subject: Option<SubjectId>) -> PoseRequest {
         subject,
         span: span(),
         features: features(),
+        series: Vec::new(),
     }
 }
 

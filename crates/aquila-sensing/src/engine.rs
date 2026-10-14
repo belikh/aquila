@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use aquila_geometry::Topology;
-use aquila_inference::{PoseModel, VitalsModel};
+use aquila_inference::{PoseModel, PoseNodeSeries, PoseRequest, VitalsModel};
 use aquila_metrics::{
     Authority, CommitSha, Grade, HostFingerprint, Measurement, MeasurementValue, MetricName,
     MetricSink, Timestamp, ToolVersions, Unit,
@@ -26,9 +26,9 @@ use aquila_metrics::{
 use aquila_signal::{Calibration as SignalCalibration, Config as SignalConfig};
 use aquila_sources::{CsiSource, FrameOrEnd};
 use aquila_types::{
-    Clock, CsiEnvelope, Estimate, Event, EventKind, EventPayload, EventScope, FloorId, NodeId, Pose,
-    RoomId, SensingScope, SubjectId, TimeSpan, Topology as ContractTopology, VitalsReading,
-    VitalsStatus, Witness,
+    Clock, CsiEnvelope, DetectionScope, Estimate, Event, EventKind, EventPayload, EventScope,
+    FeatureVector, FloorId, NodeId, Pose, RoomId, SensingScope, SubjectId, TimeSpan,
+    Topology as ContractTopology, VitalsReading, VitalsStatus, Witness,
 };
 
 use crate::calibration::{
@@ -43,7 +43,6 @@ use crate::escalation::{
 };
 use crate::features::extract_motion;
 use crate::fusion::{self, NodeEvidence};
-use crate::pose::{self, PoseNodeInput};
 use crate::sink::Sink;
 use crate::time::{NodeClockFit, TimeSync};
 use crate::window::{WindowAssembler, WindowBatch};
@@ -209,6 +208,18 @@ impl Sensing {
             room_ids.sort();
         }
         let assembler = WindowAssembler::new(&config);
+        // When pose is enabled but no model is supplied, default to the
+        // deterministic DSP adapter so the core always reaches pose through the
+        // `PoseModel` seam (`sister-issues-core.md` S8), never a direct call.
+        let pose = pose.or_else(|| {
+            config.pose_enabled.then(|| {
+                Arc::new(crate::pose::DspPoseModel::new(
+                    config.pose_geometry,
+                    config.pose_dither_search,
+                    config.pose_min_frames,
+                )) as Arc<dyn PoseModel>
+            })
+        });
         let mut sensing = Self {
             source,
             clock,
@@ -439,7 +450,13 @@ impl Sensing {
     }
 
     /// The per-node presence logit: the calibrated zone threshold when a valid
-    /// calibration supplies one, and the uncalibrated defaults otherwise.
+    /// calibration supplies one, the explicitly declared baseline when present,
+    /// and the **unknown** logit `0` (odds 1:1, `p = 0.5`) otherwise.
+    ///
+    /// An uncalibrated core with no declared baseline refuses to decide rather
+    /// than guessing with a synthetic-tuned constant (`sister-issues-core.md`
+    /// S9): `p = 0.5` sits between `p_lo` and `p_hi`, so no occupancy is
+    /// asserted.
     fn presence_logit(&self, room: &RoomId, node: NodeId, window_std: f64) -> f64 {
         if let Some(calibration) = self.config.calibration.as_ref() {
             if let (Some(zone), Some(baseline)) =
@@ -453,7 +470,13 @@ impl Sensing {
                 );
             }
         }
-        (window_std - self.config.presence_motion_threshold) / self.config.presence_motion_scale
+        match self.config.presence_motion_threshold {
+            Some(threshold) => {
+                (window_std - threshold) / self.config.presence_motion_scale
+            }
+            // No baseline: unknown, never a decision.
+            None => 0.0,
+        }
     }
 
     /// Flush both output seams.
@@ -1106,27 +1129,46 @@ impl Sensing {
             ));
         }
 
+        // Route pose through the `PoseModel` seam: the core never calls the DSP
+        // directly (`sister-issues-core.md` S8). Without a model there is no
+        // pose.
+        let Some(model) = self.pose.clone() else {
+            return Ok(0);
+        };
+
         let t_ms = (batch.start.0 / 1_000_000) as i64;
         let mut emitted = 0usize;
         for (room, entries) in &by_room {
-            let inputs: Vec<PoseNodeInput<'_>> = entries
+            let contributor_nodes: Vec<NodeId> = entries.iter().map(|e| e.0).collect();
+            let series: Vec<PoseNodeSeries> = entries
                 .iter()
-                .map(|(node, position_m, weight, envelopes)| PoseNodeInput {
+                .map(|(node, position_m, weight, envelopes)| PoseNodeSeries {
                     node: *node,
                     position_m: *position_m,
                     weight: *weight,
-                    envelopes,
+                    envelopes: envelopes.to_vec(),
                 })
                 .collect();
-            let Some(pose) = pose::estimate_room_pose(
-                room,
-                SubjectId::new(0),
-                t_ms,
-                &inputs,
-                &self.config.pose_geometry,
-                &self.config.pose_dither_hz,
-                self.config.pose_min_frames,
-            ) else {
+            let request = PoseRequest {
+                scope: DetectionScope::Room(room.clone()),
+                contributor_nodes,
+                subject: Some(SubjectId::new(0)),
+                span: TimeSpan {
+                    start_mono_ns: batch.start.0,
+                    end_mono_ns: batch.end.0,
+                    start_unix_ms: t_ms,
+                    end_unix_ms: t_ms,
+                },
+                features: FeatureVector::new(Vec::new()),
+                series,
+            };
+            if request.validate().is_err() {
+                continue;
+            }
+            let Ok(outcomes) = model.infer(std::slice::from_ref(&request)) else {
+                continue;
+            };
+            let Some(pose) = outcomes.into_iter().next().and_then(|outcome| outcome.pose) else {
                 continue;
             };
             self.record(

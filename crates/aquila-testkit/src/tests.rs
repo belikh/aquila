@@ -17,8 +17,8 @@ use aquila_metrics::{
 };
 use aquila_sensing::{
     calibrate, topology_digest, CalibrationError, CalibrationExpectation, CalibrationInputs,
-    CalibrationRequest, CalibrationStore, HomeWindow, InvalidationReason, Sensing, SensingConfig,
-    Topology,
+    CalibrationRequest, CalibrationStore, DitherSearch, DspPoseModel, HomeWindow,
+    InvalidationReason, Sensing, SensingConfig, Topology,
 };
 use aquila_simulator::{
     Actor, Body, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SimConfig,
@@ -151,7 +151,7 @@ fn run_tracer() -> TracerRun {
         None,
         None,
         topology_for(&script),
-        SensingConfig::default(),
+        synthetic_config(),
     )
     .expect("valid core");
 
@@ -178,6 +178,23 @@ fn snapshot<T: Clone>(mutex: &Mutex<Vec<T>>) -> Vec<T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone()
 }
+
+/// A sensing configuration with an explicitly **declared** synthetic-fixture
+/// presence baseline.
+///
+/// The deterministic generator is not hardware, so a test that needs presence
+/// decisions declares its own baseline instead of leaning on a production
+/// constant (which is now `None`: an uncalibrated core refuses to decide,
+/// `sister-issues-core.md` S9). Every metric scored from these runs is graded
+/// [`Authority::Synthetic`], never hardware (`sister-issues-core.md` S5).
+fn synthetic_config() -> SensingConfig {
+    SensingConfig {
+        presence_motion_threshold: Some(0.04375),
+        presence_motion_scale: 0.013125,
+        ..SensingConfig::default()
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Slice 2 — vitals tracer bullet (`roadmap.md`, Slice 2)
@@ -262,6 +279,8 @@ fn run_vitals_tracer() -> VitalsRun {
     let config = SensingConfig {
         vitals_enabled: true,
         vitals_window_ns: 15_000_000_000,
+        presence_motion_threshold: Some(0.04375),
+        presence_motion_scale: 0.013125,
         ..SensingConfig::default()
     };
 
@@ -313,7 +332,12 @@ fn record_ledger(
         dirty: false,
         host: HostFingerprint::new("aquila-testkit").expect("valid host"),
         tools: ToolVersions::new(),
-        authority: Authority::Replayed,
+        // Every row this helper records is measured against the deterministic
+        // synthetic generator, never hardware, so its provenance is
+        // `Authority::Synthetic` (`evaluation.md` §5, `sister-issues-core.md`
+        // S4, S5). It is an honest synthetic-fixture number, not a real-world
+        // accuracy claim.
+        authority: Authority::Synthetic,
         grade: Grade::Statistical,
         timestamp: Timestamp::from_unix_ms(0),
     };
@@ -965,6 +989,13 @@ struct PoseRun {
 /// Replay the two-node pose scene through the sensing core with coarse pose
 /// enabled, and collect everything it emits.
 fn run_pose_tracer() -> PoseRun {
+    run_pose_tracer_with(DitherSearch::default())
+}
+
+/// Replay the pose scene with an explicit dither search band. A band that does
+/// not contain the seed-drawn dither frequencies must fail to recover the torso
+/// (`sister-issues-core.md` S4): the estimator is not keyed to the simulator.
+fn run_pose_tracer_with(search: DitherSearch) -> PoseRun {
     let script = pose_scene();
     let sim_config = SimConfig::new(2026, Slug("slice4-pose".to_string()), 0, 0);
     let generator =
@@ -985,15 +1016,26 @@ fn run_pose_tracer() -> PoseRun {
         // deployment supplies per-node calibration quality through the applied
         // artefact, and `q_n = 0` withholds pose (`fusion-sync.md` §2.3).
         pose_uncalibrated_quality: 1.0,
+        pose_dither_search: search,
+        presence_motion_threshold: Some(0.04375),
+        presence_motion_scale: 0.013125,
         ..SensingConfig::default()
     };
+
+    // The core calls the `PoseModel` seam, not the DSP directly (S8); this test
+    // wires the deterministic DSP adapter as the model.
+    let pose_model: Arc<dyn aquila_sensing::PoseModel> = Arc::new(DspPoseModel::new(
+        config.pose_geometry,
+        config.pose_dither_search,
+        config.pose_min_frames,
+    ));
 
     let mut sensing = Sensing::new(
         Box::new(source),
         clock.clone(),
         Box::new(collector),
         Box::new(metrics),
-        None,
+        Some(pose_model),
         None,
         topology_for(&script),
         config,
@@ -1128,6 +1170,56 @@ fn pose_rows_are_recorded() {
     }
 }
 
+/// Falsifiability control for S4: the estimator is not keyed to the simulator.
+///
+/// The pose scene draws its scatterer dither frequencies per seed from the
+/// shared band `[2.5, 9.5] Hz`. Replaying the *same* scene while the estimator
+/// searches a band that cannot contain those frequencies must fail to recover
+/// the torso — proving the passing gated test cannot be circular.
+#[test]
+fn pose_search_band_is_not_keyed_to_the_simulator() {
+    let correct = run_pose_tracer();
+    let correct_score = torso_pck20(&correct.poses, &correct.pose_truth, 0.20, 1_000);
+    assert!(
+        correct_score.total > 0 && correct_score.pck >= 0.65,
+        "the correct band must recover the torso: {correct_score:?}"
+    );
+
+    let wrong = run_pose_tracer_with(DitherSearch {
+        lo_hz: 13.0,
+        hi_hz: 14.0,
+        step_hz: 0.125,
+        min_separation_hz: 0.7,
+    });
+    let wrong_score = torso_pck20(&wrong.poses, &wrong.pose_truth, 0.20, 1_000);
+    assert!(
+        wrong_score.total == 0 || wrong_score.pck < 0.65,
+        "a search band outside the simulated dither must not recover the torso; \
+         the estimator is keyed to the simulator (pck={}, total={})",
+        wrong_score.pck,
+        wrong_score.total
+    );
+}
+
+/// S7: the simulator's torso geometry and the estimator's fit geometry are one
+/// declaration, pinned equal so they cannot drift.
+#[test]
+fn simulator_body_matches_the_fit_geometry() {
+    let body = Body::default_torso(0.0);
+    let geometry = aquila_sensing::TorsoGeometry::adult();
+    assert!(
+        (body.shoulder_half_width_m - geometry.shoulder_half_width_m).abs() < 1e-12
+            && (body.hip_half_width_m - geometry.hip_half_width_m).abs() < 1e-12
+            && (body.torso_length_m - geometry.torso_length_m).abs() < 1e-12,
+        "the simulator Body geometry must equal the estimator's TorsoGeometry::adult()"
+    );
+    assert_eq!(
+        aquila_simulator::TORSO_SCATTER_COUNT,
+        aquila_sensing::TORSO_KEYPOINT_SCATTERS,
+        "the torso scatterer count must be one declaration"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Slice 5 — floor aggregation: room → floor (`roadmap.md`, Slice 5)
 // ---------------------------------------------------------------------------
@@ -1250,7 +1342,7 @@ fn run_floor_tracer() -> FloorRun {
         None,
         None,
         topology_for(&script),
-        SensingConfig::default(),
+        synthetic_config(),
     )
     .expect("valid core");
 
@@ -1557,7 +1649,7 @@ fn run_home_tracer() -> HomeRun {
         None,
         None,
         topology_for_floors(&script, &home_floor_plans()),
-        SensingConfig::default(),
+        synthetic_config(),
     )
     .expect("valid core");
 
@@ -1787,7 +1879,7 @@ fn run_live_tracer() -> LiveRun {
         None,
         None,
         topology_for(&script),
-        SensingConfig::default(),
+        synthetic_config(),
     )
     .expect("valid core");
 

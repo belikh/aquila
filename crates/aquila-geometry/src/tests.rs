@@ -25,7 +25,7 @@ fn node_at(id: u16, room: &str, pos: Option<[f32; 3]>) -> Node {
         device: DeviceType::Esp32S3,
         firmware: FirmwareRef {
             version: "0.4.1".to_string(),
-            sha256: [0; 32],
+            sha256: None,
         },
         pos_room_m: pos,
         installed_unix_ms: 0,

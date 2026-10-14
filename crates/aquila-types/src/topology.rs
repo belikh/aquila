@@ -150,8 +150,10 @@ pub enum DeviceType {
 pub struct FirmwareRef {
     /// Human-readable firmware version.
     pub version: String,
-    /// SHA-256 digest of the firmware image.
-    pub sha256: [u8; 32],
+    /// SHA-256 digest of the firmware image, or `None` when it is not known. An
+    /// absent digest is `None`, never an all-zero hash that reads as real
+    /// (`sister-issues-core.md` S14).
+    pub sha256: Option<[u8; 32]>,
 }
 
 /// A node: one fixed ESP32 endpoint that streams raw CSI.
@@ -185,6 +187,11 @@ impl Node {
         self.room.validate()?;
         require_non_empty("Node.name", &self.name)?;
         require_non_empty("Node.firmware.version", &self.firmware.version)?;
+        if self.firmware.sha256 == Some([0u8; 32]) {
+            return Err(ValidationError::Invariant {
+                detail: "Node.firmware.sha256 must not be the all-zero hash".to_string(),
+            });
+        }
         if let Some(pos) = self.pos_room_m {
             for c in pos {
                 require_finite_f32("Node.pos_room_m", c)?;

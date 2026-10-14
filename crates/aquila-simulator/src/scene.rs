@@ -94,21 +94,30 @@ pub struct Actor {
 }
 
 /// The number of torso scatterer keypoints the synthetic coarse-pose model
-/// places.
-pub const TORSO_SCATTER_COUNT: usize = 4;
+/// places. Re-exported from the level-0 contract crate so the simulator and the
+/// estimator share one declaration (`sister-issues-core.md` S7).
+pub const TORSO_SCATTER_COUNT: usize = aquila_types::TORSO_SCATTERER_COUNT;
 
-/// The default per-keypoint dither frequencies, in hertz, in torso scatterer
-/// order (left shoulder, right shoulder, left hip, right hip).
-///
-/// These are the **pose signature**: each torso scatterer micro-moves radially
-/// at its own distinct frequency, so a per-node delay-profile estimator can
-/// separate the four keypoints from one CSI stream. They are chosen as integer
-/// hertz on the one-second analysis grid so the estimator's correlators are
-/// mutually orthogonal.
-pub const TORSO_DITHER_HZ: [f64; TORSO_SCATTER_COUNT] = [3.0, 5.0, 7.0, 9.0];
+/// The torso pose-dither band, in hertz, shared with the estimator.
+pub const TORSO_DITHER_BAND_HZ: [f64; 2] = aquila_types::TORSO_DITHER_BAND_HZ;
 
 /// The default radial dither amplitude, in metres, of each torso scatterer.
 pub const TORSO_DITHER_AMPLITUDE_M: f64 = 0.02;
+
+/// The stream tag for the per-scatterer dither-frequency draw.
+const TAG_DITHER: u64 = 88;
+
+/// The stream tag for the per-actor dither-amplitude draw.
+const TAG_DITHER_AMPLITUDE: u64 = 99;
+
+/// The nominal dither frequencies: `TORSO_SCATTER_COUNT` values evenly spaced
+/// across [`TORSO_DITHER_BAND_HZ`], in torso scatterer order.
+#[must_use]
+fn nominal_dither_hz() -> [f64; TORSO_SCATTER_COUNT] {
+    let [lo, hi] = TORSO_DITHER_BAND_HZ;
+    let sub = (hi - lo) / TORSO_SCATTER_COUNT as f64;
+    core::array::from_fn(|j| lo + sub * (j as f64 + 0.5))
+}
 
 /// A rigid, planar, coarse-pose torso model attached to an actor
 /// (`evaluation.md` §4.1, "coarse pose").
@@ -134,12 +143,20 @@ pub struct Body {
     /// The radial dither amplitude of each torso scatterer, in metres.
     pub dither_amplitude_m: f64,
     /// The radial dither frequency of each torso scatterer, in hertz.
+    ///
+    /// These are the **pose signature**: each torso scatterer micro-moves
+    /// radially at its own distinct frequency, drawn per seed from
+    /// [`TORSO_DITHER_BAND_HZ`], so a band-searching estimator can separate the
+    /// four keypoints from one CSI stream without being handed the frequencies.
     pub dither_hz: [f64; TORSO_SCATTER_COUNT],
 }
 
 impl Body {
-    /// A default adult torso facing the given yaw, with the standard pose
-    /// dither signature.
+    /// A default adult torso facing the given yaw, with the nominal pose-dither
+    /// signature (four frequencies evenly spaced across
+    /// [`TORSO_DITHER_BAND_HZ`]). The simulator draws the per-seed frequencies
+    /// through [`Body::randomised_dither`]; this nominal body is the fallback
+    /// when no seed is applied.
     #[must_use]
     pub fn default_torso(yaw_rad: f64) -> Self {
         Self {
@@ -148,9 +165,59 @@ impl Body {
             torso_length_m: 0.50,
             yaw_rad,
             dither_amplitude_m: TORSO_DITHER_AMPLITUDE_M,
-            dither_hz: TORSO_DITHER_HZ,
+            dither_hz: nominal_dither_hz(),
         }
     }
+
+    /// A copy of this body whose four scatterer dither frequencies are drawn
+    /// **per seed and actor** uniformly across [`TORSO_DITHER_BAND_HZ`], one per
+    /// equal sub-band in torso order, so the frequencies stay distinct and the
+    /// scatterer-to-keypoint association is preserved. The dither amplitude is
+    /// also varied gently per actor.
+    ///
+    /// This is the fix for `sister-issues-core.md` S4: the estimator is not told
+    /// these frequencies, so the pose test can genuinely fail.
+    #[must_use]
+    pub fn randomised_dither(&self, seed: u64, actor_index: usize) -> Self {
+        let [lo, hi] = TORSO_DITHER_BAND_HZ;
+        let sub = (hi - lo) / TORSO_SCATTER_COUNT as f64;
+        let mut dither_hz = [0.0_f64; TORSO_SCATTER_COUNT];
+        for (j, slot) in dither_hz.iter_mut().enumerate() {
+            let base = lo + sub * j as f64;
+            let u = crate::rng::unit4(seed, actor_index as u64, j as u64, 0, TAG_DITHER);
+            // The middle 60% of each sub-band, so adjacent frequencies are
+            // separated by at least `0.4 * sub`.
+            *slot = base + sub * (0.2 + 0.6 * u);
+        }
+        let amplitude = self.dither_amplitude_m
+            * (0.75 + 0.5 * crate::rng::unit4(seed, actor_index as u64, 0, 0, TAG_DITHER_AMPLITUDE));
+        Self {
+            dither_hz,
+            dither_amplitude_m: amplitude,
+            ..*self
+        }
+    }
+
+    /// The four torso scatterer path lengths from `node_pos`, in metres, at time
+    /// `t`: each keypoint's straight distance plus its own radial dither and the
+    /// shared breathing/heart displacement `common_m`.
+    #[must_use]
+    pub fn scatter_path_lengths_m(
+        &self,
+        base_m: [f64; 3],
+        node_pos: [f64; 3],
+        t: f64,
+        common_m: f64,
+    ) -> [f64; TORSO_SCATTER_COUNT] {
+        let keypoints = self.keypoint_positions_m(base_m);
+        let mut out = [0.0; TORSO_SCATTER_COUNT];
+        for (j, keypoint) in keypoints.iter().enumerate() {
+            let d = SceneScript::distance_m(node_pos, *keypoint) + self.dither_m(j, t) + common_m;
+            out[j] = d.max(0.0);
+        }
+        out
+    }
+
 
     /// The four torso scatterer keypoint positions, in room-local metres, for a
     /// body whose pelvis is at `base_m`.
@@ -543,7 +610,6 @@ impl Actor {
         t: f64,
     ) -> Option<[f64; TORSO_SCATTER_COUNT]> {
         let body = self.body.as_ref()?;
-        let keypoints = body.keypoint_positions_m(self.position_at(t));
         let common = self
             .breathing
             .as_ref()
@@ -552,11 +618,6 @@ impl Actor {
                 .heart
                 .as_ref()
                 .map_or(0.0, |rhythm| rhythm.displacement_m(t));
-        let mut out = [0.0; TORSO_SCATTER_COUNT];
-        for (j, keypoint) in keypoints.iter().enumerate() {
-            let d = SceneScript::distance_m(node_pos, *keypoint) + body.dither_m(j, t) + common;
-            out[j] = d.max(0.0);
-        }
-        Some(out)
+        Some(body.scatter_path_lengths_m(self.position_at(t), node_pos, t, common))
     }
 }

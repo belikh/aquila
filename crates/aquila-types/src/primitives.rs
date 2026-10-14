@@ -61,6 +61,10 @@ impl PhyFlags {
     pub const SHORT_GI: u16 = 1 << 4;
     /// The frame was a sounding/NDP frame.
     pub const SOUNDING_NDP: u16 = 1 << 5;
+    /// The captured I/Q clipped the int8 range: a diagnostic a capture or
+    /// simulator sets so a saturated frame is visible rather than silent. It
+    /// lives on a reserved bit; firmware is not expected to set it.
+    pub const IQ_SATURATED: u16 = 1 << 6;
 
     /// No flags set.
     #[must_use]

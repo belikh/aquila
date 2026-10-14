@@ -308,7 +308,7 @@ fn one_room_topology() -> aquila_types::Topology {
     let room = Slug("lounge".into());
     let firmware = aquila_types::FirmwareRef {
         version: "test".into(),
-        sha256: [0u8; 32],
+        sha256: None,
     };
     let node = |id: u16| Node {
         id: NodeId(id),
