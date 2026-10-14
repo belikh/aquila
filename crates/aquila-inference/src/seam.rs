@@ -9,10 +9,11 @@
 //! slice-in, `Vec`-out so the dynamic `B` axis is real while remaining one
 //! method per trait (`inference-models.md` §1.3).
 
-use aquila_types::{Detection, DetectionScope, NodeId, Pose, SubjectId, TimeSpan, VitalsReading};
+use aquila_types::{
+    Detection, DetectionScope, FeatureVector, NodeId, Pose, SubjectId, TimeSpan, VitalsReading,
+};
 
 use crate::error::ModelError;
-use crate::feature::FeatureVector;
 use crate::model::ModelId;
 
 /// The default cap on requests in one batch (`inference-models.md` §1.4, §4.3).

@@ -263,11 +263,14 @@ point estimate without an interval is not a sufficient ledger row.
 
 ## 5. The honest-claims grading scheme
 
-Every sensing claim carries exactly one grade. The grades refine the
-`Witness` vocabulary in `CONTEXT.md`: **Measured**, **Claimed** and **Gated**
-are kept verbatim, and **Claimed** is split into the two blocked sub-grades
-**Data-gated** and **Hardware-gated** so a pending measurement names its
-blocker. This is an extension of the glossary, not a contradiction of it.
+Every sensing claim carries exactly one of **five** grades — the single
+authoritative set, also declared by `aquila_types::Witness` and
+`data-contracts.md` §1: **Gated**, **Measured**, **Claimed**, **Data-gated** and
+**Hardware-gated**. The grades refine the `Witness` vocabulary in `CONTEXT.md`:
+**Measured**, **Claimed** and **Gated** are kept verbatim, and **Claimed** is
+split into the two blocked sub-grades **Data-gated** and **Hardware-gated** so a
+pending measurement names its blocker. This is an extension of the glossary, not
+a contradiction of it.
 
 | Grade | Meaning | May carry a number? |
 | --- | --- | --- |

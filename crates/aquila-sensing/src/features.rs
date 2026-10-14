@@ -149,7 +149,7 @@ fn signal_motion_energy(
     if frames.is_empty() {
         return None;
     }
-    let chunk = bridge::to_signal_chunk(frames);
+    let chunk = bridge::to_signal_chunk(frames).ok()?;
     let features = aquila_signal::process(&chunk, calibration, config).ok()?;
     let node = frames[0].frame.node_id;
     let node_features = features.nodes.iter().find(|n| n.node == node)?;

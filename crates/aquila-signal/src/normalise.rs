@@ -5,7 +5,7 @@
 //! multiply — calibration stores complex multipliers, so no `sin`/`cos` runs
 //! here.
 
-use crate::decode::{Complex32, CsiFrame, FrameFlags, RxMeta};
+use crate::decode::{Complex32, ComplexFrame, FrameFlags, RxMeta};
 
 /// The calibration state carried on a normalised frame (`N5`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -56,7 +56,7 @@ pub struct NormalisedFrame {
 /// [`CalibrationState::Partial`]; callers that want a hard failure validate the
 /// shape first (see [`process`](crate::process)).
 #[must_use]
-pub fn normalise(frame: &CsiFrame, cal: &Calibration) -> NormalisedFrame {
+pub fn normalise(frame: &ComplexFrame, cal: &Calibration) -> NormalisedFrame {
     if cal.per_node.is_empty() {
         return NormalisedFrame {
             meta: frame.meta,

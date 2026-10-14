@@ -81,8 +81,10 @@ pub struct SubcarrierLayout {
     pub usable: Vec<u16>,          // ascending subcarrier indices, nulls removed
 }
 
-/// A decoded, validated frame.
-pub struct CsiFrame {
+/// The pipeline's internal decoded frame. NOT the contract frame: the one
+/// canonical on-air/on-disk frame is `aquila_types::CsiFrame` (amplitude/phase
+/// arrays, `data-contracts.md` §2). `decode_csi` is the single conversion.
+pub struct ComplexFrame {
     pub meta: RxMeta,
     pub bins: Vec<Complex32>,      // len == layout.expected_bins
     pub flags: FrameFlags,
@@ -111,12 +113,17 @@ pub struct Band { pub lo_hz: f32, pub hi_hz: f32 }
 
 // --- stage functions (each pure) -------------------------------------------
 
-pub fn decode_csi(raw: &[u8], meta: &RxMeta, layout: &SubcarrierLayout)
-    -> Result<CsiFrame, DecodeError>;
+/// Contract frame -> internal conditioning frame (the one conversion).
+pub fn decode_csi(frame: &aquila_types::CsiFrame)
+    -> Result<ComplexFrame, DecodeError>;
 
-pub fn validate_sequence(frames: &[CsiFrame]) -> Vec<SeqAnomaly>; // gaps/reorder/regression
+/// Raw ESP32 CSI record -> internal conditioning frame (record-level path).
+pub fn decode_record(raw: &[u8], meta: &RxMeta, layout: &SubcarrierLayout)
+    -> Result<ComplexFrame, DecodeError>;
 
-pub fn normalise(frame: &CsiFrame, cal: &Calibration) -> NormalisedFrame;
+pub fn validate_sequence(frames: &[ComplexFrame]) -> Vec<SeqAnomaly>; // gaps/reorder/regression
+
+pub fn normalise(frame: &ComplexFrame, cal: &Calibration) -> NormalisedFrame;
 
 pub fn unwrap_phase(wrapped: &[f32]) -> Vec<f32>;
 
@@ -137,13 +144,22 @@ pub fn select_subcarriers(features: &SubcarrierFeatureMatrix, k: usize)
     -> SubcarrierMask;
 
 // Top-level reference composition (thin; calls the stages above in order).
-pub fn process(chunk: &[CsiFrame], cal: &Calibration, cfg: &Config)
+pub fn process(chunk: &[ComplexFrame], cal: &Calibration, cfg: &Config)
     -> Result<Features, SignalError>;
 ```
 
 `Features` is an owned, plain-data struct (per node, per frame index) with no
 methods that do IO. `SignalError` is a closed enum. No function takes a closure
 that could capture IO; no function spawns a task.
+
+### 2.1 Packed feature vector (`FeatureVector`)
+
+`NodeFeatures::feature_vector()` packs one node's conditioning output into the
+canonical `aquila_types::FeatureVector` (`data-contracts.md` §1) consumed by
+`aquila-inference`: every usable-subcarrier amplitude RMS value followed by
+every usable-subcarrier motion energy, both in ascending usable-subcarrier
+order. `Features::feature_vector(node)` is the per-node lookup. The layout is
+owned here; the model seam never invents, resizes or pads it.
 
 ## 3. Determinism contract
 
@@ -189,23 +205,30 @@ buffer, plus an in-process reproducibility test.
 Each stage lists: purpose; contract; invariants; failure modes; property-based
 tests (proptest-style). "P-" identifiers are the consolidated invariants in §6.
 
-### 4.1 Decode and validate (`decode_csi`)
+### 4.1 Decode and validate (`decode_csi`, `decode_record`)
 
-**Purpose.** Turn a raw ESP32 CSI record into a typed `CsiFrame` and reject
-structurally invalid input before any DSP touches it.
+**Purpose.** Produce the pipeline's internal [`ComplexFrame`] from the canonical
+contract frame, and reject structurally invalid input before any DSP touches it.
 
-**Contract.** Input: `raw` (interleaved `int8` I/Q pairs, imaginary byte first
-per Espressif `wifi_csi_info_t`), `meta`, `layout`. Output:
-`Result<CsiFrame, DecodeError>` with `bins.len() == layout.expected_bins`. This
-is a total function of the bytes; it allocates but does not touch IO. The exact
-I/Q byte interleaving and the HT20/HT40 null-bin map are **research-verify**
-items flagged in §7, not assumed silently.
+**Contract.** `decode_csi(frame: &aquila_types::CsiFrame) -> Result<ComplexFrame,
+DecodeError>` converts the one contract frame (`amplitude`/`phase` arrays,
+`data-contracts.md` §2) into per-subcarrier `Complex32` bins via the
+deterministic `cos`/`sin` approximations. `decode_record(raw, meta, layout) ->
+Result<ComplexFrame, DecodeError>` decodes a raw ESP32 CSI record: `raw` is
+interleaved `int8` I/Q pairs, imaginary byte first per Espressif
+`wifi_csi_info_t`, and `bins.len() == layout.expected_bins`. Both are total
+functions; they allocate but do not touch IO. The exact I/Q byte interleaving
+and the HT20/HT40 null-bin map are **research-verify** items flagged in §7, not
+assumed silently.
 
 **Invariants.**
-- `D1` Structural: accept iff `raw.len()` is even, `raw.len()/2 ==
-  layout.expected_bins`, and `raw.len() <= 612`. Every accepted frame satisfies
-  `bins.len() == expected_bins`.
-- `D2` Determinism: identical `(raw, meta)` yields bit-identical `CsiFrame`.
+- `D1` Structural: `decode_record` accepts iff `raw.len()` is even,
+  `raw.len()/2 == layout.expected_bins`, and `raw.len() <= 612`;
+  `decode_csi` accepts iff `amplitude.len() >= 1`, `phase.len() ==
+  amplitude.len()`, and every sample is finite. Every accepted frame satisfies
+  `bins.len() == expected_bins` (`decode_record`) or `amplitude.len()`
+  (`decode_csi`).
+- `D2` Determinism: identical input yields bit-identical `ComplexFrame`.
 - `D3` Exactness: `int8 → f32` conversion is exact; no clamping or NaN.
 - `D4` `first_word_invalid` policy: the first I/Q pair is zeroed and
   `flags.first_word_zeroed = true`; the frame is otherwise accepted.
@@ -213,11 +236,15 @@ items flagged in §7, not assumed silently.
   `rssi`/`noise_floor` set a flag rather than failing the decode.
 
 **Failure modes.** `OddLength`, `WrongBinCount { found, expected }`,
-`TooLarge`, `UnsupportedBandwidth`, `EmptyRecord`.
+`TooLarge`, `UnsupportedBandwidth`, `EmptyRecord`, and (for `decode_csi`)
+`EmptyFrame`, `LengthMismatch { amplitude, phase }`,
+`NonFiniteSample { field, index }`.
 
 **Property tests.**
-- `D1`: for arbitrary byte lengths, `decode_csi` is `Ok` iff length ∈
-  `{2·expected_bins}`; the error variant is exactly determined.
+- `D1`: for arbitrary byte lengths, `decode_record` is `Ok` iff length ∈
+  `{2·expected_bins}`; the error variant is exactly determined. For arbitrary
+  contract frames, `decode_csi` is `Ok` iff the arrays agree, are non-empty and
+  finite.
 - `D2/Golden`: `sha256(bins_as_le_bytes)` equals the committed fixture digest.
 - `D4`: setting `first_word_invalid` yields `bins[0] == 0` and no other change.
 - `D5`: arbitrary `rssi`/`noise_floor` never change `bins`, only `flags`.
@@ -532,7 +559,9 @@ Non-finite score → that bin is excluded and flagged, never treated as `+∞`.
 
 `process(chunk, cal, cfg)` runs, in order:
 
-1. `decode_csi` each record → `CsiFrame`.
+1. The chunk arrives already decoded: each contract `CsiFrame` became a
+   `ComplexFrame` at the transport seam via `decode_csi`; `process` never sees
+   contract frames.
 2. `validate_sequence` per node → anomalies attached to `Features`.
 3. layout projection (ascending usable bins).
 4. `normalise` with the frozen `Calibration`.

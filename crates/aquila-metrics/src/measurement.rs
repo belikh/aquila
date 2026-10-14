@@ -8,11 +8,10 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use aquila_types::{Clock, MetricId};
+use aquila_types::{sha256, Clock, MetricId};
 use serde::{Deserialize, Serialize};
 
 use crate::error::MetricsError;
-use crate::sha256::sha256;
 
 /// A stable metric name, for example `accuracy.presence_f1` or
 /// `micro.instr.ingest.parse`.

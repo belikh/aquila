@@ -50,8 +50,8 @@ The settled design, in gists that point at the deciding document:
   coherent array in v1; a phase-coherent RF reference is future-only.
   `fusion-sync.md` §3, `risks.md` R-02/R-21.
 - **Measurement is first-class**: every claim is a commit-keyed `LedgerRecord`
-  behind `MetricSink`; `Witness` is `Gated`/`Measured`/`Claimed`. `measurement.md`,
-  `evaluation.md`.
+  behind `MetricSink`; `Witness` is one of `Gated`/`Measured`/`Claimed`/
+  `DataGated`/`HardwareGated`. `measurement.md`, `evaluation.md`.
 - **Private surface only**: no public REST/WS/MCP, no SDK, no plugins, no MQTT;
   the control plane is loopback/ingress and a direct node control channel.
   `core-api.md`, `home-assistant.md` §5.1, `privacy-security.md` G8.

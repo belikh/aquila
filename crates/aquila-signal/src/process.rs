@@ -7,9 +7,9 @@
 //! deterministically to the chunk's motion energies so the reference path stays
 //! self-contained.
 
-use aquila_types::{NodeId, VitalsStatus};
+use aquila_types::{FeatureVector, NodeId, VitalsStatus};
 
-use crate::decode::{CsiFrame, SubcarrierLayout};
+use crate::decode::{ComplexFrame, SubcarrierLayout};
 use crate::error::{ConfigError, SignalError};
 use crate::filter::{bandpass, Band, BiquadCoeffs};
 use crate::math::atan2_approx;
@@ -58,7 +58,7 @@ pub enum SeqAnomaly {
 /// frames. A monotone, contiguous run produces an empty list (`S2`); gaps are
 /// expected and tolerated (`S3`).
 #[must_use]
-pub fn validate_sequence(frames: &[CsiFrame]) -> Vec<SeqAnomaly> {
+pub fn validate_sequence(frames: &[ComplexFrame]) -> Vec<SeqAnomaly> {
     let seqs: Vec<u32> = frames.iter().map(|f| f.meta.seq).collect();
     anomalies_for(&seqs)
 }
@@ -192,6 +192,24 @@ pub struct NodeFeatures {
     pub vitals: VitalsEstimates,
 }
 
+impl NodeFeatures {
+    /// Pack this node's conditioning output into the canonical
+    /// [`FeatureVector`] that `aquila-inference` consumes
+    /// (`data-contracts.md` §1, `signal.md` §2.4).
+    ///
+    /// Layout: every usable-subcarrier amplitude RMS value, then every
+    /// usable-subcarrier motion energy, both in ascending usable-subcarrier
+    /// order. The layout is owned here and is the single source the model
+    /// seam's tensor projection reads.
+    #[must_use]
+    pub fn feature_vector(&self) -> FeatureVector {
+        let mut values = Vec::with_capacity(self.amplitude_rms.len() + self.motion_energy.len());
+        values.extend_from_slice(&self.amplitude_rms);
+        values.extend_from_slice(&self.motion_energy);
+        FeatureVector::new(values)
+    }
+}
+
 /// The assembled features for a chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Features {
@@ -257,6 +275,16 @@ impl Features {
         }
         out
     }
+
+    /// Pack one node's features into the canonical [`FeatureVector`], or `None`
+    /// when the chunk carries no features for that node.
+    #[must_use]
+    pub fn feature_vector(&self, node: NodeId) -> Option<FeatureVector> {
+        self.nodes
+            .iter()
+            .find(|n| n.node == node)
+            .map(NodeFeatures::feature_vector)
+    }
 }
 
 fn push_len(out: &mut Vec<u8>, value: usize) {
@@ -311,7 +339,7 @@ fn push_bvp(out: &mut Vec<u8>, samples: &[BvpSample]) {
 /// [`SignalError`] for an empty chunk, an invalid config, a calibration shape
 /// mismatch, or any non-finite bin.
 pub fn process(
-    chunk: &[CsiFrame],
+    chunk: &[ComplexFrame],
     cal: &Calibration,
     cfg: &Config,
 ) -> Result<Features, SignalError> {
@@ -353,7 +381,7 @@ pub fn process(
     let vitals_cfg = cfg.vitals_config();
 
     // Group by node, preserving first-appearance order.
-    let mut groups: Vec<(NodeId, Vec<&CsiFrame>)> = Vec::new();
+    let mut groups: Vec<(NodeId, Vec<&ComplexFrame>)> = Vec::new();
     for frame in chunk {
         if let Some(group) = groups.iter_mut().find(|(node, _)| *node == frame.meta.node) {
             group.1.push(frame);

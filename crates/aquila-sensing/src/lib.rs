@@ -52,7 +52,6 @@ mod escalation;
 mod features;
 mod fusion;
 mod pose;
-mod sha256;
 mod sink;
 mod time;
 mod window;

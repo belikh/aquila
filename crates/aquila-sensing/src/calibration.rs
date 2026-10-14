@@ -55,14 +55,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use aquila_geometry::Topology;
-use aquila_types::{CsiEnvelope, DeviceType, HomeId, NodeId, RoomId};
+use aquila_types::{
+    sha256, to_hex, CsiEnvelope, DeviceType, HomeId, NodeId, NodeQuality, RoomId,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::config::SensingConfig;
 use crate::error::{CalibrationError, InvalidationReason, SensingError};
 use crate::features::amplitude_variability;
 use crate::fusion::sigmoid;
-use crate::sha256::{sha256, to_hex};
 
 /// The calibration artefact schema this core produces and accepts.
 pub const CALIBRATION_SCHEMA_VERSION: &str = "aquila.calibration/v1";
@@ -86,6 +87,11 @@ const DEFAULT_PRESENCE_THRESHOLD_DB: f64 = 6.0;
 const REFERENCE_RSSI_DBM: f64 = -40.0;
 /// The path-loss exponent for the advisory range proxy.
 const PATH_LOSS_EXPONENT: f64 = 2.5;
+/// The number of empty-home windows at which a node's baseline is considered
+/// fully sampled for the per-node quality term.
+const NODE_QUALITY_FULL_WINDOWS: f32 = 20.0;
+/// The clock fit residual, in milliseconds, at which a node's clock term halves.
+const NODE_QUALITY_RESIDUAL_MS: f32 = 5.0;
 
 // ---------------------------------------------------------------------------
 // Schema types (`geometry-calibration.md` §13)
@@ -309,6 +315,10 @@ pub struct NodeCalibration {
     pub channel: ChannelCalibration,
     /// The gain-drift basis.
     pub gain_drift: GainDrift,
+    /// The node's own calibration quality `q_n` in `[0, 1]`
+    /// (`fusion-sync.md` §2.3). Fusion weights this node by it; `ZERO` means the
+    /// node contributes nothing.
+    pub quality: NodeQuality,
 }
 
 /// A link's empty-home baseline.
@@ -530,6 +540,15 @@ impl CalibrationArtifact {
     #[must_use]
     pub fn node_baseline(&self, node: NodeId) -> Option<&NodeBaseline> {
         self.node_baselines.iter().find(|b| b.node_id == node.0)
+    }
+
+    /// The per-node calibration quality `q_n` for a node, if present.
+    #[must_use]
+    pub fn node_quality(&self, node: NodeId) -> Option<NodeQuality> {
+        self.nodes
+            .iter()
+            .find(|n| n.node_id == node.0)
+            .map(|n| n.quality)
     }
 
     /// The detection thresholds for a room (the v1 zone), if present.
@@ -914,6 +933,7 @@ pub fn calibrate(
     for node in &topology.model().nodes {
         let analysis = empty_nodes.get(&node.id);
         let (clock, firmware, channel) = build_node_clock_and_channel(node, analysis, request);
+        let quality = node_quality(analysis, &clock);
         let placement = build_placement(topology, node.id);
         nodes.push(NodeCalibration {
             node_id: node.id.0,
@@ -936,6 +956,7 @@ pub fn calibrate(
                 phase_basis: Vec::new(),
                 confidence: 0.5,
             },
+            quality,
         });
         if let Some(analysis) = analysis {
             node_baselines.push(NodeBaseline {
@@ -1207,6 +1228,28 @@ fn build_node_clock_and_channel(
         },
     };
     (clock, firmware, channel)
+}
+
+/// The per-node calibration quality `q_n` (`fusion-sync.md` §2.3).
+///
+/// Derived from the two per-node quantities the wizard actually measures: how
+/// many empty-home windows back the node's baseline and how well its clock fits
+/// to the core. A node absent from the empty-home capture has quality zero and,
+/// by the fusion invariant, contributes nothing; a node whose clock cannot be
+/// fitted falls back to its baseline sampling alone.
+fn node_quality(analysis: Option<&NodeAnalysis>, clock: &ClockCalibration) -> NodeQuality {
+    let Some(analysis) = analysis else {
+        return NodeQuality::ZERO;
+    };
+    let windows = analysis.window_stds.len() as f32;
+    let window_term = (windows / NODE_QUALITY_FULL_WINDOWS).clamp(0.0, 1.0);
+    let residual_ms = clock.fit_residual_ms as f32;
+    let clock_term = if residual_ms.is_finite() {
+        1.0 / (1.0 + residual_ms.max(0.0) / NODE_QUALITY_RESIDUAL_MS)
+    } else {
+        0.0
+    };
+    NodeQuality::new((window_term * clock_term).clamp(0.0, 1.0)).unwrap_or(NodeQuality::ZERO)
 }
 
 /// The result of fitting `core = slope·device + intercept`.

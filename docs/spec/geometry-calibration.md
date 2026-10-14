@@ -444,8 +444,9 @@ Calibration
 │     ├── firmware        string           esp32s3-csi x.y.z
 │     ├── channel         object   { band, primary_channel, bandwidth_mhz,
 │     │                              subcarriers }
-│     └── gain_drift      object   { amplitude_db_per_h, phase_basis[],
-│                                    confidence }
+│     ├── gain_drift      object   { amplitude_db_per_h, phase_basis[],
+│     │                              confidence }
+│     └── quality         f32      per-node calibration quality q_n in [0,1]
 ├── links[]               object
 │     ├── link_id         string   canonical unordered "a-b"
 │     ├── nodes           [string, string]
@@ -533,7 +534,8 @@ Calibration
     "channel": { "band": "2.4ghz", "primary_channel": 6,
                  "bandwidth_mhz": 20, "subcarriers": 64 },
     "gain_drift": { "amplitude_db_per_h": 0.02, "phase_basis": [],
-                    "confidence": 0.7 }
+                    "confidence": 0.7 },
+    "quality": 0.9
   } ],
   "links": [ {
     "link_id": "n07-n12", "nodes": ["n07", "n12"], "scope": "intra_room",

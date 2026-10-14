@@ -132,7 +132,18 @@ pub enum SecondaryChannel { None = 0, Above, Below, #[serde(other)] Unknown = 25
 
 **`Witness`** — the evidence grade every sensing claim carries, exactly one. This
 is the `CONTEXT.md` vocabulary; do not invent synonyms (no "validated",
-"verified", "proven", "trusted"). Ordered, strongest first:
+"verified", "proven", "trusted"). There are exactly **five** grades, ordered
+strongest first; this is the *single* authoritative set (there is no three-grade
+set — `evaluation.md` §5 refines the same five and the implementation
+`aquila_types::Witness` declares them):
+
+| # | Grade | Meaning | May carry a number |
+| --- | --- | --- | --- |
+| 0 | `Gated` | Measured **and** passing a defined v1 bar. The only grade a headline claim may carry. Derived from a `Gated` `LedgerRecord` with `passed == true`. | Yes |
+| 1 | `Measured` | Computed from real, replayed or simulated input and recorded in the commit-keyed ledger. True by construction for any recorded result. | Yes |
+| 2 | `Claimed` | Asserted without a recorded measurement. Never emitted to Home Assistant. | No |
+| 3 | `DataGated` | Blocked on missing input: no fixture, no labels, no reference recording, or insufficient paired samples. A named, pending measurement. A blocked sub-grade of `Claimed`. | No |
+| 4 | `HardwareGated` | Blocked on missing hardware: a reference device, chest strap or belt, camera rig, or the reference-scale node deployment. A named, pending measurement. A blocked sub-grade of `Claimed`. | No |
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -146,12 +157,24 @@ pub enum Witness {
     Measured = 1,
     /// Asserted without a recorded measurement. Never emitted to Home Assistant.
     Claimed = 2,
+    /// Blocked on missing input: no fixture, no labels, no reference recording,
+    /// or insufficient paired samples.
+    DataGated = 3,
+    /// Blocked on missing hardware: a reference device, chest strap or belt,
+    /// camera rig, or the reference-scale node deployment.
+    HardwareGated = 4,
 }
 ```
 
+Only `Gated` and `Measured` may carry a value (`Witness::may_carry_value`);
+`Claimed`, `DataGated` and `HardwareGated` are pending or unbacked claims.
+
 **Derivation rule (defined once):** a runtime claim's `Witness` is `Gated` iff a
 `LedgerRecord` with `kind == MetricKind::Gated` and `passed == true` backs it,
-`Measured` iff any non-gated `LedgerRecord` backs it, and `Claimed` otherwise.
+`Measured` iff any non-gated `LedgerRecord` backs it, and otherwise the claim is
+unmeasured: `Claimed` for an asserted, unbacked claim, or the appropriate blocked
+sub-grade — `DataGated` when the missing input is data, `HardwareGated` when the
+missing input is hardware (`evaluation.md` §5.1–§5.2).
 
 **Seam mapping** (contracts ↔ the six real seams): `CsiSource` yields
 `CsiEnvelope`; `Clock` produces `ClockModel`; `PoseModel`/`VitalsModel` produce

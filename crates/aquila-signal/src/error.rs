@@ -37,6 +37,25 @@ pub enum DecodeError {
     /// The layout's expected bin count is not one this decoder supports.
     #[error("unsupported bandwidth for a layout of {0} bins")]
     UnsupportedBandwidth(usize),
+    /// The contract frame carried no subcarriers.
+    #[error("contract frame carries no subcarriers")]
+    EmptyFrame,
+    /// The contract frame's amplitude and phase arrays disagree in length.
+    #[error("contract frame amplitude length {amplitude} does not match phase length {phase}")]
+    LengthMismatch {
+        /// The number of amplitude samples.
+        amplitude: usize,
+        /// The number of phase samples.
+        phase: usize,
+    },
+    /// The contract frame carried a non-finite sample.
+    #[error("contract frame {field} is not finite at index {index}")]
+    NonFiniteSample {
+        /// The offending array: `"amplitude"` or `"phase"`.
+        field: &'static str,
+        /// The index of the offending sample.
+        index: usize,
+    },
 }
 
 /// Everything `resample_uniform` can reject.

@@ -5,8 +5,8 @@
 //! This crate is level 0 in the workspace dependency graph: it depends on no
 //! other Aquila crate. It declares the canonical contract types from
 //! `docs/spec/data-contracts.md` exactly once, together with the one-method
-//! [`Clock`] trait from ADR-0003 §5. It carries no behaviour beyond
-//! constructors and invariant validation.
+//! [`Clock`] trait from ADR-0003 §5. Its only behaviour is constructors,
+//! invariant validation and the workspace's single [`sha256`] primitive.
 //!
 //! Vocabulary follows `CONTEXT.md`; use its terms and no others. Every other
 //! crate imports these types, and no crate may declare a second, parallel
@@ -29,6 +29,8 @@ mod calibration;
 mod csi;
 mod detection;
 mod error;
+mod feature;
+mod hash;
 mod ids;
 mod ledger;
 mod pose;
@@ -49,6 +51,8 @@ pub use detection::{
     EventScope, MAX_COUNT_V1,
 };
 pub use error::ValidationError;
+pub use feature::FeatureVector;
+pub use hash::{sha256, to_hex};
 pub use ids::{
     FloorId, HomeId, MacAddr, MetricId, NodeId, NodePairId, PairId, RoomId, SessionId, Slug,
     SubjectId, ZoneId,
@@ -57,7 +61,9 @@ pub use ledger::{
     DatasetRef, EnvFingerprint, Interval, LedgerRecord, MetricKind, ModelRef, Split,
 };
 pub use pose::{Keypoint, KeypointId, Pose, KEYPOINT_COUNT};
-pub use primitives::{Band, Confidence, PhyFlags, Quality, SecondaryChannel, Witness};
+pub use primitives::{
+    Band, Confidence, NodeQuality, PhyFlags, Quality, SecondaryChannel, Witness,
+};
 pub use session::{
     BuildId, GroundTruthRecord, GroundTruthRef, GtKind, Session, SessionArtifact, SessionManifest,
     SessionMeta,

@@ -339,24 +339,25 @@ a room pose derived from multiple *uncoherent* views is out of scope for v1.
 
 ### 2.3 Weighting by calibration quality
 
-The global calibration subsystem publishes, per node, a
-`CalibrationQuality { score: f32 /* q in [0,1] */, residuals, calibrated_at }`.
-Fusion derives the weight:
+Each calibrated node carries its own quality `NodeQuality` (`aquila_types`,
+a `[0,1]` score), stored in the calibration artefact as `nodes[].quality`
+(`geometry-calibration.md` §13) and derived from that node's empty-home baseline
+sampling and clock fit. Fusion derives the weight:
 
 ```
 w_n = clip(q_n, 0, 1) · health_factor(health_n, SyncHealth_n)     // in [0,1]
 ```
 
-- `q_n` is the calibration score (residual of a controlled reference target,
-  static-path SNR, multipath stability) — the calibration author's contract.
+- `q_n` is **this node's** calibration-quality score (`nodes[].quality`) — the
+  calibration author's per-node contract, not a whole-home proxy.
 - `health_factor` is a bounded penalty product over recent packet loss, stale
   model age, and clock quality: `Good → 1.0`, `Marginal → ≤ 0.6`,
   `Unusable → presence-only, ≤ 0.3`.
 - A node with `q_n = 0` contributes **nothing** (invariant, §2.7).
 - Weights are **not** normalised for presence (they are evidence precisions);
   they **are** normalised for the count mixture.
-- Weight derivation is pure and deterministic given `CalibrationQuality` and
-  `NodeHealth`.
+- Weight derivation is pure and deterministic given the per-node `NodeQuality`
+  and `NodeHealth`.
 
 Uncalibrated nodes MAY contribute presence; they MUST NOT contribute count,
 vitals, or pose.

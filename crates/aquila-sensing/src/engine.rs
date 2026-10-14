@@ -1153,15 +1153,18 @@ impl Sensing {
 
     /// The calibration quality `q_n` of a node (`fusion-sync.md` §2.3).
     ///
-    /// When a valid calibration artefact is applied, its per-node gain-drift
-    /// confidence (falling back to the global link coverage) supplies `q_n`;
-    /// otherwise the configured [`SensingConfig::pose_uncalibrated_quality`]
-    /// applies, whose `0.0` default withholds an uncalibrated node from pose.
+    /// When a valid calibration artefact is applied, its **per-node** quality
+    /// (`NodeCalibration::quality`) supplies `q_n`: fusion weights each node by
+    /// its own calibration quality, not by a whole-home proxy. A node with
+    /// quality zero contributes nothing. A node absent from the artefact falls
+    /// back to the global link coverage; with no artefact at all, the configured
+    /// [`SensingConfig::pose_uncalibrated_quality`] applies, whose `0.0` default
+    /// withholds an uncalibrated node from pose.
     fn node_calibration_quality(&self, node: NodeId) -> f64 {
         if let Some(artifact) = self.config.calibration.as_ref() {
             if let Some(calibrated) = artifact.nodes.iter().find(|n| n.node_id == node.0) {
-                let q = f64::from(calibrated.gain_drift.confidence);
-                if q.is_finite() && q > 0.0 {
+                let q = f64::from(calibrated.quality.get());
+                if q.is_finite() {
                     return q.clamp(0.0, 1.0);
                 }
             }
@@ -1243,7 +1246,9 @@ impl Sensing {
             }
 
             // The same signal pipeline as presence, over the accumulated span.
-            let chunk = crate::bridge::to_signal_chunk(&buffer);
+            let Ok(chunk) = crate::bridge::to_signal_chunk(&buffer) else {
+                continue;
+            };
             let Ok(features) =
                 aquila_signal::process(&chunk, &self.signal_cal, &self.signal_config)
             else {

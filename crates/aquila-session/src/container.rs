@@ -29,7 +29,7 @@ use std::path::Path;
 use crate::error::SessionError;
 use crate::manifest::{parse_manifest, Manifest};
 use crate::record::{Record, RecordKind};
-use crate::sha256::{hex, sha256};
+use aquila_types::{sha256, to_hex as hex};
 
 /// The container schema version written by this crate.
 pub const CONTAINER_VERSION: u8 = 1;

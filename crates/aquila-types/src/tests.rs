@@ -449,6 +449,14 @@ fn confidence_and_quality_ranges() {
     assert!(Confidence::new(f32::NAN).is_err());
     assert!(Quality::new(0.5).is_ok());
     assert!(Quality::new(2.0).is_err());
+    assert!(NodeQuality::new(0.0).is_ok());
+    assert!(NodeQuality::new(1.0).is_ok());
+    assert!(NodeQuality::new(1.5).is_err());
+    assert!(NodeQuality::new(-0.1).is_err());
+    assert!(NodeQuality::new(f32::NAN).is_err());
+    assert_eq!(NodeQuality::ZERO.get(), 0.0);
+    assert_eq!(NodeQuality::ONE.get(), 1.0);
+    assert!(NodeQuality::new(0.3).unwrap().validate().is_ok());
 }
 
 #[test]

@@ -61,7 +61,6 @@ mod container;
 mod error;
 mod manifest;
 mod record;
-mod sha256;
 
 #[cfg(test)]
 mod tests;

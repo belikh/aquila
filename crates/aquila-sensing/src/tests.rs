@@ -407,6 +407,50 @@ fn calibrate_refuses_empty_inputs_honestly() {
 }
 
 #[test]
+fn calibration_carries_per_node_quality_and_fusion_weights_by_it() {
+    use crate::calibration::{calibrate, CalibrationInputs, CalibrationRequest};
+
+    let topology =
+        aquila_geometry::Topology::load(one_room_topology()).expect("valid topology");
+    let config = SensingConfig::default();
+    let request = CalibrationRequest::new(
+        "0".repeat(40),
+        "cal-quality",
+        "2026-10-14T00:00:00Z",
+    );
+
+    // Node 1 is well sampled (25 empty-home windows); node 2 barely (3).
+    let mut empty = Vec::new();
+    for seq in 0..25u64 {
+        empty.push(envelope(1, seq, seq * 1_000_000_000));
+    }
+    for seq in 0..3u64 {
+        empty.push(envelope(2, seq, seq * 1_000_000_000));
+    }
+    let inputs = CalibrationInputs::new(empty, Vec::new());
+    let artifact = calibrate(&topology, &config, &request, &inputs).expect("calibration");
+
+    let q1 = artifact.node_quality(NodeId(1)).expect("node 1 quality");
+    let q2 = artifact.node_quality(NodeId(2)).expect("node 2 quality");
+    assert!((0.0..=1.0).contains(&q1.get()));
+    assert!((0.0..=1.0).contains(&q2.get()));
+    assert!(
+        q1.get() > q2.get(),
+        "the better-sampled node must carry the higher per-node quality"
+    );
+
+    // Fusion weights each node by its own quality, not a whole-home proxy, and a
+    // zero-quality node contributes nothing.
+    assert!(
+        (fusion::node_fusion_weight(f64::from(q1.get()), 1.0) - f64::from(q1.get())).abs() < 1e-9
+    );
+    assert_eq!(fusion::node_fusion_weight(0.0, 1.0), 0.0);
+
+    // A node absent from the artefact carries no quality.
+    assert!(artifact.node_quality(NodeId(99)).is_none());
+}
+
+#[test]
 fn manual_clock_advances() {
     let clock = ManualClock::new(10);
     assert_eq!(clock.now(), CoreTime(10));

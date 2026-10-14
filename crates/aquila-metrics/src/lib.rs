@@ -35,7 +35,6 @@ mod diff;
 mod error;
 mod measurement;
 mod metric;
-mod sha256;
 mod sink;
 
 #[cfg(test)]

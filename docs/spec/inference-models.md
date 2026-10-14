@@ -20,9 +20,10 @@ including licence handling.
 - Vocabulary is `CONTEXT.md`'s and only `CONTEXT.md`'s: `SensingFrame`, `Zone`
   (a `Room` in v1), `Pose`, `Keypoint`, `Vitals`, `Breathing rate`, `Heart rate`,
   `Presence`, `Count`, `Witness`. No synonyms.
-- Every sensing claim carries exactly one `Witness`: **Gated**, **Measured**, or
-  **Claimed** (strongest first). Grades are derived from the commit-keyed ledger;
-  `Claimed` is never surfaced to Home Assistant.
+- Every sensing claim carries exactly one `Witness`: **Gated**, **Measured**,
+  **Claimed**, **Data-gated**, or **Hardware-gated** (strongest first). Grades
+  are derived from the commit-keyed ledger; `Claimed`, `DataGated` and
+  `HardwareGated` are never surfaced to Home Assistant.
 - v1 bars (measurement, not marketing): in-domain torso-PCK@20 ≥ 0.65, presence
   F1 ≥ 0.9, breathing MAE ≤ 2 brpm against a reference. Heart rate has **no v1
   bar** and must be reportable as absent.
@@ -81,7 +82,8 @@ document does **not** redefine them. Summarised for orientation:
   claims "no signal" and reports a value simultaneously.
 - **Presence / Count:** `Detection { scope: DetectionScope, span, kind: DetectionKind, confidence, value: DetectionValue, contributors: Vec<NodeId>, witness }`,
   with `kind` `Presence`/`Count` and matching `value` variant.
-- **Witness:** `Gated | Measured | Claimed`, derived from ledger records.
+- **Witness:** `Gated | Measured | Claimed | DataGated | HardwareGated`, derived
+  from ledger records (`data-contracts.md` §1, `evaluation.md` §5).
 - **Version:** `ContractVersion { major, minor }`; the runtime and the model card
   both pin it.
 
@@ -179,8 +181,10 @@ Internal ONNX I/O, fixed at export with `B` the only dynamic axis:
 `T`,`S`,`L` (pose) or `F`,`S`,`L` (vitals) as the card declares. Anything else is
 `UnsupportedInputShape`, never a silent resize or pad. Absent links are explicit:
 `link_mask` is authoritative, zero-padding is permitted only where the mask says
-absent. The exact `FeatureVector`→tensor projection must be frozen with
-`aquila-signal` before the ONNX adapter is implemented (§8.3).
+absent. `FeatureVector` is declared once in `aquila-types` (`data-contracts.md`
+§1) and its packed layout is owned by `aquila-signal` (`signal.md` §2.1); the
+exact `FeatureVector`→tensor projection must still be frozen with `aquila-signal`
+before the ONNX adapter is implemented (§8.3).
 
 Post-processing (inside `aquila-inference`): map `[B,K,3]` to `[Keypoint; 17]` in
 COCO-17 order, clamp `confidence`/`score` to `[0,1]`, set `NaN` where the model
@@ -559,9 +563,11 @@ Nuances that must be honoured:
    heads) so the shared trunk is one call. Recommend `data-contracts.md` adopt
    `PoseOutcome` or split the heads; either is acceptable, but the two documents
    must agree.
-3. **`FeatureVector` layout.** Not yet pinned in `data-contracts.md`. `signal.md`
-   owns it. The `FeatureVector`→tensor projection and its digest are required
-   before the ONNX adapter is implemented.
+3. **`FeatureVector` layout.** Resolved: `FeatureVector` is declared once in
+   `aquila-types` (`data-contracts.md` §1) and re-exported by `aquila-inference`;
+   its packed layout is owned by `aquila-signal` (`signal.md` §2.1). The
+   `FeatureVector`→tensor projection and its digest are still required before
+   the ONNX adapter is implemented.
 4. **`aquila-testkit`.** `testing.md` §5 places the fakes there; ADR-0001 does not
    list it. Confirm it is a dev-only crate outside the shipped DAG (it appears to
    be), or fold the fakes into each seam crate behind a `testing` feature.

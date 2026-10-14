@@ -205,3 +205,54 @@ impl Quality {
         }
     }
 }
+
+/// A single node's calibration-quality score in `[0, 1]`.
+///
+/// The global calibration artefact carries one of these per node
+/// (`fusion-sync.md` §2.3, `geometry-calibration.md` §13): fusion derives a
+/// node's weight from its own quality, so a node with poor CSI, a weak baseline
+/// or a poor clock fit is down-weighted rather than hidden behind a single
+/// whole-home score. `NodeQuality::ZERO` means the node contributes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct NodeQuality(f32);
+
+impl NodeQuality {
+    /// Zero quality; the node contributes nothing.
+    pub const ZERO: NodeQuality = NodeQuality(0.0);
+    /// Full quality.
+    pub const ONE: NodeQuality = NodeQuality(1.0);
+
+    /// Construct a per-node quality score, rejecting values outside `[0, 1]`
+    /// or non-finite values.
+    pub fn new(value: f32) -> Result<Self, ValidationError> {
+        require_finite_f32("node_quality", value)?;
+        if (0.0..=1.0).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(ValidationError::Range {
+                field: "node_quality",
+                detail: format!("{value} is not in [0, 1]"),
+            })
+        }
+    }
+
+    /// The inner value.
+    #[must_use]
+    pub const fn get(&self) -> f32 {
+        self.0
+    }
+
+    /// Validate the `[0, 1]` invariant.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        require_finite_f32("node_quality", self.0)?;
+        if (0.0..=1.0).contains(&self.0) {
+            Ok(())
+        } else {
+            Err(ValidationError::Range {
+                field: "node_quality",
+                detail: format!("{} is not in [0, 1]", self.0),
+            })
+        }
+    }
+}

@@ -21,13 +21,13 @@
 //!
 //! # Relationship to the contracts
 //!
-//! The condition-stage types here ([`CsiFrame`], [`Complex32`], [`RxMeta`],
-//! [`SubcarrierLayout`], [`Calibration`]) are the signal pipeline's working
-//! representation, declared by `signal.md` §2. Node identity reuses the frozen
-//! [`aquila_types::NodeId`] rather than forking it. The on-air / on-disk
-//! contract types (`aquila_types::CsiFrame` with amplitude/phase arrays,
-//! `CsiEnvelope`, `SensingFrame`) live in `aquila-types`; decode into this
-//! crate's conditioning representation happens at the transport seam.
+//! The condition-stage types here ([`ComplexFrame`], [`Complex32`], [`RxMeta`],
+//! [`SubcarrierLayout`], [`Calibration`]) are the signal pipeline's **internal**
+//! working representation, declared by `signal.md` §2. Node identity reuses the
+//! frozen [`aquila_types::NodeId`] rather than forking it. The one canonical
+//! contract frame is `aquila_types::CsiFrame` (amplitude/phase arrays,
+//! `data-contracts.md` §2); [`decode_csi`] is the single conversion from it into
+//! this crate's [`ComplexFrame`], so there is no second `CsiFrame`.
 //!
 //! # Stage functions
 //!
@@ -58,7 +58,8 @@ mod tests;
 
 pub use aquila_types::NodeId;
 pub use decode::{
-    decode_csi, Bandwidth, Complex32, CsiFrame, FrameFlags, RxMeta, SubcarrierLayout,
+    decode_csi, decode_record, Bandwidth, Complex32, ComplexFrame, FrameFlags, RxMeta,
+    SubcarrierLayout,
 };
 pub use error::{ConfigError, DecodeError, ResampleError, SignalError};
 pub use filter::{bandpass, resonator, Band, Biquad, BiquadCoeffs};

@@ -8,21 +8,35 @@ does not duplicate spec content. Any crate name not listed here is a defect.
 - **Contract version:** `1.0` (`CONTRACT_VERSION`), per `data-contracts.md`.
 - **Wire version:** `1.0` (`WIRE_MAJOR`/`WIRE_MINOR`), per `data-contracts.md`.
 - **DAG data:** `tools/dag.toml`, enforced by `cargo xtask dag-check` (ADR-0002).
+  *Not yet in-tree:* `xtask` and `tools/dag.toml` are declared here but not yet
+  implemented (audit #21), so the DAG rule is currently checked only by review.
 
 Level is the integer ordering the DAG check uses (a crate may depend only on a
 strictly lower level); layer is the six-layer name from `architecture.md`.
+
+## Canonical types (one declaration each)
+
+These types are declared exactly once. A second declaration anywhere is a defect.
+
+| Concept | One canonical declaration | Relationship |
+| --- | --- | --- |
+| CSI frame | `aquila_types::CsiFrame` | The on-air/on-disk contract frame (`amplitude`/`phase` arrays, `data-contracts.md` §2). |
+| CSI conditioning frame | `aquila_signal::ComplexFrame` | `aquila-signal`'s **internal** decode representation (per-subcarrier `Complex32` bins), produced from the contract frame by `aquila_signal::decode_csi`. It is not a contract type and never crosses a crate boundary as a serialised shape. |
+| Feature vector | `aquila_types::FeatureVector` | The packed model-input carrier; constructed by `aquila-signal` (`NodeFeatures::feature_vector`) and re-exported by `aquila-inference`. |
+| SHA-256 | `aquila_types::sha256` / `to_hex` | The workspace's one hash; every crate calls it rather than carrying its own. |
+| Per-node calibration quality | `aquila_types::NodeQuality` | Carried per node in the calibration artefact; fusion's `q_n` (`fusion-sync.md` §2.3). |
 
 ## Crate register
 
 | Crate | Level | Layer | Purpose (one line) | Public interface (summary) | Depends on | Owning spec |
 | --- | --- | --- | --- | --- | --- | --- |
-| `aquila-types` | 0 | L0 vocabulary | Shared alphabet and versioned contracts; no behaviour. | Domain newtypes/records (`NodeId`, `RoomId`, `CsiFrame`, `CsiEnvelope`, `SensingFrame`, `Pose`, `VitalsReading`, `Detection`, `Event`, `Session`, `LedgerRecord`, `Calibration`), `ContractVersion`, `Witness`, and the `Clock` trait + `CoreTime`/`DeviceTime`. | ∅ | `data-contracts.md` |
+| `aquila-types` | 0 | L0 vocabulary | Shared alphabet, versioned contracts and the workspace's one SHA-256; no domain behaviour. | Domain newtypes/records (`NodeId`, `RoomId`, `CsiFrame`, `CsiEnvelope`, `SensingFrame`, `Pose`, `VitalsReading`, `Detection`, `Event`, `Session`, `LedgerRecord`, `Calibration`), `FeatureVector`, `ContractVersion`, `Witness`, `NodeQuality`, `Clock` + `CoreTime`/`DeviceTime`, and `sha256`/`to_hex`. | ∅ | `data-contracts.md` |
 | `aquila-wire` | 1 | L1 pure transforms | One on-air codec for the CSI data plane and node control plane; generates `node_wire.h`. | `encode_datagram`/`decode_datagram`, control framing; codec constants. | `aquila-types` | `capture-and-firmware.md` §5–6, §9.4 |
-| `aquila-signal` | 1 | L1 pure transforms | CSI conditioning: decode, sanitise, filter, features. | `decode_csi`, `normalise`, `unwrap_phase`, `sanitise_phase`, `bandpass`, `resonator`, `motion_features`, `stft`, `bvp_track`, `resample_uniform`, `select_subcarriers`, `process`. | `aquila-types` | `signal.md` |
+| `aquila-signal` | 1 | L1 pure transforms | CSI conditioning: decode, sanitise, filter, features. | `decode_csi` (contract `CsiFrame` → internal `ComplexFrame`), `decode_record`, `normalise`, `unwrap_phase`, `sanitise_phase`, `bandpass`, `resonator`, `motion_features`, `stft`, `bvp_track`, `resample_uniform`, `select_subcarriers`, `process`; owns the internal `ComplexFrame` type and constructs `aquila_types::FeatureVector`. | `aquila-types` | `signal.md` |
 | `aquila-geometry` | 1 | L1 pure transforms | Topology → zones, coordinate frames, confidence-scored attribution. | `Topology::load`, `room_of`, `zone_of`, `floor_of`, `position`, `pairs`, `scope_of`, `estimate_position`. | `aquila-types` | `geometry-calibration.md` §1–6 |
 | `aquila-metrics` | 1 | L1 pure transforms | Metric definitions and the commit-keyed ledger behind `MetricSink`. | `Metric::id/compute`, `MetricSink::record/flush`, `diff`; `Measurement`. | `aquila-types` | `measurement.md` |
 | `aquila-session` | 2 | L2 ingestion & models | Read/write the `.aqs` recorded-fixture container and its manifest. | `SessionReader`/`SessionWriter`, `verify`, manifest parse. | `aquila-types`, `aquila-wire` | `capture-and-firmware.md` §8 |
-| `aquila-inference` | 2 | L2 ingestion & models | The `PoseModel`/`VitalsModel` seam and the ONNX adapters. | `PoseModel::infer`, `VitalsModel::infer`, `ModelError`; `PoseRequest`/`PoseOutcome`. | `aquila-types` | `inference-models.md` |
+| `aquila-inference` | 2 | L2 ingestion & models | The `PoseModel`/`VitalsModel` seam and the ONNX adapters. | `PoseModel::infer`, `VitalsModel::infer`, `ModelError`; `PoseRequest`/`PoseOutcome`; re-exports `aquila_types::FeatureVector`. | `aquila-types` | `inference-models.md` |
 | `aquila-sources` | 3 | L2 ingestion & models | The core↔node seam: upstream CSI and downstream control, both directions. | `CsiSource::recv/shutdown`, `NodeControl::send`; `ReplaySource`, `UdpLiveSource`, `FanInSource`. | `aquila-types`, `aquila-wire`, `aquila-session` | `capture-and-firmware.md` §3–4, §6 |
 | `aquila-simulator` | 4 | L2 ingestion & models | Deterministic, hardware-free CSI synthesis; implements `CsiSource`. | `SimulatorSource`; scene script load; synthesised `GroundTruth`. | `aquila-types`, `aquila-wire`, `aquila-session`, `aquila-sources` | `capture-and-firmware.md` §7 |
 | `aquila-sensing` | 5 | L3 core | The single stateful core: time, calibration, windows, fusion, escalation. | `Sensing::new/step/calibrate/sink`; owns the `Clock` and `Sink` seams; internal `time`/`calibration`/`window`/`fusion`/`escalation` modules. | `aquila-types`, `aquila-geometry`, `aquila-signal`, `aquila-sources`, `aquila-inference`, `aquila-metrics` | `architecture.md` §4, `geometry-calibration.md`, `fusion-sync.md` |

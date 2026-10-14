@@ -47,7 +47,6 @@
 //! normalise).
 
 mod error;
-mod feature;
 mod model;
 mod seam;
 
@@ -58,7 +57,9 @@ mod onnx;
 mod tests;
 
 pub use error::{DType, DeviceSelection, Dim, ModelError, ModelHealth};
-pub use feature::FeatureVector;
+/// The canonical model-input carrier, owned by the level-0 contract crate and
+/// re-exported here so a consumer of the seam never reaches past it.
+pub use aquila_types::FeatureVector;
 pub use model::{
     check_tensor_dims, DatasetRecord, ModelCard, ModelId, ModelTask, SeedWeights, TensorSpec,
     WeightsTrained,

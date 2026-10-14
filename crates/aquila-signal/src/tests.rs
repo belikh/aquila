@@ -34,9 +34,9 @@ fn ht20_bins(seed: u32) -> Vec<Complex32> {
         .collect()
 }
 
-fn synthetic_chunk(frames: u32) -> Vec<CsiFrame> {
+fn synthetic_chunk(frames: u32) -> Vec<ComplexFrame> {
     (0..frames)
-        .map(|k| CsiFrame {
+        .map(|k| ComplexFrame {
             meta: meta(1, k, u64::from(k) * 50_000),
             bins: ht20_bins(k),
             flags: FrameFlags::default(),
@@ -56,7 +56,7 @@ fn decode_d1_structural_accept_rule() {
     let layout = SubcarrierLayout::ht20();
     for len in 0..=200usize {
         let raw = vec![0u8; len];
-        let result = decode_csi(&raw, &meta(1, 0, 0), &layout);
+        let result = decode_record(&raw, &meta(1, 0, 0), &layout);
         if len == 128 {
             assert!(result.is_ok(), "len {len} should decode");
         } else {
@@ -84,7 +84,7 @@ fn decode_d3_exact_int8_conversion() {
     let mut raw = vec![0u8; 128];
     raw[0] = 5; // imaginary first
     raw[1] = 250; // -6 as i8, real
-    let frame = decode_csi(&raw, &meta(1, 0, 0), &layout).unwrap();
+    let frame = decode_record(&raw, &meta(1, 0, 0), &layout).unwrap();
     assert_eq!(frame.bins[0], Complex32::new(-6.0, 5.0));
 }
 
@@ -93,9 +93,9 @@ fn decode_d4_first_word_invalid_zeroes_only_first_pair() {
     let layout = SubcarrierLayout::ht20();
     let raw: Vec<u8> = (0..128).map(|i| (i % 200) as u8).collect();
     let mut m = meta(1, 0, 0);
-    let clean = decode_csi(&raw, &m, &layout).unwrap();
+    let clean = decode_record(&raw, &m, &layout).unwrap();
     m.first_word_invalid = true;
-    let zeroed = decode_csi(&raw, &m, &layout).unwrap();
+    let zeroed = decode_record(&raw, &m, &layout).unwrap();
     assert_eq!(zeroed.bins[0], Complex32::ZERO);
     assert!(zeroed.flags.first_word_zeroed);
     assert_eq!(zeroed.bins[1..], clean.bins[1..]);
@@ -106,13 +106,74 @@ fn decode_d5_metadata_anomalies_do_not_change_bins() {
     let layout = SubcarrierLayout::ht20();
     let raw: Vec<u8> = (0..128).map(|i| (i % 200) as u8).collect();
     let mut m = meta(1, 0, 0);
-    let baseline = decode_csi(&raw, &m, &layout).unwrap();
+    let baseline = decode_record(&raw, &m, &layout).unwrap();
     m.rssi_dbm = 5; // out of range
     m.noise_floor_dbm = 10; // out of range
-    let flagged = decode_csi(&raw, &m, &layout).unwrap();
+    let flagged = decode_record(&raw, &m, &layout).unwrap();
     assert_eq!(flagged.bins, baseline.bins);
     assert!(flagged.flags.rssi_anomaly);
     assert!(flagged.flags.noise_floor_anomaly);
+}
+
+#[test]
+fn decode_csi_bridges_the_contract_frame() {
+    use aquila_types::{Band, PhyFlags};
+    let frame = aquila_types::CsiFrame {
+        node_id: NodeId(7),
+        boot_epoch: 1,
+        sequence: 5,
+        device_time_us: 1_000,
+        band: Band::B2G4,
+        channel: 6,
+        bandwidth_mhz: 20,
+        subcarrier_offset: 1,
+        amplitude: vec![2.0, 0.0],
+        phase: vec![0.0, 0.0],
+        rssi_dbm: -50,
+        noise_floor_dbm: -90,
+        phy: PhyFlags::empty(),
+    };
+    let decoded = decode_csi(&frame).expect("a valid contract frame decodes");
+    assert_eq!(decoded.meta.node, NodeId(7));
+    assert_eq!(decoded.meta.seq, 5);
+    assert_eq!(decoded.meta.bandwidth, Bandwidth::Ht20);
+    assert_eq!(decoded.bins.len(), 2);
+    // amplitude 2 at phase 0 is real 2, imaginary 0.
+    assert!((decoded.bins[0].re - 2.0).abs() < 1e-4);
+    assert!(decoded.bins[0].im.abs() < 1e-4);
+    assert_eq!(decoded.bins[1], Complex32::ZERO);
+}
+
+#[test]
+fn decode_csi_rejects_malformed_contract_frames() {
+    use aquila_types::{Band, PhyFlags};
+    let mut frame = aquila_types::CsiFrame {
+        node_id: NodeId(1),
+        boot_epoch: 0,
+        sequence: 0,
+        device_time_us: 0,
+        band: Band::Unknown,
+        channel: 0,
+        bandwidth_mhz: 20,
+        subcarrier_offset: 0,
+        amplitude: vec![1.0, 1.0],
+        phase: vec![0.0],
+        rssi_dbm: -50,
+        noise_floor_dbm: -90,
+        phy: PhyFlags::empty(),
+    };
+    assert!(matches!(
+        decode_csi(&frame),
+        Err(DecodeError::LengthMismatch { .. })
+    ));
+    frame.phase = vec![0.0, f32::NAN];
+    assert!(matches!(
+        decode_csi(&frame),
+        Err(DecodeError::NonFiniteSample { .. })
+    ));
+    frame.phase = vec![0.0, 0.0];
+    frame.amplitude.clear();
+    assert!(matches!(decode_csi(&frame), Err(DecodeError::EmptyFrame)));
 }
 
 // --- unwrap (U) ------------------------------------------------------------
@@ -216,7 +277,7 @@ proptest! {
 
 #[test]
 fn normalise_n1_identity_is_bit_exact() {
-    let frame = CsiFrame {
+    let frame = ComplexFrame {
         meta: meta(1, 0, 0),
         bins: ht20_bins(3),
         flags: FrameFlags::default(),
@@ -571,6 +632,30 @@ fn process_is_bit_identical_across_runs() {
     let second = process(&chunk, &cal, &cfg).unwrap();
     assert_eq!(first.fingerprint(), second.fingerprint());
     assert_eq!(first, second);
+}
+
+#[test]
+fn process_packs_the_canonical_feature_vector() {
+    let cfg = Config::default_reference(SubcarrierLayout::ht20());
+    let cal = Calibration {
+        per_node: vec![Complex32::ONE; 64],
+        state: CalibrationState::Calibrated,
+    };
+    let features = process(&synthetic_chunk(6), &cal, &cfg).unwrap();
+    let node = features.nodes[0].node;
+    let vector = features
+        .feature_vector(node)
+        .expect("the node has a feature vector");
+
+    // The documented layout is amplitude RMS values then motion energies, in
+    // usable-subcarrier order.
+    let source = &features.nodes[0];
+    let mut expected = source.amplitude_rms.clone();
+    expected.extend_from_slice(&source.motion_energy);
+    assert_eq!(vector.values(), expected.as_slice());
+    assert_eq!(vector.len(), source.amplitude_rms.len() + source.motion_energy.len());
+    assert!(!vector.is_empty());
+    assert!(features.feature_vector(NodeId(999)).is_none());
 }
 
 #[test]

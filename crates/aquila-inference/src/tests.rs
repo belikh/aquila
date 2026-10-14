@@ -14,7 +14,7 @@ use aquila_types::{
 use proptest::prelude::*;
 
 use crate::error::{DType, Dim, ModelError, ModelHealth};
-use crate::feature::FeatureVector;
+use aquila_types::FeatureVector;
 use crate::model::{
     check_tensor_dims, DatasetRecord, ModelCard, ModelId, ModelTask, SeedWeights, TensorSpec,
     WeightsTrained,
