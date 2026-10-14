@@ -57,7 +57,7 @@ of `CsiSource`, `Clock`, `GroundTruth`, `Sink`, `MetricSink`.
 - A ledger row is written per commit, keyed by commit, and diffable.
 - TDD throughout; fake adapters and fixtures, no hardware.
 
-**Ledger rows.** `presence.f1`, `presence.count.mae`, `replay.digest`.
+**Ledger rows.** `accuracy.presence_f1`, `presence.count.mae`, `replay.digest`.
 
 ### Slice 2 — Vitals tracer bullet
 
@@ -76,7 +76,7 @@ output, measured against a reference trace.
 - Vitals are computed on the same frames and clock as presence, not a parallel
   path.
 
-**Ledger rows.** `breathing.mae`, `heart.mae`, `vitals.window.count`.
+**Ledger rows.** `accuracy.breathing.mae_brpm`, `heart.mae`, `vitals.window.count`.
 
 ### Slice 3 — Global whole-home calibration
 
@@ -119,7 +119,7 @@ inter-node drift), `aquila-inference` (`PoseModel`, fake then ONNX),
 - Inter-node drift is estimated and applied, not assumed away.
 - Fusion is feature-level, per the settled brief.
 
-**Ledger rows.** `pose.pck20.torso`, `presence.f1.room`, `fusion.node_pair.count`.
+**Ledger rows.** `accuracy.torso_pck_at_20`, `presence.f1.room`, `fusion.node_pair.count`.
 
 ### Slice 5 — Floor aggregation
 
@@ -290,7 +290,10 @@ inform later ADRs but are run separately, with their own honest write-ups:
 
 Every slice writes `MetricSink` rows keyed to the commit, classified as
 **deterministic** (replay digests, schema, reproducibility), **statistical**
-(F1, MAE, PCK, attribution), or **gated** (none in CI yet). The workflow is
+(F1, MAE, PCK, attribution), or **gated** (none in CI yet). The three v1 gated
+bar rows use the canonical ids `accuracy.torso_pck_at_20`, `accuracy.presence_f1`
+and `accuracy.breathing.mae_brpm` (`data-contracts.md` §7.3); scoped rows append
+a scope suffix (e.g. `presence.f1.room`, `presence.f1.home`). The workflow is
 record-and-diff: a slice is not done until its rows exist at the target bar and
 a diff against the previous commit is available. This is the mechanism that
 keeps "measured from commit one" true.

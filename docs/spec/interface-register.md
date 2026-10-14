@@ -78,8 +78,7 @@ protocol in the same crate with the same adapters (ADR-0001 §3).
 | Node control plane (core ↔ node) | UDP request/response | `9101/udp` | core | `capture-and-firmware.md` §6 |
 | Private HTTP + WebSocket + HA ingress | HTTP/1.1 (+ WS, RFC 6455), loopback/ingress only | `8099/tcp` | add-on | `core-api.md`, `home-assistant.md` §3.1 |
 
-`6969/udp` (`home-assistant.md`), `8765` (`core-api.md` §2) and `8080`
-(`dashboard.md`) are superseded by this register (ADR-0003 §7–8).
+`6969/udp`, `8765` and `8080` are superseded by this register (ADR-0003 §7–8).
 
 ## Firmware OTA
 

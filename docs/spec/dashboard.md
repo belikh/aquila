@@ -287,5 +287,7 @@ Target WCAG 2.2 AA.
   the supported HA versions, or whether the self-contained theme is always used.
 - Whether node pairing should also offer a QR/serial path in v1 or only the
   text code.
-- Whether the ledger view should expose diffing between arbitrary commits in v1
-  or only the latest commit's diff.
+- **Ledger view scope — settled.** v1 exposes the **current** commit's snapshot
+  only (`GET /metrics/snapshot`, `core-api.md` §6/§13); the dashboard has no
+  `GET /measurements/{commit}` route. Arbitrary-commit diffing is deferred until
+  a core-api read contract for it exists.

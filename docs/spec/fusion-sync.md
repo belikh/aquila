@@ -38,6 +38,13 @@ channel. WiFi hardware here exposes no PHY TX/RX timestamp, so all measurement i
 software-timestamped at the MAC/application boundary — hence millisecond, not
 nanosecond, accuracy (see §1.5).
 
+**Units bridge (µs ↔ ns).** On the wire and in the contract the device stamp is
+`device_time_us`, in **microseconds** (`data-contracts.md` §2, §10); this
+document's `DeviceTime`/`CoreTime` and every offset, drift and residual below are
+in **nanoseconds**. The one conversion is `ns = us × 1000`, applied once at the
+ingest seam before any sync maths. Stating it here removes the µs/ns ambiguity
+(`sister-issues-specs.md` D7).
+
 The `Clock` seam is the core's injectable source of "now":
 
 ```rust
@@ -145,7 +152,12 @@ result can be traced to the timestamps and the model revision that produced it.
 
 ### 1.5 Accuracy budget
 
-Nominal targets, at the stated cadence after warm-up (`≥ 32` accepted samples):
+Nominal targets, at the stated cadence after warm-up (`≥ 32` accepted samples).
+These are **design targets graded `Claimed`**, not measured facts and not
+`sources.json`-cited: `fusion-sync.md` owns no external reference for them. They
+become `Measured` only when the §2.7 tests (extrapolation bound, RTT gate,
+snapshot round-trip) record ledger rows. The "Goal" column is the target; the
+"Gate" column is the fail-closed threshold enforced in code.
 
 | Quantity                                   | Goal    | Gate (fail closed) |
 | ------------------------------------------ | ------- | ------------------ |
@@ -341,8 +353,10 @@ a room pose derived from multiple *uncoherent* views is out of scope for v1.
 
 Each calibrated node carries its own quality `NodeQuality` (`aquila_types`,
 a `[0,1]` score), stored in the calibration artefact as `nodes[].quality`
-(`geometry-calibration.md` §13) and derived from that node's empty-home baseline
-sampling and clock fit. Fusion derives the weight:
+(`geometry-calibration.md` §13, artefact `CalibrationArtefact`) and derived from
+that node's empty-home baseline sampling and clock fit. The runtime contract this
+is read from is `aquila_types::Calibration` (`data-contracts.md` §10) — there is
+one `Calibration`, not a per-doc variant. Fusion derives the weight:
 
 ```
 w_n = clip(q_n, 0, 1) · health_factor(health_n, SyncHealth_n)     // in [0,1]

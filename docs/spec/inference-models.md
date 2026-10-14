@@ -153,7 +153,10 @@ Notes:
 
 The `FeatureVector` layout is owned by `aquila-signal` (`architecture.md` §3,
 `signal.md`); the ONNX tensor mapping is **internal to `aquila-inference`**. Both
-are pinned in the model card. Named dimensions:
+are pinned in the model card. Named dimensions — **provisional**: `T`, `S`, `L`
+and `F` depend on the firmware CSI rate and channel width and are confirmed
+against the ESP32-S3 capture path before freezing (§8.2 item 3), so treat this
+table as a working target, not a frozen contract:
 
 | Symbol | Meaning | v1 default |
 | --- | --- | --- |
@@ -498,8 +501,8 @@ model that fails to load does not abort unrelated subsystems; it reports
 - The Python side emits the same fixtures and PyTorch reference outputs; the
   parity gate (§2.4) compares them.
 - Everything is keyed by **code commit**, per the brief's commit-keyed ledger,
-  which `aquila-metrics` owns behind `MetricSink` (`LedgerMetricSink` for the
-  persistent ledger, `InMemoryMetricSink`/`RecordingMetricSink` for tests).
+  which `aquila-metrics` owns behind `MetricSink` (`JsonLedgerSink` for the
+  persistent ledger, `InMemoryMetricSink` for tests).
 - This matches `measurement.md`: `MetricKind` is deterministic/statistical/gated;
   no CI gating in v1 — the ledger records and diffs.
 - Gated metrics (presence F1, breathing MAE, torso-PCK@20) are computed only where

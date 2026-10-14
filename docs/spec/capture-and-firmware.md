@@ -209,11 +209,16 @@ Slice 3). Nodes do not own a shared clock.
 ```rust
 // trait in aquila-types; implementations and the drift estimator in aquila-sensing
 pub trait Clock: Send + Sync {
-    /// Host monotonic time in microseconds.
-    fn now_us(&self) -> u64;
+    /// Monotonic core time in nanoseconds since core boot.
+    fn now(&self) -> CoreTime;
 }
-// SystemClock: CLOCK_MONOTONIC. FakeClock: manual advance, for tests.
+// SystemClock: CLOCK_MONOTONIC. ReplayClock/FakeClock: manual advance, for tests.
 ```
+
+The trait is declared once, as `fn now(&self) -> CoreTime`, matching
+`aquila-types` and `fusion-sync.md` §1.1; the `now_us`/`SystemClock`/`FakeClock`
+sketch that used to appear here is superseded (microsecond device stamps are
+converted at the ingest seam, `data-contracts.md` §10).
 
 The node stamps each CSI frame with its own **free-running** monotonic clock
 (`esp_timer_get_time`, microseconds) and never disciplines it. Two independent
@@ -384,6 +389,37 @@ only; node → core replies and `STATUS` are not yet authenticated, so "mutually
 authenticated" is a target, not a v1 property. The CSI **data plane** is not
 sealed or authenticated in v1 at all (see `privacy-security.md` §5).
 
+**`NodeControl` interface.** `NodeControl` is the outbound half of the
+`CsiSource` protocol, owned by `aquila-sources` (ADR-0001 §3). It is deliberately
+small and object-safe:
+
+```rust
+// aquila-sources
+pub enum ControlError {
+    Io(std::io::Error),
+    Decode(aquila_wire::DecodeError),
+    /// The node did not answer within the deadline.
+    Timeout { request_id: u32 },
+    /// A reply did not echo the expected `request_id`.
+    StaleReply { request_id: u32 },
+    Other(String),
+}
+
+pub trait NodeControl: Send {
+    /// Send one control request and block for its `RESULT`/ack. `body` is the
+    /// opcode-specific body of §6.2; the framing, request id and (once paired)
+    /// the §6.1 auth trailer are added here.
+    fn send(&mut self, opcode: Opcode, body: &[u8]) -> Result<Vec<u8>, ControlError>;
+    /// Request stop; unblocks a pending `send`. Idempotent.
+    fn shutdown(&mut self);
+}
+```
+
+The real adapter is `UdpNodeControl` (the same crate, the same socket pair as
+`UdpLiveSource`); the test adapter is `FakeNodeControl`, which records commands
+and replays scripted replies. Only `send`/`shutdown` are exposed; retransmission,
+`request_id` dedup and the auth trailer stay inside.
+
 ### 6.2 Opcodes
 
 | Code | Name | Direction | Purpose |
@@ -483,7 +519,9 @@ H_k(t) = H0_k + Σ_i a_i(t) · exp( -j · 2π · f_k · d_i(t) / c ) + n_k(t)
   Amplitude and phase are not emitted; the core derives them. RSSI and noise
   floor are derived from the same model.
 
-Modulations:
+Modulations (these amplitudes and rates are **modelling assumptions**, not
+measured facts; the determinism test pins reproducibility, not physical
+correctness, so they are labelled `Claimed` and carry no `sources.json` id):
 
 - **Breathing** — `d_breath(t) = A_b · sin(2π f_b t + φ_b)`, `A_b ≈ 3–8 mm`,
   `f_b = 0.1–0.5 Hz`. A small chest displacement rotates each subcarrier's phase
@@ -685,19 +723,24 @@ trait is declared in `aquila-types` and the drift estimator lives in
 ## 11. Open decisions
 
 Recorded here for the ADR(s) this spec will spawn; each is a protocol decision
-made above and open to review:
+made above and open to review. Items marked **settled** are decided, not open —
+they are listed for traceability only:
 
-1. **Node identity.** The wire and home model use the factory base MAC as the
-   stable node id; a short display id is a presentation concern only.
+1. **Node identity — settled by ADR-0003 §3.** The wire carries the dense
+   `NodeId(u16)` (`data-contracts.md` §1); the factory base MAC (`MacAddr`) is
+   mapped to and from it at the seam by `aquila-wire`'s node-identity map. There
+   is no MAC-typed node id on the wire or in the home model.
 2. **Elicitation.** v1 is passive/ambient; the firmware does not transmit.
    Dedicated elicitation is deferred to Track 2. Consequence stated in §5.3.
 3. **Control channel.** UDP request/response, not TCP/HTTP, so the firmware
    needs no HTTP stack; pairing by short-lived code, then a long-lived token.
-4. **Data plane.** One CSI frame per datagram, unicast, no ACK; loss surfaced by
-   sequence gaps and the node `dropped` counter. Default ports `9100`/`9101`.
-5. **Timestamp.** `esp_timer_get_time` monotonic µs is canonical; TSF is
-   optional; the host estimates offset and drift (NTP-style anchor plus stream
-   regression).
+4. **Data plane — settled by ADR-0003 §7.** One CSI frame per datagram, unicast,
+   no ACK; loss surfaced by sequence gaps and the node `dropped` counter. Ports
+   `9100/udp` (data) and `9101/udp` (control).
+5. **Timestamp.** `esp_timer_get_time` monotonic µs is canonical; the wire
+   carries **no** TSF (ADR-0004 replaced the earlier 56-byte header and its
+   optional `tsf_us`); the host estimates offset and drift (NTP-style anchor plus
+   stream regression).
 6. **Session container.** `.aqs`, typed records carrying exact wire bytes, JSON
    metadata, digest trailer; Git LFS for large clips, a golden Session committed.
 7. **Shared wire layout.** `aquila-wire` generates `node_wire.h`, checked in CI.

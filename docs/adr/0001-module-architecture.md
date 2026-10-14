@@ -1,7 +1,7 @@
 # ADR-0001: Module architecture
 
 - Date: 2026-10-13
-- Status: Proposed
+- Status: Accepted
 - Deciders: Aquila design session
 - Related: `docs/spec/architecture.md`
 

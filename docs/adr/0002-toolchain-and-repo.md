@@ -1,7 +1,7 @@
 # ADR-0002: Toolchain and repository
 
 - Date: 2026-10-13
-- Status: Proposed
+- Status: Accepted
 - Deciders: Aquila design session
 - Related: `docs/spec/repository-tooling.md`, `docs/adr/0001-module-architecture.md`
 

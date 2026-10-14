@@ -241,7 +241,7 @@ component consumes the read-only subset listed in `home-assistant.md` §5.2.
 
 Representations are canonical and stable within a major version. Selected fields:
 
-**Floor** — `{ "id", "name", "index", "revision" }`. `index` is the storey order
+**Floor** — `{ "id", "name", "index", "revision" }`. `index` is the floor order
 (0 = lowest); it is unique per home.
 
 **Room** — `{ "id", "floorId", "name", "label", "bounds", "revision" }`. `label`
@@ -476,12 +476,12 @@ Query: `?commit=<sha>` (default: current ledger commit), `?kinds=` a comma list 
 {
   "commit": "9f2c41e", "generatedAt": "2026-10-13T20:45:00.000Z", "revision": 17,
   "metrics": [
-    { "name": "presence.f1", "kind": "gated", "unit": "ratio",
+    { "name": "accuracy.presence_f1", "kind": "gated", "unit": "ratio",
       "value": 0.94, "n": 12000, "reference": "camera-gt",
       "gate": { "bar": 0.9, "pass": true } },
-    { "name": "torso.pck20", "kind": "statistical", "unit": "ratio",
+    { "name": "accuracy.torso_pck_at_20", "kind": "statistical", "unit": "ratio",
       "value": 0.67, "n": 8400, "ci95": [0.64, 0.70] },
-    { "name": "vitals.breathing.mae", "kind": "statistical", "unit": "brpm",
+    { "name": "accuracy.breathing.mae_brpm", "kind": "statistical", "unit": "brpm",
       "value": 1.8, "n": 310 }
   ],
   "bars": {

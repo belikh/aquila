@@ -24,7 +24,7 @@ this spec uses. Numbers and external claims cite `../reference/sources.json`.
 | `repository-tooling.md` | Monorepo layout, toolchain, CI, guardrail checks. |
 | `interface-register.md` | The canonical crate/interface register: crate list, layers, seams, ports and the authoritative dependency edges (settled by ADR-0003). |
 | `testing.md` | Test tiers, `aquila-testkit`, fixtures, the honest-claims contract. |
-| `roadmap.md` | Nine tracer-bullet slices and the v1 exit criteria. |
+| `roadmap.md` | Ten tracer-bullet slices (1–10) and the v1 exit criteria. |
 | `risks.md` | Risk register and the open questions the tickets must resolve. |
 
 ## Resolved

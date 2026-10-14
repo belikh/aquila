@@ -53,8 +53,8 @@ Small interface, no traits. All items are pure.
 ```rust
 // aquila-signal
 
-/// One ESP32-S3 node. Identity only; no behaviour.
-pub struct NodeId(pub u32);
+// Node identity is the one canonical `aquila_types::NodeId` (`data-contracts.md`
+// §1); this crate does not declare its own.
 
 /// Channel width; determines the expected subcarrier count.
 pub enum Bandwidth { Ht20, Ht40 }
@@ -65,7 +65,7 @@ pub struct Complex32 { pub re: f32, pub im: f32 }
 
 /// Receive metadata carried alongside the CSI record.
 pub struct RxMeta {
-    pub node: NodeId,
+    pub node: aquila_types::NodeId,
     pub seq: u32,
     pub t_device_us: u64,          // raw device clock; NOT drift-corrected here
     pub centre_freq_hz: u32,
@@ -93,7 +93,12 @@ pub struct ComplexFrame {
 
 /// Per-node (and, later, per-pair) hardware normalisation, precomputed.
 /// Runtime hot path is a complex multiply: no `sin`/`cos` at runtime.
-pub struct Calibration {
+/// Signal-internal only: this is **not** the frozen contract `Calibration`
+/// (`aquila_types::Calibration`, `data-contracts.md` §10), which is why it
+/// carries a non-colliding internal name. (The crate still exports it as
+/// `aquila_signal::Calibration` pending the same rename — register §"Canonical
+/// types" flags that second declaration; the rename is out of this docs sweep.)
+pub struct NodeCorrection {
     pub per_node: Vec<Complex32>,  // length == expected_bins; identity if empty
     pub state: CalibrationState,   // Calibrated | Uncalibrated | Partial
 }
@@ -101,16 +106,19 @@ pub struct Calibration {
 /// The single frozen reference configuration.
 pub struct Config {
     pub layout: SubcarrierLayout,
-    pub band_breathing: Band,      // default 0.10..0.60 Hz
-    pub band_heart: Band,          // default 0.80..2.50 Hz
-    pub band_motion: Band,         // default 0.10..5.00 Hz
+    pub band_breathing: FreqBand,  // default 0.10..0.60 Hz
+    pub band_heart: FreqBand,      // default 0.80..2.50 Hz
+    pub band_motion: FreqBand,     // default 0.10..5.00 Hz
     pub uniform_fs_hz: f32,        // resample grid for STFT
     pub stft_window: usize,
     pub stft_hop: usize,
     pub select_k: usize,
 }
 
-pub struct Band { pub lo_hz: f32, pub hi_hz: f32 }
+/// A frequency interval for a filter band. Deliberately **not** named `Band`:
+/// the frozen contract `Band` is the 2.4/5 GHz RF enum (`data-contracts.md`
+/// §1, §8); this internal type is a frequency interval.
+pub struct FreqBand { pub lo_hz: f32, pub hi_hz: f32 }
 
 // --- stage functions (each pure) -------------------------------------------
 
@@ -124,7 +132,7 @@ pub fn decode_record(raw: &[u8], meta: &RxMeta, layout: &SubcarrierLayout)
 
 pub fn validate_sequence(frames: &[ComplexFrame]) -> Vec<SeqAnomaly>; // gaps/reorder/regression
 
-pub fn normalise(frame: &ComplexFrame, cal: &Calibration) -> NormalisedFrame;
+pub fn normalise(frame: &ComplexFrame, cal: &NodeCorrection) -> NormalisedFrame;
 
 pub fn unwrap_phase(wrapped: &[f32]) -> Vec<f32>;
 
@@ -136,7 +144,7 @@ pub fn resonator(x: &[f32], at_hz: f32, fs_hz: f32) -> Complex32; // sliding Goe
 pub fn motion_features(x: &[f32], window: usize) -> Vec<f32>;
 
 pub fn stft(x: &[f32], cfg: &StftConfig) -> Spectrogram;
-pub fn bvp_track(spec: &Spectrogram, band: Band) -> Vec<BvpSample>;
+pub fn bvp_track(spec: &Spectrogram, band: FreqBand) -> Vec<BvpSample>;
 
 pub fn resample_uniform(x: &[f32], t_us: &[u64], fs_hz: f32)
     -> Result<Vec<f32>, ResampleError>;
@@ -145,7 +153,7 @@ pub fn select_subcarriers(features: &SubcarrierFeatureMatrix, k: usize)
     -> SubcarrierMask;
 
 // Top-level reference composition (thin; calls the stages above in order).
-pub fn process(chunk: &[ComplexFrame], cal: &Calibration, cfg: &Config)
+pub fn process(chunk: &[ComplexFrame], cal: &NodeCorrection, cfg: &Config)
     -> Result<Features, SignalError>;
 ```
 
@@ -182,8 +190,8 @@ pinned as follows.
    permitted. `sin`, `cos`, `atan2`, `exp`, `ln`, `powf` are *not* called at
    runtime in the reference path; where a stage needs them it uses a pinned
    `const` table (Hann window, twiddle factors) or the in-crate `atan2`
-   approximation with documented coefficients and operation order. Calibration
-   stores complex multipliers, so phase rotation is a multiply.
+   approximation with documented coefficients and operation order. The per-node
+   `NodeCorrection` stores complex multipliers, so phase rotation is a multiply.
 5. **Fixed accumulation order.** All sums iterate in ascending index order.
    Length-sensitive sums accumulate in `f64` and narrow to `f32` at one stated
    point per stage. Variance uses a stable two-pass form (§4.6).
@@ -229,10 +237,13 @@ the same imaginary-first order. The HT20/HT40 null-bin map is a
 
 **Invariants.**
 - `D1` Structural: `decode_record` accepts iff `raw.len()` is even,
-  `raw.len()/2 == layout.expected_bins`, and `raw.len() <= 612`;
+  `raw.len()/2 == layout.expected_bins`, and `raw.len() <= 2 * MAX_SUBCARRIERS`;
   `decode_csi` accepts iff `i_q.len()` is even and non-empty. Every accepted
   frame satisfies `bins.len() == expected_bins` (`decode_record`) or
-  `i_q.len() / 2` (`decode_csi`).
+  `i_q.len() / 2` (`decode_csi`). `MAX_SUBCARRIERS` is the canonical int8 ceiling
+  set by ADR-0005 (`714` for the 1472-byte datagram budget, i.e. `1428` sample
+  bytes), not the old f32-era `178`/`612`; the cap is derived from that one
+  constant, never hard-coded separately.
 - `D2` Determinism: identical input yields bit-identical `ComplexFrame`.
 - `D3` Exactness: `int8 → f32` conversion is exact; no clamping or NaN.
 - `D4` `first_word_invalid` policy: the first complex sample (one I/Q pair,
@@ -304,7 +315,7 @@ order-preserving.
 global calibration, so nodes are comparable.
 
 **Contract.** `H_norm[i] = H[i] * C[i]` where `C[i]` is a precomputed
-`Complex32` multiplier from `Calibration`. Pure complex multiply; no runtime
+`Complex32` multiplier from `NodeCorrection`. Pure complex multiply; no runtime
 trig. Time-invariant.
 
 **Invariants.**
@@ -500,7 +511,7 @@ the dominant breathing/heart-rate frequency over time (the BVP-style series).
 **Contract.** `stft` computes, for frame `m` and bin `k`,
 `X[m,k] = Σ_{n<W} w[n]·x[mH+n]·e^{−i2πkn/W}`, using a `const` Hann window and
 `const` twiddle/tables; bins map to `f_k = k·fs/W`. `bvp_track` band-limits
-`|X|` to a `Band`, picks the dominant bin per frame by deterministic argmax
+`|X|` to a `FreqBand`, picks the dominant bin per frame by deterministic argmax
 (lowest bin on ties), optionally refines by a pinned parabolic formula, and
 returns `BvpSample { t, freq_hz, snr_db }` (brpm/bpm conversion is left to the
 model seam).
@@ -569,7 +580,7 @@ Non-finite score → that bin is excluded and flagged, never treated as `+∞`.
    contract frames.
 2. `validate_sequence` per node → anomalies attached to `Features`.
 3. layout projection (ascending usable bins).
-4. `normalise` with the frozen `Calibration`.
+4. `normalise` with the frozen `NodeCorrection`.
 5. amplitude path and phase path:
    - amplitude magnitude series per bin;
    - `unwrap_phase` → `sanitise_phase` per frame.
@@ -585,7 +596,7 @@ mask consumed at step 9; it is not re-run per frame. This keeps the runtime path
 free of data-dependent branching that could vary between replays.
 
 The frozen configuration and the calibration coefficients are inputs, not
-globals. Replaying a recorded fixture with the same `Config` and `Calibration`
+globals. Replaying a recorded fixture with the same `Config` and `NodeCorrection`
 must reproduce `Features` bit-for-bit.
 
 ## 6. Consolidated invariants
@@ -634,7 +645,7 @@ when short; `K4` deterministic with lower-index tie-break; `K5` rank consistency
 Global: `G1` no IO, no globals, no threads in the reference path; `G2` no
 cross-node phase in v1; `G3` bit-exact on the pinned reference target; `G4` no
 `atan2`/`sin`/`cos`/`exp`/`ln` at runtime outside pinned tables or the in-crate
-`atan2`; `G5` same `Config`+`Calibration`+fixture ⇒ identical `Features`.
+`atan2`; `G5` same `Config`+`NodeCorrection`+fixture ⇒ identical `Features`.
 
 ## 7. Open questions (honest unknowns)
 

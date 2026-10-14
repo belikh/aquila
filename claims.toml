@@ -8,17 +8,17 @@
 [[claim]]
 id = "CLM-torso-pck20"
 text = "In-domain torso PCK@20 is at or above 65% on single-room pose fixtures."
-metric = "pose.pck20.torso"
+metric = "accuracy.torso_pck_at_20"
 status = "target"
 
 [[claim]]
 id = "CLM-presence-f1"
 text = "In-domain presence F1 is at or above 0.90 per zone (macro)."
-metric = "presence.f1"
+metric = "accuracy.presence_f1"
 status = "target"
 
 [[claim]]
 id = "CLM-breathing-mae"
 text = "In-domain breathing MAE is at or below 2 brpm against the respiratory-belt reference."
-metric = "breathing.mae"
+metric = "accuracy.breathing.mae_brpm"
 status = "target"

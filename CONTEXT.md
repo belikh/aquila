@@ -129,12 +129,19 @@ _Avoid_: baseline, truth, label.
 
 **Witness**:
 The evidence grade recording how a result was established. Every sensing claim
-carries exactly one grade:
+carries exactly one of **five** grades, strongest first (the single authoritative
+set, declared by `aquila_types::Witness` and `data-contracts.md` §1; `evaluation.md`
+§5 refines the same five):
+- **Gated**: measured and passing a defined v1 bar; the only grade a headline
+  claim may carry.
 - **Measured**: computed from real, replayed or simulated input and recorded in
   the commit-keyed ledger.
 - **Claimed**: asserted without a recorded measurement.
-- **Gated**: measured and passing a defined v1 bar; the only grade a headline
-  claim may carry.
+- **Data-gated** (`DataGated`): blocked on missing input (fixture, labels,
+  reference recording or paired samples); a blocked sub-grade of Claimed.
+- **Hardware-gated** (`HardwareGated`): blocked on missing hardware (reference
+  device, belt, camera rig or the reference-scale node deployment); a blocked
+  sub-grade of Claimed.
 _Avoid_: proven, verified, validated, certified, trusted, ground truth.
 
 ## Explicitly not used

@@ -47,9 +47,8 @@ aquila/
 ├── hacs.json                # marks the repo as a HACS repository
 ├── crates/                  # the aquila-* Rust modules + composition root
 ├── firmware/                # ESP32-S3 firmware (ESP-IDF, C) — outside the crate DAG
-├── ha/
-│   ├── aquila_core/         # the add-on: config.yaml, Dockerfile, build.yaml, run.sh
-│   └── custom_components/aquila/   # HACS component (Python) — outside the crate DAG
+├── aquila_core/             # the HA add-on (App): config.yaml, Dockerfile, build.yaml, run.sh
+├── custom_components/aquila/ # HACS component (Python) — outside the crate DAG
 ├── dashboard/               # WASM bundle glue + committed build metadata
 ├── fixtures/                # recorded/synthetic fixtures + reference pipeline asset
 ├── .aquila/                 # runtime state: the commit-keyed ledger (see §1.3)
@@ -73,11 +72,11 @@ aquila/
 
 - **`crates/`** is the only Rust workspace. Everything Rust builds from here, so
   `cargo metadata`, the DAG check and `cargo-deny` see one graph.
-- **`firmware/`**, **`ha/`** and **`dashboard/`** are *not* workspace members.
-  The firmware is a separate ESP-IDF build; the HA component is Python; the
-  dashboard directory holds only the WASM bundle and its bundling glue (the
-  `aquila-dashboard` *crate* lives in `crates/`). Keeping them out of `crates/`
-  keeps the crate graph honest.
+- **`firmware/`**, **`aquila_core/`**, **`custom_components/`** and
+  **`dashboard/`** are *not* workspace members. The firmware is a separate
+  ESP-IDF build; the HA component is Python; the dashboard directory holds only
+  the WASM bundle and its bundling glue (the `aquila-dashboard` *crate* lives in
+  `crates/`). Keeping them out of `crates/` keeps the crate graph honest.
 - **`.aquila/`** holds runtime state. Only `.aquila/metrics/ledger.jsonl` (and
   its derived `index.json`) is ever committed; everything else under it is
   ignored. See §1.3.
@@ -85,20 +84,21 @@ aquila/
 ### 1.2 Layout reconciliation
 
 Three settled sources describe the HA/add-on tree differently, and this document
-resolves them:
+resolves them to the layout actually on disk (`aquila_core/` and
+`custom_components/aquila/` at the repo root):
 
 | Source | Draws | Resolved here as |
 | --- | --- | --- |
-| Brief (top authority) | `firmware/`, `ha/ python component`, `dashboard/` | top-level `firmware/`, `ha/`, `dashboard/` |
-| `architecture.md` §9 | composition root at `addon/`, component at `custom_components/aquila/` | composition root binary crate `crates/aquila-addon/`; component at `ha/custom_components/aquila/` |
-| `home-assistant.md` §3.3 | `repository.yaml`, `hacs.json`, `aquila_core/`, `custom_components/aquila/` | `repository.yaml` and `hacs.json` at the repo root (required by the stores); packaging at `ha/aquila_core/`; component at `ha/custom_components/aquila/` |
+| Brief (top authority) | `firmware/`, HA python component, `dashboard/` | top-level `firmware/`, `custom_components/aquila/`, `dashboard/` |
+| `architecture.md` §9 | composition root at `addon/`, component at `custom_components/aquila/` | composition root binary crate `crates/aquila-addon/`; component at root `custom_components/aquila/` |
+| `home-assistant.md` §3.3 | `repository.yaml`, `hacs.json`, `aquila_core/`, `custom_components/aquila/` | `repository.yaml` and `hacs.json` at the repo root (required by the stores); add-on packaging at root `aquila_core/`; component at root `custom_components/aquila/` |
 
 Rationale: `repository.yaml` and `hacs.json` **must** sit at the repository root
 (the add-on store and HACS look only there), and HACS uses `zip_release` with
 `filename: aquila.zip`, so the component's *repository* path is independent of its
-*HA runtime* path (`custom_components/aquila`). The brief's `ha/` therefore holds
-both HA-facing trees, and the one Rust composition-root binary lives in the one
-Rust workspace as `crates/aquila-addon`.
+*HA runtime* path (`custom_components/aquila`). Both HA-facing trees sit at the
+repo root, and the one Rust composition-root binary lives in the one Rust
+workspace as `crates/aquila-addon`.
 
 ### 1.3 The committed ledger
 
@@ -107,9 +107,9 @@ The commit-keyed measurement ledger is `.aquila/metrics/ledger.jsonl`
 `index.json` is a derived cache and may be regenerated. `baseline.json` pins a
 diff baseline. The ledger is the only part of `.aquila/` that is committed.
 
-> Reconciliation: `data-contracts.md` §9.2 names the ledger `measure/ledger.jsonl`.
-> The measurement crate (`aquila-metrics`) owns the ledger, so this document
-> follows `measurement.md` and lists the divergence in §13.
+> Reconciliation: `data-contracts.md` §9.2 now also names the ledger
+> `.aquila/metrics/ledger.jsonl`; the owning crate is `aquila-metrics`
+> (`measurement.md`), so that path is canonical everywhere.
 
 ---
 
@@ -122,19 +122,21 @@ the shared lints, and the resolver.
 [workspace]
 resolver = "2"
 members = [
-    "crates/aquila-types", "crates/aquila-signal", "crates/aquila-geometry",
-    "crates/aquila-metrics", "crates/aquila-sources", "crates/aquila-inference",
-    "crates/aquila-sensing", "crates/aquila-evaluation", "crates/aquila-api",
-    "crates/aquila-ha", "crates/aquila-dashboard",
-    "crates/aquila-addon",   # composition root (binary)
-    "crates/aquila-testkit", # dev-only fixtures/fakes (testing.md §3)
+    "crates/aquila-types", "crates/aquila-wire", "crates/aquila-signal",
+    "crates/aquila-geometry", "crates/aquila-metrics", "crates/aquila-session",
+    "crates/aquila-inference", "crates/aquila-sources", "crates/aquila-simulator",
+    "crates/aquila-sensing", "crates/aquila-evaluation", "crates/aquila-ha",
+    "crates/aquila-api", "crates/aquila-dashboard",
+    "crates/aquila-addon",    # composition root (binary)
+    "crates/aquila-capture",  # dev-only capture/synth/verify binary
+    "crates/aquila-testkit",  # dev-only fixtures/fakes (testing.md §3)
     "xtask",
 ]
-exclude = ["firmware", "ha", "dashboard", "fixtures"]
+exclude = ["firmware", "aquila_core", "custom_components", "dashboard", "fixtures"]
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.99.0"        # MSRV, kept equal to the toolchain pin
+rust-version = "1.98"          # MSRV, kept equal to the toolchain pin
 license = "GPL-3.0-only"
 license-file = "LICENSE"
 repository = "https://github.com/belikh/aquila"
@@ -170,7 +172,7 @@ measurement determinism and the reference-pipeline bit-exactness asset
 
 ```toml
 [toolchain]
-channel = "1.99.0"                 # exact pin; bump deliberately
+channel = "1.98.1"                 # exact pin; bump deliberately
 components = ["rustfmt", "clippy"]
 targets = ["wasm32-unknown-unknown", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
 profile = "default"
@@ -210,70 +212,71 @@ No other crate, and no test, may opt out. `aquila-dashboard`'s
 
 ## 3. Crate inventory and dependency DAG
 
-The crate graph is fixed by `docs/adr/0001-module-architecture.md` and
-`docs/spec/architecture.md`: **eleven `aquila-*` modules** in six topological
-levels, plus a composition root, a dev-only test crate, and repo tooling.
+The crate graph is fixed by `docs/adr/0003-interface-reconciliation.md` and
+registered in `docs/spec/interface-register.md`: **fourteen product
+`aquila-*` modules**, plus a composition root, two dev-only crates and repo
+tooling.
 
 ### 3.1 Levels (authoritative, derived topologically)
 
 | Level | Crates | Character |
 | --- | --- | --- |
 | 0 | `aquila-types` | vocabulary; no behaviour |
-| 1 | `aquila-signal`, `aquila-geometry`, `aquila-metrics` | pure transforms |
-| 1 | `aquila-sources`, `aquila-inference` | ingestion and models (I/O behind seams) |
-| 2 | `aquila-sensing` | the single stateful core |
-| 3 | `aquila-evaluation`, `aquila-ha` | drive the core; HA output mapping |
-| 4 | `aquila-api` | private control-plane transport |
-| 5 | `aquila-dashboard` | WASM UI |
+| 1 | `aquila-wire`, `aquila-signal`, `aquila-geometry`, `aquila-metrics` | pure transforms / codec |
+| 2 | `aquila-session`, `aquila-inference` | container and models |
+| 3 | `aquila-sources` | the core↔node seam (I/O) |
+| 4 | `aquila-simulator` | deterministic synthesis |
+| 5 | `aquila-sensing` | the single stateful core |
+| 6 | `aquila-evaluation`, `aquila-ha` | drive the core; HA output mapping |
+| 7 | `aquila-api` | private control-plane transport |
+| 8 | `aquila-dashboard` | WASM UI |
 
-`aquila-sources` and `aquila-inference` are drawn on the same row as the pure
-transforms because both depend only on `aquila-types`; they are not in the same
-*dependency* relation to each other. The level **number** is what the check uses,
-not the visual row.
-
-> Inconsistency flagged: `architecture.md` §2 labels `aquila-api` as L4 and
-> `aquila-ha` as L5, but §5's edges require `aquila-api → aquila-ha`. A module
-> may depend only on a strictly lower level, so `aquila-ha` must sit **below**
-> `aquila-api`. The edge allow-list is authoritative (ADR-0001 §Decision point
-> 5); the level numbers above order the graph consistently and are what
-> `tools/dag.toml` encodes. See §13.
+The level **number** is what the check uses, not a visual row. `aquila-ha` sits
+at level 6, below `aquila-api` (level 7), because §5's edges require
+`aquila-api → aquila-ha`.
 
 ### 3.2 The allow-list (authoritative edges)
 
 Normal (non-dev, non-build) intra-workspace dependency edges, from
-`architecture.md` §5:
+`interface-register.md` (settled by ADR-0003):
 
 ```
-aquila-types        -> ∅
-aquila-signal       -> aquila-types
-aquila-geometry     -> aquila-types
-aquila-metrics      -> aquila-types
-aquila-sources      -> aquila-types
-aquila-inference    -> aquila-types
-aquila-sensing      -> aquila-types, aquila-geometry, aquila-signal,
-                       aquila-sources, aquila-inference
-aquila-evaluation   -> aquila-types, aquila-sources, aquila-sensing, aquila-metrics
-aquila-ha           -> aquila-types, aquila-geometry, aquila-sensing
-aquila-api          -> aquila-types, aquila-geometry, aquila-sensing,
-                       aquila-sources, aquila-ha
-aquila-dashboard    -> aquila-api
+aquila-types      -> ∅
+aquila-wire       -> aquila-types
+aquila-signal     -> aquila-types
+aquila-geometry   -> aquila-types
+aquila-metrics    -> aquila-types
+aquila-session    -> aquila-types, aquila-wire
+aquila-inference  -> aquila-types
+aquila-sources    -> aquila-types, aquila-wire, aquila-session
+aquila-simulator  -> aquila-types, aquila-wire, aquila-session, aquila-sources
+aquila-sensing    -> aquila-types, aquila-geometry, aquila-signal,
+                     aquila-sources, aquila-inference, aquila-metrics
+aquila-evaluation -> aquila-types, aquila-sources, aquila-sensing,
+                     aquila-metrics, aquila-simulator
+aquila-ha         -> aquila-types, aquila-geometry, aquila-sensing
+aquila-api        -> aquila-types, aquila-geometry, aquila-sensing,
+                     aquila-sources, aquila-ha
+aquila-dashboard  -> aquila-types, aquila-api
 ```
 
 Composition root and tooling (exempt from the level rule):
 
 ```
 aquila-addon        -> any module above; holds no domain logic
+aquila-capture      -> dev binary; regenerates node_wire.h, no product dependency
 aquila-testkit      -> any module above; depended on ONLY via [dev-dependencies]
 xtask               -> may use any crate; never pulled into a product build
 ```
 
-The eleven module crates are `publish = false`. The composition root and
-`xtask` are `publish = false` binaries; `aquila-testkit` is `publish = false`.
+The fourteen module crates, the composition root, `aquila-capture`, `xtask` and
+`aquila-testkit` are all `publish = false`.
 
 ### 3.3 The data — `tools/dag.toml`
 
 The check is driven entirely by data, so a rename or a ratified new edge is a
-one-file change reviewed against ADR-0001 — never a code change.
+one-file change reviewed against ADR-0003 — never a code change. The committed
+file is the source of truth; the block below mirrors the register.
 
 ```toml
 # Dependency-DAG allow-list. Single source of truth for allowed intra-workspace
@@ -282,42 +285,49 @@ one-file change reviewed against ADR-0001 — never a code change.
 #   - any edge whose dependency is not in a strictly lower level,
 #   - any cycle,
 #   - any workspace member not registered below.
-# Ratified by: docs/adr/0001-module-architecture.md
+# Ratified by: docs/adr/0003-interface-reconciliation.md
 rev = 1
 
 [levels]
 "aquila-types"      = 0
+"aquila-wire"       = 1
 "aquila-signal"     = 1
 "aquila-geometry"   = 1
 "aquila-metrics"    = 1
-"aquila-sources"    = 1
-"aquila-inference"  = 1
-"aquila-sensing"    = 2
-"aquila-evaluation" = 3
-"aquila-ha"         = 3
-"aquila-api"        = 4
-"aquila-dashboard"  = 5
+"aquila-session"    = 2
+"aquila-inference"  = 2
+"aquila-sources"    = 3
+"aquila-simulator"  = 4
+"aquila-sensing"    = 5
+"aquila-evaluation" = 6
+"aquila-ha"         = 6
+"aquila-api"        = 7
+"aquila-dashboard"  = 8
 
 [exempt]
 "aquila-addon"   = "composition root; may depend on any module"
+"aquila-capture" = "dev binary; regenerates node_wire.h, no product dependency"
 "aquila-testkit" = "dev-only; never a normal dependency"
 "xtask"          = "repo tooling; never a product dependency"
 
 [edges]
 "aquila-types"      = []
+"aquila-wire"       = ["aquila-types"]
 "aquila-signal"     = ["aquila-types"]
 "aquila-geometry"   = ["aquila-types"]
 "aquila-metrics"    = ["aquila-types"]
-"aquila-sources"    = ["aquila-types"]
+"aquila-session"    = ["aquila-types", "aquila-wire"]
 "aquila-inference"  = ["aquila-types"]
+"aquila-sources"    = ["aquila-types", "aquila-wire", "aquila-session"]
+"aquila-simulator"  = ["aquila-types", "aquila-wire", "aquila-session", "aquila-sources"]
 "aquila-sensing"    = ["aquila-types", "aquila-geometry", "aquila-signal",
-                       "aquila-sources", "aquila-inference"]
+                       "aquila-sources", "aquila-inference", "aquila-metrics"]
 "aquila-evaluation" = ["aquila-types", "aquila-sources", "aquila-sensing",
-                       "aquila-metrics"]
+                       "aquila-metrics", "aquila-simulator"]
 "aquila-ha"         = ["aquila-types", "aquila-geometry", "aquila-sensing"]
 "aquila-api"        = ["aquila-types", "aquila-geometry", "aquila-sensing",
                        "aquila-sources", "aquila-ha"]
-"aquila-dashboard"  = ["aquila-api"]
+"aquila-dashboard"  = ["aquila-types", "aquila-api"]
 ```
 
 ---
@@ -427,6 +437,9 @@ Additional rules:
 5. No module crate may declare a normal dependency on `aquila-testkit`; it may
    appear only under `[dev-dependencies]`. (`testing.md` §3.)
 6. `xtask` and `aquila-addon` must not be normal dependencies of any other crate.
+7. Every crate named in `[levels]`/`[exempt]` must be an actual workspace member:
+   a **registered-but-absent** crate is a violation (so a strikethrough/rename
+   cannot leave a phantom entry — `sister-issues-specs.md` D42/D52).
 
 Dev- and build-dependency edges are also checked against rule 3 unless the
 dependent is exempt; a dev-dependency on a same-or-higher level is a violation.
@@ -442,7 +455,10 @@ xtask/
   Cargo.toml            # [dependencies] cargo_metadata, toml, anyhow
   src/lib.rs            # check_dag(manifest: &Path) -> Result<Report>
   src/dag.rs            # graph build + rule evaluation
-  src/main.rs           # clap: dag-check | check-scaffolding | eval
+  src/coverage.rs       # coverage-floor: parse an LCOV record vs tools/coverage-floor.txt
+  src/claims.rs         # claims-verify: validate claims.toml (testing.md §7)
+  src/scaffolding.rs    # check-scaffolding: git ls-files vs tools/no-agent-scaffolding.txt
+  src/main.rs           # clap: dag-check | check-scaffolding | coverage-floor | claims-verify
   tests/dag.rs          # #[test] fn dag_is_respected() { ... }
 ```
 
@@ -500,7 +516,7 @@ two-line form, first lines of the file:
   /* SPDX-FileCopyrightText: 2026 Aquila contributors
    * SPDX-License-Identifier: GPL-3.0-only */
   ```
-- Python (`ha/**/*.py`):
+- Python (`custom_components/**/*.py`):
   ```python
   # SPDX-FileCopyrightText: 2026 Aquila contributors
   # SPDX-License-Identifier: GPL-3.0-only
@@ -558,11 +574,11 @@ firmware/.pio/
 firmware/**/*.o
 
 # ---- Home Assistant component / add-on runtime ----
-ha/**/__pycache__/
-ha/**/*.pyc
-ha/**/.venv/
-ha/config/
-ha/aquila_core/data/
+custom_components/**/__pycache__/
+custom_components/**/*.pyc
+custom_components/**/.venv/
+custom_components/**/.pytest_cache/
+aquila_core/data/
 
 # ---- Dashboard build ----
 dashboard/node_modules/
@@ -905,13 +921,13 @@ jobs:
         uses: docker/build-push-action@<pin>
         with:
           context: .
-          file: ha/aquila_core/Dockerfile
+          file: aquila_core/Dockerfile
           platforms: ${{ matrix.arch == 'amd64' && 'linux/amd64' || 'linux/arm64' }}
           push: true
           tags: ghcr.io/belikh/aquila-core-${{ matrix.arch }}:${{ github.ref_name }}
       - name: Package HACS component asset (aquila.zip)
         run: |
-          cd ha && zip -r ../aquila.zip custom_components/aquila
+          zip -r aquila.zip custom_components/aquila
       - name: Attest build provenance
         uses: actions/attest-build-provenance@<pin>
         with: { subject-path: "aquila.zip" }
@@ -920,8 +936,8 @@ jobs:
 ```
 
 Release invariants (home-assistant.md §9): the add-on bumps `version:` in
-`ha/aquila_core/config.yaml`; the component bumps `version` in
-`ha/custom_components/aquila/manifest.json`; the two version independently and
+`aquila_core/config.yaml`; the component bumps `version` in
+`custom_components/aquila/manifest.json`; the two version independently and
 meet at the versioned private API, not at a shared version number.
 
 ### 10.5 `commits.yml` — Conventional Commits
@@ -1002,7 +1018,7 @@ deliberately **not** a gate: record and diff only, v1 (`measurement.md` §5).
 - The ledger is canonical (sorted keys, Ryu float formatting, LF,
   `measurement.md` §3); golden-ledger fixtures are re-serialised in tests.
 - Container builds use `docker buildx` with the pinned base image digest in
-  `ha/aquila_core/Dockerfile`, and release artefacts are attested
+  `aquila_core/Dockerfile`, and release artefacts are attested
   (`actions/attest-build-provenance`).
 - The reference-pipeline bit-exactness asset is regenerated only by an explicit,
   reviewed act (`testing.md` §5).
@@ -1011,21 +1027,18 @@ deliberately **not** a gate: record and diff only, v1 (`measurement.md` §5).
 
 ## 13. Open questions and reconciliations
 
-Resolved by this document, flagged for ADR-0001/measurement owner follow-up:
+Resolved by the R5 spec sweep (previously flagged for ADR-0001/measurement
+owner follow-up):
 
-1. **`architecture.md` §2 layer labels vs §5 edges.** §2 lists `aquila-api` at L4
-   and `aquila-ha` at L5, but §5 requires `aquila-api → aquila-ha`. This document
-   derives levels from the §5 edge allow-list (ha below api) and encodes them in
-   `tools/dag.toml`. Follow-up: correct §2, or bless the derived ordering in
-   ADR-0001.
-2. **Ledger path.** `measurement.md` says `.aquila/metrics/ledger.jsonl`;
-   `data-contracts.md` §9.2 says `measure/ledger.jsonl`. This document follows
-   the ledger's owning crate and uses `.aquila/metrics/`.
-3. **HA tree location.** `architecture.md` §9 (`addon/`, root
-   `custom_components/`) and `home-assistant.md` §3.3 (`aquila_core/`, root
-   `custom_components/`) are reconciled to the brief's `ha/` tree here (§1.2).
-   HACS `zip_release` makes the repository path independent of the HA runtime
-   path.
+1. **`architecture.md` §2 layer labels vs §5 edges — fixed.** §2 and §5 now
+   match the register; `aquila-ha` (level 6) sits below `aquila-api` (level 7)
+   and `tools/dag.toml` encodes the same.
+2. **Ledger path — fixed.** `data-contracts.md` §9.2, this document and
+   `measurement.md` all use `.aquila/metrics/ledger.jsonl`.
+3. **HA tree location — fixed.** The layout on disk is root `aquila_core/` plus
+   root `custom_components/aquila/`; §1.2, `architecture.md` §9 and
+   `home-assistant.md` §3.3 agree. HACS `zip_release` makes the repository path
+   independent of the HA runtime path.
 
 Open, not blocking v1:
 

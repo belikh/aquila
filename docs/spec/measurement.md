@@ -32,10 +32,12 @@ through a single seam, and compared run-to-run by a `diff`. In v1 the ledger
 - `Clock` — supplies `timestamp`; the module never calls `SystemTime::now()`.
 - `MetricSink` — the one write path out of the module (this spec).
 
-`aquila-metrics` sits near the bottom of the dependency DAG. It depends on the
-seam traits and a serialisation library; nothing in the DSP, inference, fusion or
-calibration graph depends on it. Tests, benches, the add-on and CI tooling depend
-on it — never the reverse.
+`aquila-metrics` sits near the bottom of the dependency DAG. It depends only on
+the seam traits and a serialisation library. Per the register
+(`interface-register.md`), `aquila-sensing` (the core) and `aquila-evaluation`
+depend on it: the core records per-step `Measurement` rows through the
+`MetricSink` seam, and the evaluation harness writes ledger rows. `aquila-metrics`
+never depends upward on the DSP, inference or fusion crates.
 
 ---
 
@@ -43,6 +45,12 @@ on it — never the reverse.
 
 One observation. Flattened into the ledger; the identity of a record is derived,
 not stored.
+
+`Measurement` is `aquila-metrics`'s **in-memory** record. The ledger row it
+persists is the frozen contract `LedgerRecord` (`data-contracts.md` §7.2, §8);
+`Measurement` serialises into it and does not fork it. Where a field name differs
+(`name`/`version` here, `metric`/`contract` there) the frozen contract name is
+the on-disk one.
 
 ```rust
 /// A single, commit-keyed observation recorded by the measurement module.
@@ -115,6 +123,15 @@ pub enum Grade {
 
 ### Field notes
 
+`Authority` is the ledger row's **provenance**, distinct from the contract's
+`Witness` grade (`CONTEXT.md`, `data-contracts.md` §1). They are two axes, not
+two competing vocabularies; the mapping is explicit so a row is never ambiguous:
+`Authority::Measured`/`Replayed` → `Witness::Measured` (→ `Gated` if a gated bar
+passes); `Authority::Derived`/`Imported` → `Witness::Measured` when the inputs are
+ledgered, else `Claimed`; `Authority::Declared` (a hand-entered baseline or a
+research-only reference) → `Claimed`. A row never carries `Witness::Gated`
+without a passed gate.
+
 - **`name`** carries the dimension. Percentiles, stages and benches are encoded
   in the name (`system.latency.p99.ingest`, `micro.instr.ingest.parse`), so no
   separate tag map is needed and names sort canonically.
@@ -177,7 +194,7 @@ pub trait MetricSink: Send {
 | `JsonLedgerSink` | yes | Appends canonical JSONL to the commit-keyed ledger; the source of truth for `diff`. |
 | `CiCacheSink` | yes | Writes the canonical set under `cache/<commit>/<host>/`, keyed so CI can restore a baseline without re-running; restores as `Authority::Imported`. |
 | `PrometheusSink` | later | Maps gauges/histograms to an OpenMetrics push; only statistical/runtime metrics; specified and stubbed, not wired in v1. |
-| `MemorySink` | yes (fake) | Collects into a `Vec<Measurement>` for TDD assertions. |
+| `InMemoryMetricSink` | yes (fake) | Collects into a `Vec<Measurement>` for TDD assertions. |
 | `NullSink` | yes (fake) | Discards; for benches that must not touch disk. |
 | `TeeSink` | yes | Fans one record out to several sinks; fails closed if any required sink fails. |
 
@@ -201,7 +218,7 @@ caller branching.
 
 ### Testing (TDD, fake adapters, recorded fixtures)
 
-- `FixedClock` injects a fixed timestamp; `MemorySink` captures records.
+- `FixedClock` injects a fixed timestamp; `InMemoryMetricSink` captures records.
 - Golden ledger fixtures are committed and re-serialised in tests to prove
   canonical form is stable.
 - Every metric source is exercised through a recorded fixture first (replay), so
@@ -256,7 +273,7 @@ All deterministic, all `Measured` from static analysis of the workspace.
 | Metric | Unit | Grade | Source |
 | --- | --- | --- | --- |
 | `structure.crates.count` | count | deterministic | `cargo metadata` |
-| `structure.dag.violations` | count | deterministic | `cargo metadata` vs committed allowlist `aquila-dag.toml` |
+| `structure.dag.violations` | count | deterministic | `cargo metadata` vs committed allowlist `tools/dag.toml` |
 | `structure.types.duplicate` | count | deterministic | in-tree `syn` scan for structurally identical/near-identical type defs |
 | `structure.docs.ratio` | ratio | deterministic | in-tree counter (doc-comment lines : code lines), per crate and workspace |
 | `structure.unsafe.count` | count | deterministic | in-tree `syn` scan for `unsafe` blocks / `unsafe fn` |
@@ -305,7 +322,9 @@ MM-Fi and own captures. Model digest, eval-split digest and seed are recorded in
 | `accuracy.breathing.mae_brpm` | brpm | **gated** | ≤ 2 | lower is better |
 | `accuracy.heart_rate.mae_bpm` | bpm | statistical | — | non-gated in v1 |
 
-Only these three bars are gated. Research-only sources (camera ground truth,
+Only these three bars are gated, and the ids in the table are the **canonical v1
+metric vocabulary** that `data-contracts.md` §7.3, `evaluation.md` §6 and
+`core-api.md` §13 all cite. Research-only sources (camera ground truth,
 ESP32-as-SDR) are `Declared` and never gated. Honest claims only: a passing bar
 is reported as *met on this split and seed*, not as a general guarantee.
 
@@ -439,13 +458,14 @@ consumes it.
 
 ## 8. Placement and enforcement
 
-- **Dependency DAG:** `aquila-metrics` → { seam traits, serialisation }. Nothing
-  upstream depends on it. `structure.dag.violations` checks this edge exists and
-  that no DSP/inference crate gains a dependency back onto it.
+- **Dependency DAG:** `aquila-metrics` → { seam traits, serialisation };
+  `aquila-sensing` and `aquila-evaluation` → `aquila-metrics` (register). No
+  DSP/inference/geometry crate depends upward on it.
+  `structure.dag.violations` checks those edges.
 - **Determinism of the module itself:** all host I/O enters through `Clock` and
   `MetricSink`; the module is pure given those. The module is covered by
   `determinism.pipeline.sha256` only indirectly — its own tests use `FixedClock`
-  and `MemorySink` and golden fixtures.
+  and `InMemoryMetricSink` and golden fixtures.
 - **No committed agent scaffolding:** fakes and fixtures live inside the crate,
   not in a parallel tree; there is no generated harness committed to the repo.
 

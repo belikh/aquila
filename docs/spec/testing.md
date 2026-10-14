@@ -80,7 +80,7 @@ fixtures must be regenerated and their provenance bumped.
 | `FakePoseModel` / `FakeVitalsModel` | `PoseModel` / `VitalsModel` | Deterministic stub models: identity, constant, or table-driven. Pipeline, calibration and fusion tests never depend on ONNX. |
 | `DeterministicCsiGenerator` | producer for `CsiSource` | Seeded CSI synthesiser. Given seed + scene spec (nodes, floors, rooms, presence, motion, breathing rate, packet loss, noise) it emits a reproducible `CsiFrame` stream. Bit-exact given seed + generator version. |
 | `Simulator` | wires a whole scene | Multi-node, three-floor scene runner through the fakes; drives the **real** core pipeline and the private control plane for integration tests. |
-| `FakeSink`, `RecordingMetricSink` | `Sink`, `MetricSink` | Capture emitted estimates and metrics for assertion. |
+| `FakeSink`, `InMemoryMetricSink` | `Sink`, `MetricSink` | Capture emitted estimates and metrics for assertion. |
 | `Fixture` loader | — | Parses a fixture's `manifest.json` + payloads, verifies digests, and exposes typed frames and labels. |
 | `Golden` helpers | — | Canonical serialisation and hashing of a `ReferenceOutput`. |
 

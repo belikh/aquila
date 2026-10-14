@@ -245,7 +245,9 @@ pub struct PhyFlags(pub u16);
 **Serialisation**
 
 - **Wire (UDP):** fixed little-endian header, then body. See §9.
-- **On disk:** postcard-encoded `CsiEnvelope` inside a session archive (§9).
+- **On disk:** inside a `.aqs` session archive, the **exact on-wire `AQCI`
+  datagram bytes** plus a host-arrival stamp (§9.2, `capture-and-firmware.md`
+  §8). `postcard` is **not** used for the frame stream.
 - **JSON (fixtures/debug only):** `i8` samples as arrays of integers; never the
   production transport.
 
@@ -489,9 +491,9 @@ pub struct Pose {
    `Sink` but is still recorded for scoring. Withholding is a gate, not a
    `Witness` value.
 
-**Serialisation** — serde; postcard inside session archives, JSON for fixtures
-and for the private ingress channel. Keypoint order is authoritative; never emit
-a map keyed by name.
+**Serialisation** — serde; a typed `0x02` ground-truth record inside the `.aqs`
+session archive (exact wire bytes only for CSI frames); JSON for fixtures.
+Keypoint order is authoritative; never emit a map keyed by name.
 
 ---
 
@@ -546,7 +548,8 @@ pub struct VitalsReading {
 6. `confidence` is the model's own certainty; `witness` is evidence strength.
    They are independent and both are carried.
 
-**Serialisation** — serde; postcard in session archives; JSON for fixtures/ingress.
+**Serialisation** — serde; a typed `0x02` record inside the `.aqs` session
+archive; JSON for fixtures/ingress.
 
 ---
 
@@ -734,7 +737,13 @@ pub struct GroundTruthRecord {
 ### 7.2 `LedgerRecord` — commit-keyed measurement
 
 Measurement is first-class: **record and diff, no CI gating yet.** Every metric
-result is appended to `measure/ledger.jsonl` as one `LedgerRecord` per line.
+result is appended to `.aquila/metrics/ledger.jsonl` as one `LedgerRecord` per
+line.
+
+`LedgerRecord` is the **frozen, on-disk ledger row** and the only canonical one
+(§8). `aquila-metrics` also carries an in-memory `Measurement` record
+(`measurement.md` §2) that serialises into a `LedgerRecord`; where this document
+and `measurement.md` describe the same field the frozen name here wins.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -812,9 +821,20 @@ UTF-8, LF endings. Diffable with `git diff --word-diff`. No pretty-printing.
 
 ### 7.3 The v1 bars (context)
 
-Recorded as `MetricKind::Gated` records, not CI gates: in-domain torso-PCK@20
-≥ 65 %, presence F1 ≥ 0.9, breathing rate MAE ≤ 2 brpm vs reference. A claim
-without a `LedgerRecord` is `Claimed`, and no headline claim may carry that grade.
+Recorded as `MetricKind::Gated` records, not CI gates. The **canonical metric-id
+vocabulary** for the three v1 gated bars — the single set every spec and the
+ledger cite — is:
+
+| Bar | Canonical metric id | Unit | Direction |
+| --- | --- | --- | --- |
+| In-domain torso PCK@20 (≥ 65 %) | `accuracy.torso_pck_at_20` | % | higher is better |
+| Presence F1 (≥ 0.9) | `accuracy.presence_f1` | ratio | higher is better |
+| Breathing rate MAE (≤ 2 brpm) | `accuracy.breathing.mae_brpm` | brpm | lower is better |
+
+Heart rate (`accuracy.heart_rate.mae_bpm`) is reported but ungated in v1. These
+are the ids `measurement.md` §4.6 owns and `evaluation.md` §6 and `core-api.md`
+§13 render; a differently spelled id is a defect. A claim without a
+`LedgerRecord` is `Claimed`, and no headline claim may carry that grade.
 
 ---
 
@@ -901,38 +921,48 @@ leading complex sample (two bytes) the driver reported unreliable. The
 | Artefact | Format | Location |
 | --- | --- | --- |
 | Topology | JSON, pretty, declaration-order keys | `config/topology.json` |
-| Session archive | `.aqs` directory (below) | `sessions/<session-id>/` |
-| Ledger | JSONL, canonical key order | `measure/ledger.jsonl` |
-| Ground truth | JSONL | `sessions/<session-id>/ground_truth.jsonl` |
-| Event stream | JSONL | `sessions/<session-id>/events.jsonl` |
+| Session archive | `.aqs` single-file container (AQS/AQE; below) | `sessions/<session-id>.aqs` |
+| Ledger | JSONL, canonical key order | `.aquila/metrics/ledger.jsonl` |
+| Ground truth | typed `0x02` record inside the `.aqs` container | `sessions/<session-id>.aqs` |
+| Event stream | typed `0x03` record inside the `.aqs` container | `sessions/<session-id>.aqs` |
 
-**`.aqs` session archive directory**
+**`.aqs` session container.** The durable session representation is the
+`aquila-session` container (`capture-and-firmware.md` §8 is authoritative for the
+byte layout): a fixed AQS header, a canonical-JSON typed manifest, a stream of
+typed, length-prefixed records, and an AQE digest trailer.
 
 ```
-sessions/<session-id>/
-  session.json         # Session (serde JSON)
-  manifest.json        # SessionManifest (contract, codec, counts, digests)
-  stream.bin           # repeated: u32 LE len + postcard(CsiEnvelope)
-  events.jsonl         # optional Event stream
-  ground_truth.jsonl   # optional, research-only
+"AQS" magic | u8 version | u32 metadata_len (LE) | metadata (canonical JSON)
+record*    (u8 type | u32 body_len LE | body)
+"AQE"       | u64 record_count (LE) | sha256(record stream)
 ```
 
-```rust
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SessionManifest {
-    pub contract: ContractVersion,
-    pub codec: String,          // "postcard-1"
-    pub frames: u64,
-    pub files: Vec<SessionArtifact>,   // path + sha256 + bytes
-}
-```
-
-Postcard is used **only** for on-disk frame streams (compact, deterministic for a
-fixed schema). JSON is used wherever humans diff, edit or debug.
+A CSI-frame record (`0x01`) stores a `u64 host_arrival_us` followed by the
+**exact on-wire `AQCI` datagram bytes**, so replay runs the real `aquila-wire`
+decoder and the codec cannot drift from live. Records `0x02` (ground truth),
+`0x03` (event) and `0x04` (annotation) carry JSON bodies. The container-level
+manifest (`aquila-session/1`) wraps the frozen `Session` contract (§7.1) with the
+capture-tool, core-version, elicitation and licence facts; it is **not** a
+second contract type. `postcard` is not used anywhere in the session container.
+JSON is used wherever humans diff, edit or debug.
 
 ---
 
 ## 10. Time, calibration, baseline and their contracts
+
+**Units bridge (µs ↔ ns).** The wire and contract carry `device_time_us` in
+**microseconds** (§2); the core's `CoreTime`/`DeviceTime` and the time-sync maths
+(`fusion-sync.md` §1) are in **nanoseconds**. The one conversion is
+`ns = us × 1000` at the ingest seam; it is stated here once so offset and drift
+maths is never ambiguous.
+
+**`Calibration` (canonical).** `aquila_types::Calibration` below is the **one**
+runtime contract named `Calibration`; `data-contracts.md` §8 freezes the name.
+`aquila-signal`'s per-node multiplier is an internal type (renamed
+`NodeCorrection` in `signal.md` §2, pending the same rename in the crate), and the
+on-disk calibration artefact in `geometry-calibration.md` §13 is a distinct
+serialisation (`CalibrationArtefact`) that cites this contract. Neither is a second
+`Calibration`.
 
 ```rust
 /// Per-node software time-sync estimate produced by the Clock seam.
