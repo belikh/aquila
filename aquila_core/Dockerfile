@@ -7,13 +7,10 @@
 # from the environment in which this file was written, so no stage below has
 # actually been built or run. The steps are the real commands, not `echo TODO`
 # placeholders, but treat the image as unbuilt until a CI build (ticket #11)
-# exercises it. Two things are known-incomplete and are marked inline:
-#   1. the dashboard crate is a host-buildable stub, not yet a Trunk bundle
-#      (ticket #10), so the dashboard stage emits a clearly-labelled placeholder
-#      when there is no `index.html` to build; and
-#   2. the `aquila-addon` composition root currently wires the simulator demo,
-#      not the UDP ingest/control planes, so the EXPOSEd UDP ports are not yet
-#      bound by the binary.
+# exercises it. One thing is known-incomplete and is marked inline: the
+# `aquila-addon` composition root currently wires the simulator demo, not the
+# UDP ingest/control planes, so the EXPOSEd UDP ports are not yet bound by the
+# binary.
 #
 # Shape (home-assistant.md §3.1):
 #   Stage 1  build the dashboard crate (`aquila-dashboard`) to WASM with Trunk.
@@ -35,23 +32,20 @@ ARG AQUILA_VERSION=0.1.0
 # -----------------------------------------------------------------------------
 FROM rust:1.98-bookworm AS dashboard-build
 WORKDIR /src
-RUN rustup target add wasm32-unknown-unknown \
+# `gawk` backs the post-build CSP hook that externalises Trunk's inline
+# bootstrap (crates/aquila-dashboard/Trunk.toml, `dashboard.md` §8).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gawk \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add wasm32-unknown-unknown \
     && cargo install trunk wasm-bindgen-cli --locked
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
-# The dashboard is a stub until ticket #10 lands; build it when a Trunk entry
-# point exists, otherwise emit a labelled placeholder so the image still builds.
-# `trunk build` writes the WASM bundle and JS glue to crates/aquila-dashboard/dist.
-RUN if [ -f crates/aquila-dashboard/index.html ]; then \
-        trunk build crates/aquila-dashboard/index.html --release; \
-    else \
-        mkdir -p crates/aquila-dashboard/dist && \
-        printf '%s\n' \
-          '<!doctype html><meta charset="utf-8">' \
-          '<title>Aquila</title>' \
-          '<p>Aquila dashboard is not built in this image (ticket #10).</p>' \
-          > crates/aquila-dashboard/dist/index.html; \
-    fi
+# `trunk build` reads `crates/aquila-dashboard/Trunk.toml` and writes the WASM
+# bundle, JS glue, CSS and `index.html` to `crates/aquila-dashboard/dist`
+# (ticket #10, `dashboard.md` §2). Assets are emitted with relative URLs so they
+# load under any HA ingress prefix.
+RUN cd crates/aquila-dashboard && trunk build --release
 
 # -----------------------------------------------------------------------------
 # Stage 2 — core (Rust -> native)

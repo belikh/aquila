@@ -1,0 +1,25 @@
+# Trunk bundle configuration for the Aquila management dashboard
+# (`docs/spec/dashboard.md` §2, §4, §8).
+#
+# `public_url = "./"` keeps every generated asset reference relative, so the
+# bundle loads unchanged under any Home Assistant ingress prefix
+# (`/api/hassio_ingress/<token>/`). The add-on injects the external prefix at
+# request time as `<base href>`; the SPA derives its single `api_base()` from
+# that value and never hard-codes an absolute path.
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "./"
+filehash = true
+
+[watch]
+watch = ["src", "index.html", "styles.css"]
+
+# Trunk injects an inline module bootstrap; the ingress CSP (`script-src
+# 'self'`) forbids inline scripts, so this hook externalises it to
+# `aquila-init.js` (`dashboard.md` §8). See `hooks/externalise-inline-js.sh`.
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["hooks/externalise-inline-js.sh"]
+

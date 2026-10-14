@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- The viewport meta is required for the HA mobile-app webview. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Aquila</title>
+    <!--
+      The add-on static server injects the ingress prefix as `<base href>` (and
+      `window.__AQUILA_BASE__`) here. Trunk emits every asset reference
+      relative to this document, so it resolves under any ingress token. No
+      absolute asset URL and no third-party origin is used anywhere
+      (`dashboard.md` §4, §8).
+    -->
+    <link data-trunk rel="css" href="styles.css" />
+    <link data-trunk rel="rust" data-bin="aquila-dashboard" data-wasm-opt="s" />
+  </head>
+  <body>
+    <noscript>Aquila needs JavaScript and WebAssembly enabled to run.</noscript>
+  </body>
+</html>
