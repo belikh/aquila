@@ -42,13 +42,20 @@ from .const import (
     DEFAULT_EXPOSE_ROOM_VITALS,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
+    FIRMWARE_IMAGE_ID,
     HEALTH_API_VERSION,
     HEALTH_INSTANCE_ID,
     HEALTH_MIN_COMPONENT_VERSION,
+    IMAGE_ID,
     PLATFORMS,
+    SERVICE_FIELD_FORCE,
+    SERVICE_FIELD_IMAGE_ID,
+    SERVICE_FIELD_NODE,
+    SERVICE_FIELD_VERSION,
     SERVICE_INSTALL_FIRMWARE,
 )
 from .coordinator import AquilaCoordinator, AquilaRuntimeData
+from .stream import manifest_images, resolve_image
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,10 +66,10 @@ _SERVICES_FLAG = "_services_registered"
 
 SERVICE_INSTALL_FIRMWARE_SCHEMA = vol.Schema(
     {
-        vol.Required("node"): cv.string,
-        vol.Optional("image_id"): cv.string,
-        vol.Optional("version"): cv.string,
-        vol.Optional("force", default=False): cv.boolean,
+        vol.Required(SERVICE_FIELD_NODE): cv.string,
+        vol.Optional(SERVICE_FIELD_IMAGE_ID): cv.string,
+        vol.Optional(SERVICE_FIELD_VERSION): cv.string,
+        vol.Optional(SERVICE_FIELD_FORCE, default=False): cv.boolean,
     }
 )
 
@@ -186,23 +193,48 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
 async def _async_handle_install_firmware(call: ServiceCall) -> None:
     """Handle ``aquila.install_firmware`` (firmware-ota.md §7)."""
     hass = call.hass
-    node = call.data["node"]
-    image_id: str | None = call.data.get("image_id") or call.data.get("version")
-    force = bool(call.data.get("force", False))
+    node = call.data[SERVICE_FIELD_NODE]
+    image_id: str | None = call.data.get(
+        SERVICE_FIELD_IMAGE_ID
+    ) or call.data.get(SERVICE_FIELD_VERSION)
+    force = bool(call.data.get(SERVICE_FIELD_FORCE, False))
 
     for _entry_id, runtime in _iter_runtimes(hass):
         nodes = (runtime.coordinator.data or {}).get("nodes", {}) or {}
         if node not in nodes:
             continue
-        if not image_id:
+        resolved = image_id or _default_image_id(runtime, node)
+        if not resolved:
             raise HomeAssistantError(
-                f"No image_id or version supplied for node {node}"
+                f"No firmware image available for node {node}; "
+                "supply image_id or version"
             )
-        await runtime.client.async_install_firmware(node, str(image_id), force=force)
+        await runtime.client.async_install_firmware(node, str(resolved), force=force)
         await runtime.coordinator.async_request_refresh()
         return
 
     raise HomeAssistantError(f"Unknown Aquila node: {node}")
+
+
+def _default_image_id(runtime: AquilaRuntimeData, node: str) -> str | None:
+    """Resolve the newest stored image id for ``node`` from the snapshot.
+
+    The manifest is the source of truth (firmware-ota.md §7); the core ranks
+    images, the component only looks one up by version.
+    """
+    manifest = (runtime.coordinator.data or {}).get("firmware_manifest")
+    images = manifest_images(manifest)
+    offered = resolve_image(images, None)
+    if offered is not None and offered.get(IMAGE_ID):
+        return str(offered[IMAGE_ID])
+    node_firmware = (
+        (runtime.coordinator.data or {}).get("nodes", {}).get(node, {}) or {}
+    ).get("firmware", {})
+    if isinstance(node_firmware, dict):
+        image = node_firmware.get(FIRMWARE_IMAGE_ID)
+        if image:
+            return str(image)
+    return None
 
 
 def _iter_runtimes(hass: HomeAssistant) -> Iterator[tuple[str, AquilaRuntimeData]]:

@@ -55,7 +55,7 @@ class AquilaApiError(AquilaError):
         self.message = message
 
 
-def _parse_version(value: Any) -> tuple[int, ...]:
+def parse_version(value: Any) -> tuple[int, ...]:
     """Parse a dotted version string into an integer tuple.
 
     Unknown or malformed segments contribute zero so a comparison still yields a
@@ -70,6 +70,10 @@ def _parse_version(value: Any) -> tuple[int, ...]:
         digits = "".join(ch for ch in chunk if ch.isdigit())
         parts.append(int(digits) if digits else 0)
     return tuple(parts) or (0,)
+
+
+#: Backwards-compatible private alias (used inside this module).
+_parse_version = parse_version
 
 
 def _api_major(health: dict[str, Any]) -> int | None:

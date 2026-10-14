@@ -100,11 +100,11 @@
         },
         "image_id": {
           "name": "Image id",
-          "description": "Firmware image id from the store manifest."
+          "description": "Firmware image id from the store manifest. Defaults to the newest stored image."
         },
         "version": {
           "name": "Version",
-          "description": "Firmware version to install (alternative to image id)."
+          "description": "Firmware version to install (resolved to a store image; alternative to image id)."
         },
         "force": {
           "name": "Force",
