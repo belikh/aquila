@@ -1133,7 +1133,7 @@ fn analyse_node(envelopes: &[&CsiEnvelope], hop_ns: u64) -> NodeAnalysis {
 
     let bins = envelopes
         .iter()
-        .map(|e| e.frame.amplitude.len())
+        .map(|e| e.frame.n_subcarriers())
         .min()
         .unwrap_or(0);
     let mut mean_amplitude_db = 0.0_f64;
@@ -1145,12 +1145,12 @@ fn analyse_node(envelopes: &[&CsiEnvelope], hop_ns: u64) -> NodeAnalysis {
         for k in 0..bins {
             let mut sum = 0.0_f64;
             for envelope in envelopes {
-                sum += f64::from(envelope.frame.amplitude[k]);
+                sum += f64::from(envelope.frame.amplitude_at(k));
             }
             let mean = sum / n;
             let mut var = 0.0_f64;
             for envelope in envelopes {
-                let d = f64::from(envelope.frame.amplitude[k]) - mean;
+                let d = f64::from(envelope.frame.amplitude_at(k)) - mean;
                 var += d * d;
             }
             let std = (var / n).sqrt();
@@ -1179,7 +1179,7 @@ fn analyse_node(envelopes: &[&CsiEnvelope], hop_ns: u64) -> NodeAnalysis {
         band: first.map_or(aquila_types::Band::Unknown, |e| e.frame.band),
         channel: first.map_or(0, |e| e.frame.channel),
         bandwidth_mhz: first.map_or(0, |e| e.frame.bandwidth_mhz),
-        subcarriers: first.map_or(0, |e| e.frame.amplitude.len()),
+        subcarriers: first.map_or(0, |e| e.frame.n_subcarriers()),
     }
 }
 
@@ -1353,7 +1353,7 @@ fn build_link(
     }
     let bins = pooled
         .iter()
-        .map(|e| e.frame.amplitude.len())
+        .map(|e| e.frame.n_subcarriers())
         .min()
         .unwrap_or(0);
     if bins == 0 {
@@ -1369,12 +1369,12 @@ fn build_link(
     for k in 0..bins {
         let mut sum = 0.0_f64;
         for envelope in &pooled {
-            sum += f64::from(envelope.frame.amplitude[k]);
+            sum += f64::from(envelope.frame.amplitude_at(k));
         }
         let mean = sum / n;
         let mut var = 0.0_f64;
         for envelope in &pooled {
-            let d = f64::from(envelope.frame.amplitude[k]) - mean;
+            let d = f64::from(envelope.frame.amplitude_at(k)) - mean;
             var += d * d;
         }
         let std = (var / n).sqrt();

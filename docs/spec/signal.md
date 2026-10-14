@@ -43,7 +43,7 @@ Out of scope, and explicitly *not* to be smuggled in:
   filters, no auto-tuned parameters in v1.
 
 Language: Australian English. `crate aquila-signal`; no other aquila crate may
-be imported except `aquila-core`'s plain identifier types if needed (enforced by
+be imported except `aquila-types`'s plain identifier types if needed (enforced by
 the workspace dependency DAG).
 
 ## 2. Public surface
@@ -82,8 +82,9 @@ pub struct SubcarrierLayout {
 }
 
 /// The pipeline's internal decoded frame. NOT the contract frame: the one
-/// canonical on-air/on-disk frame is `aquila_types::CsiFrame` (amplitude/phase
-/// arrays, `data-contracts.md` §2). `decode_csi` is the single conversion.
+/// canonical on-air/on-disk frame is `aquila_types::CsiFrame` (raw signed int8
+/// I/Q, `data-contracts.md` §2, ADR-0005). `decode_csi` is the single
+/// conversion, deriving the complex bins from that sample.
 pub struct ComplexFrame {
     pub meta: RxMeta,
     pub bins: Vec<Complex32>,      // len == layout.expected_bins
@@ -211,9 +212,11 @@ tests (proptest-style). "P-" identifiers are the consolidated invariants in §6.
 contract frame, and reject structurally invalid input before any DSP touches it.
 
 **Contract.** `decode_csi(frame: &aquila_types::CsiFrame) -> Result<ComplexFrame,
-DecodeError>` converts the one contract frame (`amplitude`/`phase` arrays,
-`data-contracts.md` §2) into per-subcarrier `Complex32` bins via the
-deterministic `cos`/`sin` approximations. `decode_record(raw, meta, layout) ->
+DecodeError>` derives the one contract frame's per-subcarrier `Complex32` bins
+from its raw signed int8 I/Q sample (`i_q`, interleaved `I, Q`;
+`data-contracts.md` §2, ADR-0005), dividing each count by the nominal
+`IQ_COUNTS_PER_UNIT`. This is where the amplitude/phase derivation the firmware
+used to do on-node now lives. `decode_record(raw, meta, layout) ->
 Result<ComplexFrame, DecodeError>` decodes a raw ESP32 CSI record: `raw` is
 interleaved `int8` I/Q pairs, imaginary byte first per Espressif
 `wifi_csi_info_t`, and `bins.len() == layout.expected_bins`. Both are total
@@ -224,10 +227,9 @@ assumed silently.
 **Invariants.**
 - `D1` Structural: `decode_record` accepts iff `raw.len()` is even,
   `raw.len()/2 == layout.expected_bins`, and `raw.len() <= 612`;
-  `decode_csi` accepts iff `amplitude.len() >= 1`, `phase.len() ==
-  amplitude.len()`, and every sample is finite. Every accepted frame satisfies
-  `bins.len() == expected_bins` (`decode_record`) or `amplitude.len()`
-  (`decode_csi`).
+  `decode_csi` accepts iff `i_q.len()` is even and non-empty. Every accepted
+  frame satisfies `bins.len() == expected_bins` (`decode_record`) or
+  `i_q.len() / 2` (`decode_csi`).
 - `D2` Determinism: identical input yields bit-identical `ComplexFrame`.
 - `D3` Exactness: `int8 → f32` conversion is exact; no clamping or NaN.
 - `D4` `first_word_invalid` policy: the first I/Q pair is zeroed and
@@ -237,14 +239,13 @@ assumed silently.
 
 **Failure modes.** `OddLength`, `WrongBinCount { found, expected }`,
 `TooLarge`, `UnsupportedBandwidth`, `EmptyRecord`, and (for `decode_csi`)
-`EmptyFrame`, `LengthMismatch { amplitude, phase }`,
-`NonFiniteSample { field, index }`.
+`EmptyFrame`, `OddIqLength`.
 
 **Property tests.**
 - `D1`: for arbitrary byte lengths, `decode_record` is `Ok` iff length ∈
   `{2·expected_bins}`; the error variant is exactly determined. For arbitrary
-  contract frames, `decode_csi` is `Ok` iff the arrays agree, are non-empty and
-  finite.
+  contract frames, `decode_csi` is `Ok` iff the I/Q sample is even-length and
+  non-empty.
 - `D2/Golden`: `sha256(bins_as_le_bytes)` equals the committed fixture digest.
 - `D4`: setting `first_word_invalid` yields `bins[0] == 0` and no other change.
 - `D5`: arbitrary `rssi`/`noise_floor` never change `bins`, only `flags`.

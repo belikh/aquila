@@ -220,7 +220,10 @@ at `belikh/aquila`:
 | Zone device id | `("aquila", "{instance_id}:zone:{zone_id}")` | one HA device per room/floor |
 
 - Component `DOMAIN = "aquila"`. The add-on slug is `aquila_core` (the core,
-  not the whole product); there is exactly one add-on in v1.
+  not the whole product); there is exactly one add-on in v1. This slug, the
+  derived `aquila-core` hostname and the `ghcr.io/belikh/aquila-core-*` image
+  are Home Assistant deployment identities, **not** Rust crate names; the
+  composition-root crate is `aquila-addon` per ADR-0003.
 - `instance_id` is a random UUID generated once by the core and persisted in
   `/data`; unique_ids survive reinstall and are stable across HA restarts.
 - Zone `zone_id` is the slug of the zone name (e.g. `living_room`); the
@@ -462,7 +465,7 @@ navigation entry and the connection health shown to HA users.
    install **Aquila Core**; set options (`log_level`, `calibration_profile`,
    `retention_days`); start it. On first start the core generates `instance_id`,
    initialises `/data` (ledger, calibration store, drift state, model cache),
-   binds UDP 6969 and serves ingress on 8099.
+   binds UDP `9100`/`9101` and serves ingress on `8099`.
 2. Provision nodes with the core's host address and UDP port (unicast).
 3. In HACS, add `https://github.com/belikh/aquila` as a custom repository
    (integration); download **Aquila**; restart HA.

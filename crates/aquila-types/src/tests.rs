@@ -49,8 +49,7 @@ fn csi_frame() -> CsiFrame {
         channel: 6,
         bandwidth_mhz: 20,
         subcarrier_offset: -32,
-        amplitude: vec![0.0, 1.5, 2.5],
-        phase: vec![0.0, 0.25, -0.25],
+        i_q: vec![0, 0, 2, 1, 2, -1],
         rssi_dbm: -40,
         noise_floor_dbm: -90,
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
@@ -148,7 +147,10 @@ fn topology() -> Topology {
         home: home(),
         floors: vec![floor()],
         rooms: vec![room()],
-        nodes: vec![topology_node(1, "kitchen-01"), topology_node(2, "kitchen-01")],
+        nodes: vec![
+            topology_node(1, "kitchen-01"),
+            topology_node(2, "kitchen-01"),
+        ],
         pairs: vec![NodePair {
             id: slug("pair-1-2"),
             home: slug("home-01"),
@@ -480,26 +482,25 @@ fn csi_frame_invariants() {
     assert!(csi_frame().validate().is_ok());
     assert_eq!(csi_frame().n_subcarriers(), 3);
 
-    let mut mismatched = csi_frame();
-    mismatched.phase.pop();
-    assert!(mismatched.validate().is_err());
+    // An odd-length interleaved sample is not whole I/Q pairs.
+    let mut odd = csi_frame();
+    odd.i_q.pop();
+    assert!(odd.validate().is_err());
 
+    // An empty sample carries no subcarriers.
     let mut empty = csi_frame();
-    empty.amplitude.clear();
-    empty.phase.clear();
+    empty.i_q.clear();
     assert!(empty.validate().is_err());
 
-    let mut negative = csi_frame();
-    negative.amplitude[0] = -1.0;
-    assert!(negative.validate().is_err());
-
-    let mut wrapped = csi_frame();
-    wrapped.phase[0] = 4.0;
-    assert!(wrapped.validate().is_err());
-
-    let mut infinite = csi_frame();
-    infinite.phase[0] = f32::INFINITY;
-    assert!(infinite.validate().is_err());
+    // The derived amplitude and phase are finite for every int8 sample.
+    let frame = csi_frame();
+    assert_eq!(frame.amplitude().len(), 3);
+    assert_eq!(frame.phase().len(), 3);
+    assert!(frame.amplitude().iter().all(|a| a.is_finite()));
+    assert!(frame.phase().iter().all(|p| p.is_finite()));
+    // Subcarrier 0 is (0, 0): amplitude 0, and subcarrier 1 is (2, 1).
+    assert!((frame.amplitude_at(0)).abs() < 1e-6);
+    assert!((frame.amplitude_at(1) - 5.0_f32.sqrt() / 64.0).abs() < 1e-6);
 }
 
 #[test]

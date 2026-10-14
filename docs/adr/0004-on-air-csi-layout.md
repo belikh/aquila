@@ -1,10 +1,17 @@
 # ADR-0004: One on-air CSI layout — CsiFrame-compatible payload under `AQCI`
 
 - Date: 2026-10-14
-- Status: Proposed
+- Status: Superseded in part by [ADR-0005](0005-canonical-csi-representation.md)
+  (the `f32` amplitude/phase payload; the `AQCI` magic and the header/body field
+  set are retained)
 - Related: `docs/spec/capture-and-firmware.md` §5.1, `docs/spec/data-contracts.md` §9.1,
   `docs/spec/interface-register.md`, `docs/adr/0003-interface-reconciliation.md`
 - Implemented by: `crates/aquila-wire`
+
+> **Superseded in part.** [ADR-0005](0005-canonical-csi-representation.md)
+> replaces the `f32` amplitude/phase payload decision below with a raw signed
+> int8 I/Q payload. The `AQCI` magic and the header/body field set decided here
+> are retained; do not follow this ADR's payload guidance.
 
 ## Context
 

@@ -30,8 +30,8 @@ this spec uses. Numbers and external claims cite `../reference/sources.json`.
 ## Resolved
 
 The five divergences formerly recorded here — the crate graph, the node
-data/control ports, `aquila-types` vs `aquila-contracts`, the source-seam name,
-and the `sensing frame` definition — are **resolved** by
+data/control ports, `aquila-types` vs the superseded `aquila-contracts`, the
+source-seam name, and the `sensing frame` definition — are **resolved** by
 `../adr/0003-interface-reconciliation.md`. The canonical crate list, seams,
 dependency edges, ports and contract version are registered in
 `interface-register.md`; `tools/dag.toml` enforces the graph via

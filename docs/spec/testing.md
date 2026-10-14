@@ -172,10 +172,10 @@ surviving mutant means a real gap in decision logic.
 
 | Module | Region coverage floor | Mutation (caught) | Notes |
 | --- | --- | --- | --- |
-| `aquila-core` DSP | 85% | 80% | numeric kernels prioritise properties over mutation |
-| `aquila-core` calibration | 95% | 90% | critical path |
-| `aquila-core` fusion / decision | 90% | 85% | control-flow heavy: mutation is high-value here |
-| `aquila-core` inference glue | 85% | n/a | verified by conformance/golden outputs, not mutants |
+| `aquila-signal` DSP | 85% | 80% | numeric kernels prioritise properties over mutation |
+| `aquila-sensing` calibration | 95% | 90% | critical path |
+| `aquila-sensing` fusion / decision | 90% | 85% | control-flow heavy: mutation is high-value here |
+| `aquila-inference` inference glue | 85% | n/a | verified by conformance/golden outputs, not mutants |
 | `aquila-testkit` | 80% | n/a | fakes are contract-tested against real adapters |
 | adapters (edges) | excluded from core floor | n/a | adapter contract tests against recorded capture |
 

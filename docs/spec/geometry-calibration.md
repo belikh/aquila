@@ -199,12 +199,13 @@ hard input to presence, pose, or vitals.
 
 - **`aquila-geometry`** — topology model, frames/transforms, placement,
   zone/room/floor mapping, proximity fingerprint, bounded trilateration,
-  `Confidence`. Pure computation, no I/O, no async. Depends only on a tiny
-  `aquila-units` (metre, radian, dB) if needed.
-- **`aquila-calibration`** — the whole-home calibration process: capture
+  `Confidence`. Pure computation, no I/O, no async. Depends only on
+  `aquila-types` (shared identities and units: metre, radian, dB).
+- **Calibration is not a crate.** The whole-home calibration process — capture
   planning, baseline/threshold/drift/signature learning, quality gates, the
-  artefact, versioning and invalidation policy. Depends on `aquila-geometry`,
-  the DSP feature layer, and `aquila-metrics`.
+  artefact, versioning and invalidation policy — is the internal `calibration`
+  module of **`aquila-sensing`** (ADR-0003 §6), which depends on
+  `aquila-geometry`, the DSP feature layer and `aquila-metrics`.
 
 ### Seams (reused; no new ports invented)
 
@@ -221,16 +222,17 @@ Calibration and geometry use exactly the brief's seams:
 Reading an artefact back is a **pure function over bytes** (`parse_artefact`,
 `validate_artefact`), so replay tests load recorded fixtures with no new seam.
 Persistence *semantics* (content addressing, the `current` pointer) are owned by
-`aquila-calibration`; the byte write goes through `Sink`.
+the `calibration` module of `aquila-sensing`; the byte write goes through `Sink`.
 
 ### Enforced DAG
 
 ```
-units ← geometry ← calibration ← { dsp, metrics }
+aquila-types ← aquila-geometry ← aquila-sensing
 ```
 
 No upward edges. Geometry never depends on the model crates. Enforced by the
-repo's dependency-check tooling (per the brief's dependency-DAG rule).
+repo's dependency-check tooling (`tools/dag.toml`; per the brief's
+dependency-DAG rule).
 
 ### Public surface (sketch)
 
@@ -245,7 +247,7 @@ pub fn zone_of(obs: &LinkWindow, home: &Home, cal: &Calibration) -> Scored<Optio
 pub fn floor_of(obs: &LinkWindow, home: &Home, cal: &Calibration) -> Scored<FloorId>;
 pub fn estimate_position(links: &[LinkObservation], home: &Home, cal: &Calibration) -> Scored<PositionEstimate>;
 
-// aquila-calibration
+// aquila-sensing (internal calibration module)
 pub fn run(
     source: &impl CsiSource,
     clock: &impl Clock,

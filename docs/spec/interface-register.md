@@ -20,7 +20,7 @@ These types are declared exactly once. A second declaration anywhere is a defect
 
 | Concept | One canonical declaration | Relationship |
 | --- | --- | --- |
-| CSI frame | `aquila_types::CsiFrame` | The on-air/on-disk contract frame (`amplitude`/`phase` arrays, `data-contracts.md` §2). |
+| CSI frame | `aquila_types::CsiFrame` | The on-air/on-disk contract frame (raw signed int8 I/Q sample `i_q`, `data-contracts.md` §2; amplitude/phase are derived). |
 | CSI conditioning frame | `aquila_signal::ComplexFrame` | `aquila-signal`'s **internal** decode representation (per-subcarrier `Complex32` bins), produced from the contract frame by `aquila_signal::decode_csi`. It is not a contract type and never crosses a crate boundary as a serialised shape. |
 | Feature vector | `aquila_types::FeatureVector` | The packed model-input carrier; constructed by `aquila-signal` (`NodeFeatures::feature_vector`) and re-exported by `aquila-inference`. |
 | SHA-256 | `aquila_types::sha256` / `to_hex` | The workspace's one hash; every crate calls it rather than carrying its own. |

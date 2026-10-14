@@ -27,8 +27,7 @@ fn golden_frame() -> CsiFrame {
         channel: 6,
         bandwidth_mhz: 20,
         subcarrier_offset: -3,
-        amplitude: vec![1.0, 2.0],
-        phase: vec![0.0, -0.5],
+        i_q: vec![1, 2, 3, 4],
         rssi_dbm: -42,
         noise_floor_dbm: -95,
         phy: PhyFlags(PhyFlags::HT),
@@ -37,15 +36,15 @@ fn golden_frame() -> CsiFrame {
 
 /// The exact `AQCI` datagram for [`golden_frame`], laid out byte for byte.
 ///
-/// 16-byte header, 28-byte fixed body, then `f32` amplitude (`1.0`, `2.0`) and
-/// `f32` phase (`0.0`, `-0.5`).
-const GOLDEN: [u8; 60] = [
+/// 16-byte header, 28-byte fixed body, then the interleaved signed int8 I/Q
+/// sample (`1, 2, 3, 4`).
+const GOLDEN: [u8; 48] = [
     // header
     0x41, 0x51, 0x43, 0x49, // magic "AQCI"
     0x01, 0x00, // wire major 1, minor 0
-    0x01, 0x00, // message type 1, subcarrier format 0
+    0x01, 0x01, // message type 1, subcarrier format 1 (int8 I/Q)
     0x02, 0x01, // node_id 0x0102 (LE)
-    0x2C, 0x00, // payload_len 44 (LE)
+    0x20, 0x00, // payload_len 32 (LE)
     0x00, // band 2.4 GHz
     0x06, // channel 6
     0x14, // bandwidth 20 MHz
@@ -60,9 +59,8 @@ const GOLDEN: [u8; 60] = [
     0xA1, // noise_floor_dbm -95
     0x01, 0x00, // phy_flags HT
     0x00, 0x00, // reserved
-    // amplitude f32: 1.0, 2.0
-    0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x40, // phase f32: 0.0, -0.5
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xBF,
+    // interleaved int8 I/Q: 1, 2, 3, 4
+    0x01, 0x02, 0x03, 0x04,
 ];
 
 /// A representative live-looking frame: 64 subcarriers at 20 MHz HT.
@@ -77,8 +75,9 @@ fn representative_frame() -> CsiFrame {
         channel: 1,
         bandwidth_mhz: 20,
         subcarrier_offset: -32,
-        amplitude: (0..n).map(|k| (k as f32) * 0.5).collect(),
-        phase: (0..n).map(|k| (k as f32 / n as f32) - 0.5).collect(),
+        i_q: (0..2 * n)
+            .map(|i| ((i * 7 + 11) % 256) as u8 as i8)
+            .collect(),
         rssi_dbm: -38,
         noise_floor_dbm: -92,
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
@@ -97,13 +96,13 @@ fn golden_layout_is_pinned() {
         &GOLDEN[..],
         "encode output drifted from the pinned layout"
     );
-    assert_eq!(GOLDEN.len(), 60, "golden datagram length");
+    assert_eq!(GOLDEN.len(), 48, "golden datagram length");
     assert_eq!(
         decode_datagram(&GOLDEN).expect("decode golden"),
         frame,
         "golden datagram does not decode to its frame"
     );
-    assert_eq!(datagram_len(2), Some(60));
+    assert_eq!(datagram_len(2), Some(48));
 }
 
 // ---------------------------------------------------------------------------
@@ -124,8 +123,7 @@ fn representative_frames_round_trip() {
 
     // A single-subcarrier frame is the smallest legal frame.
     let mut tiny = golden_frame();
-    tiny.amplitude = vec![0.0];
-    tiny.phase = vec![0.0];
+    tiny.i_q = vec![7, -7];
     assert_round_trips(&tiny);
 
     // Unknown band and an unrecognised band byte both survive.
@@ -136,32 +134,32 @@ fn representative_frames_round_trip() {
     // The maximum subcarrier count fits and round-trips.
     let n = MAX_SUBCARRIERS as usize;
     let mut max = representative_frame();
-    max.amplitude = vec![1.0; n];
-    max.phase = vec![-1.0; n];
+    max.i_q = vec![1; 2 * n];
     assert_round_trips(&max);
-    assert_eq!(datagram_len(n), Some(16 + 28 + 8 * n));
+    assert_eq!(datagram_len(n), Some(16 + 28 + 2 * n));
 }
 
 #[test]
 fn over_budget_frame_is_clamped_not_panicked() {
     let n = MAX_SUBCARRIERS as usize + 32;
     let mut frame = representative_frame();
-    frame.amplitude = vec![1.0; n];
-    frame.phase = vec![0.0; n];
+    frame.i_q = vec![1; 2 * n];
 
     let decoded = decode_datagram(&encode_datagram(&frame)).expect("decode clamped");
     assert_eq!(decoded.n_subcarriers(), MAX_SUBCARRIERS as usize);
 }
 
 #[test]
-fn short_phase_is_padded_not_panicked() {
+fn odd_sample_is_truncated_not_panicked() {
+    // An odd-length interleaved sample is not whole I/Q pairs; the encoder
+    // clamps to the whole pairs it can carry and the decoder round-trips that.
     let mut frame = representative_frame();
-    frame.phase.truncate(3);
+    let pairs = frame.n_subcarriers();
+    frame.i_q.push(7);
 
-    let decoded = decode_datagram(&encode_datagram(&frame)).expect("decode padded");
-    assert_eq!(decoded.amplitude, frame.amplitude);
-    assert_eq!(decoded.phase.len(), frame.amplitude.len());
-    assert!(decoded.phase[3..].iter().all(|p| *p == 0.0));
+    let decoded = decode_datagram(&encode_datagram(&frame)).expect("decode truncated");
+    assert_eq!(decoded.n_subcarriers(), pairs);
+    assert_eq!(decoded.i_q, frame.i_q[..2 * pairs]);
 }
 
 // ---------------------------------------------------------------------------
@@ -224,22 +222,22 @@ fn bad_message_type_and_format_are_rejected() {
     assert_eq!(decode_datagram(&msg), Err(WireError::UnknownMessageType(2)));
 
     let mut fmt = GOLDEN;
-    fmt[7] = 1;
+    fmt[7] = 0;
     assert_eq!(
         decode_datagram(&fmt),
-        Err(WireError::UnknownSubcarrierFormat(1))
+        Err(WireError::UnknownSubcarrierFormat(0))
     );
 }
 
 #[test]
 fn inconsistent_payload_length_is_rejected() {
     let mut bytes = GOLDEN;
-    bytes[10] = 0x28; // declare 40, but n = 2 implies 44
+    bytes[10] = 0x1E; // declare 30, but n = 2 implies 32
     assert_eq!(
         decode_datagram(&bytes),
         Err(WireError::LengthMismatch {
-            declared: 40,
-            expected: 44
+            declared: 30,
+            expected: 32
         })
     );
 }
@@ -580,7 +578,7 @@ fn ports_and_limits_are_the_registered_ones() {
     assert_eq!(CONTROL_PORT, 9101);
     assert_eq!(CSI_MAGIC, *b"AQCI");
     assert_eq!(CONTROL_MAGIC, *b"AQCC");
-    assert_eq!(MAX_SUBCARRIERS, 178);
+    assert_eq!(MAX_SUBCARRIERS, 714);
 }
 
 #[test]
@@ -591,16 +589,16 @@ fn generated_c_header_pins_the_layout() {
         "#define AQ_CSI_MAGIC_0 0x41u",
         "#define AQ_CSI_HEADER_LEN 16u",
         "#define AQ_CSI_BODY_FIXED_LEN 28u",
-        "#define AQ_CSI_MAX_SUBCARRIERS 178u",
+        "#define AQ_CSI_MAX_SUBCARRIERS 714u",
         "#define AQ_CSI_OFF_MAGIC 0u",
-        "#define AQ_CSI_BODY_OFF_AMPLITUDE 28u",
+        "#define AQ_CSI_BODY_OFF_IQ 28u",
+        "#define AQ_SUBCARRIER_FORMAT_INT8_IQ 1u",
         "#define AQ_OP_SYNC_ECHO 0x09u",
         "#define AQ_CSI_DATA_PORT 9100u",
         "_Static_assert(sizeof(aq_csi_header_t) == AQ_CSI_HEADER_LEN",
         "#define AQ_CSI_FRAME_SIZE(n_subcarriers)",
-        "float payload[];",
-        "#define AQ_CSI_AMPLITUDE(body)",
-        "#define AQ_CSI_PHASE(body)",
+        "int8_t payload[];",
+        "#define AQ_CSI_IQ(body)",
         "_Static_assert(offsetof(aq_csi_body_t, payload) == AQ_CSI_BODY_FIXED_LEN",
     ] {
         assert!(
@@ -626,8 +624,7 @@ prop_compose! {
          channel: u8,
          bandwidth_mhz: u8,
          subcarrier_offset: i16,
-         amplitude in prop::collection::vec(0.0f32..1000.0, n..=n),
-         phase in prop::collection::vec(-core::f32::consts::PI..core::f32::consts::PI, n..=n),
+         i_q in prop::collection::vec(any::<i8>(), 2 * n..=2 * n),
          rssi_dbm: i8,
          noise_floor_dbm: i8,
          phy: u16)
@@ -641,8 +638,7 @@ prop_compose! {
             channel,
             bandwidth_mhz,
             subcarrier_offset,
-            amplitude,
-            phase,
+            i_q,
             rssi_dbm,
             noise_floor_dbm,
             phy: PhyFlags(phy),

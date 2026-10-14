@@ -17,22 +17,21 @@
 #define AQ_CONTROL_MAGIC_2 0x43u /* 'C' */
 #define AQ_CONTROL_MAGIC_3 0x43u /* 'C' */
 #define AQ_CSI_MESSAGE_TYPE 1u
-#define AQ_SUBCARRIER_FORMAT_F32 0u
+#define AQ_SUBCARRIER_FORMAT_INT8_IQ 1u
 
 /* Ports and size limits. */
 #define AQ_CSI_DATA_PORT 9100u
 #define AQ_CONTROL_PORT 9101u
 #define AQ_CSI_HEADER_LEN 16u
 #define AQ_CSI_BODY_FIXED_LEN 28u
-#define AQ_CSI_MAX_SUBCARRIERS 178u
+#define AQ_CSI_MAX_SUBCARRIERS 714u
 #define AQ_CSI_MAX_DATAGRAM_LEN 1472u
 #define AQ_CONTROL_HEADER_LEN 12
 
 /* Variable-length CSI payload. */
-/* Interleaved f32 amplitude[n], then f32 phase[n]; 8 bytes per subcarrier. */
-#define AQ_CSI_FLOAT_BYTES 4u
-#define AQ_CSI_PAYLOAD_FLOATS(n_subcarriers) (2u * (n_subcarriers))
-#define AQ_CSI_PAYLOAD_BYTES(n_subcarriers) (8u * (n_subcarriers))
+/* Interleaved signed int8 I/Q, I then Q per subcarrier; 2 bytes per subcarrier. */
+#define AQ_CSI_PAYLOAD_BYTES_PER_SUBCARRIER 2u
+#define AQ_CSI_PAYLOAD_BYTES(n_subcarriers) (2u * (n_subcarriers))
 #define AQ_CSI_FRAME_SIZE(n_subcarriers) \
     (AQ_CSI_HEADER_LEN + AQ_CSI_BODY_FIXED_LEN + AQ_CSI_PAYLOAD_BYTES(n_subcarriers))
 
@@ -74,7 +73,7 @@
 #define AQ_CSI_BODY_OFF_NOISE_FLOOR_DBM 23u
 #define AQ_CSI_BODY_OFF_PHY_FLAGS 24u
 #define AQ_CSI_BODY_OFF_RESERVED 26u
-#define AQ_CSI_BODY_OFF_AMPLITUDE 28u
+#define AQ_CSI_BODY_OFF_IQ 28u
 
 /* Control header field offsets. */
 #define AQ_CONTROL_OFF_MAGIC 0u
@@ -124,12 +123,11 @@ typedef struct {
 /* The variable-length AQCI body: the fixed fields, then the payload array. */
 typedef struct {
     aq_csi_body_fixed_t fixed;
-    float payload[]; /* C99 flexible array member */
+    int8_t payload[]; /* C99 flexible array member: interleaved I,Q */
 } aq_csi_body_t;
 
-/* Accessors: amplitude is payload[0..n), phase is payload[n..2n). */
-#define AQ_CSI_AMPLITUDE(body) ((body)->payload)
-#define AQ_CSI_PHASE(body) ((body)->payload + (body)->fixed.n_subcarriers)
+/* Accessors: the raw interleaved I/Q sample begins at payload[0]. */
+#define AQ_CSI_IQ(body) ((int8_t *)((body)->payload))
 
 _Static_assert(sizeof(aq_csi_header_t) == AQ_CSI_HEADER_LEN, "AQCI header size");
 _Static_assert(sizeof(aq_csi_body_fixed_t) == AQ_CSI_BODY_FIXED_LEN, "AQCI body size");

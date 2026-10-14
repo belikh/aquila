@@ -279,7 +279,7 @@ each a home:
 | Settled seam | Home crate |
 | --- | --- |
 | `CsiSource` | `aquila-sources` |
-| `Clock` | `aquila-sensing` (internal interface) |
+| `Clock` | trait in `aquila-types`; seam owned by `aquila-sensing` |
 | `PoseModel` / `VitalsModel` | `aquila-inference` |
 | `GroundTruth` | `aquila-evaluation` |
 | `Sink` | `aquila-sensing` |
@@ -289,10 +289,10 @@ No seventh seam is introduced.
 
 ## 11. Revisit triggers
 
-- A second fusion algorithm appears → promote the internal `fusion` seam and add
-  `aquila-fusion` at L1.
+- A second fusion algorithm appears → promote the internal `fusion` seam to its
+  own L1 crate.
 - Calibration acquires an independent consumer or a second estimator → promote
-  the internal `calibration` seam to a crate above `aquila-clock`/`signal`.
+  the internal `calibration` seam to its own crate.
 - A second node wire protocol appears (C6, ESP-NOW) → split `aquila-sources` by
   protocol, keeping `CsiSource`/`NodeControl` in place.
 - Phase-coherent RF reference becomes real (future-only) → a new L2 crate at the

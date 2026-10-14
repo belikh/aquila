@@ -36,7 +36,7 @@ custom component's concern. This API does not model HA; it models Aquila.
 | --- | --- |
 | Transports | HTTP/1.1 (and HTTP/2 where the proxy offers it) over TLS-less loopback; WebSocket over the same connection, RFC 6455. |
 | Core listener | Binds `127.0.0.1` and `::1` **only**. Binding any other address MUST fail at startup. |
-| Port | Fixed, add-on-owned, non-privileged (default `8765`), overridable by add-on config. |
+| Port | Fixed, add-on-owned, non-privileged (default `8099`), overridable by add-on config. |
 | Media types | `application/json; charset=utf-8`; errors `application/problem+json`; stream frames are JSON text frames. |
 | Compression | `gzip` / `br` permitted on JSON responses when negotiated; never required. |
 | Keep-alive | HTTP keep-alive on; idle HTTP connection timeout 65 s. |

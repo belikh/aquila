@@ -149,7 +149,7 @@ pub fn extract_torso_ranges(
     }
     let bins = envelopes
         .iter()
-        .map(|env| env.frame.amplitude.len().min(env.frame.phase.len()))
+        .map(|env| env.frame.n_subcarriers())
         .min()
         .unwrap_or(0);
     if bins < 4 {
@@ -196,18 +196,18 @@ pub fn extract_torso_ranges(
     Some(out)
 }
 
-/// The complex CSI sample of one subcarrier, `amplitude · exp(i·phase)`.
+/// The complex CSI sample of one subcarrier, the raw int8 `(I, Q)` pair.
 fn complex_sample(envelope: &CsiEnvelope, k: usize) -> (f64, f64) {
-    let amplitude = envelope.frame.amplitude[k] as f64;
-    let phase = envelope.frame.phase[k] as f64;
-    let (sin_p, cos_p) = phase.sin_cos();
-    (amplitude * cos_p, amplitude * sin_p)
+    (
+        f64::from(envelope.frame.i_at(k)),
+        f64::from(envelope.frame.q_at(k)),
+    )
 }
 
 /// The subcarrier spacing of a frame, in hertz, from its bandwidth and bin
 /// count.
 fn subcarrier_spacing_hz(envelope: &CsiEnvelope) -> Option<f64> {
-    let bins = envelope.frame.amplitude.len().min(envelope.frame.phase.len());
+    let bins = envelope.frame.n_subcarriers();
     if bins == 0 || envelope.frame.bandwidth_mhz == 0 {
         return None;
     }

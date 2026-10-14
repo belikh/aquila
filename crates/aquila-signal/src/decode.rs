@@ -4,15 +4,14 @@
 //! representation, [`ComplexFrame`] — the per-subcarrier [`Complex32`] bins the
 //! DSP consumes. It is deliberately not a contract type: the one canonical
 //! `CsiFrame` lives in `aquila-types` (`data-contracts.md` §2). [`decode_csi`]
-//! converts that contract frame into a [`ComplexFrame`], and [`decode_record`]
-//! decodes a raw ESP32 CSI record for the record-level path. Both are total
-//! functions of their input: they allocate but perform no IO and hold no
-//! globals (`signal.md` §4.1).
+//! derives those bins from the raw signed int8 I/Q sample the contract frame
+//! carries (ADR-0005), and [`decode_record`] decodes a raw ESP32 CSI record for
+//! the record-level path. Both are total functions of their input: they
+//! allocate but perform no IO and hold no globals (`signal.md` §4.1).
 
 use aquila_types::{Band, CsiFrame as ContractFrame, NodeId};
 
 use crate::error::DecodeError;
-use crate::math::{cos_approx, sin_approx};
 
 /// Channel width; determines the expected subcarrier count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -226,48 +225,29 @@ fn centre_freq_hz(band: Band, channel: u8) -> u32 {
 /// Decode the canonical contract frame into the conditioning representation.
 ///
 /// This is the one conversion from the on-air/on-disk `aquila_types::CsiFrame`
-/// (ordered `amplitude`/`phase` arrays, `data-contracts.md` §2) to a
-/// [`ComplexFrame`] (per-subcarrier [`Complex32`] bins). The reconstruction
-/// `re = a·cos(φ)`, `im = a·sin(φ)` inverts the magnitude and argument the wire
-/// carries, using the crate's deterministic [`cos_approx`]/[`sin_approx`] so the
-/// conversion is bit-identical across hosts.
+/// (a raw signed int8 I/Q sample, interleaved `I, Q`, `data-contracts.md` §2 and
+/// ADR-0005) to a [`ComplexFrame`] (per-subcarrier [`Complex32`] bins). Each
+/// pair `[I, Q]` becomes one [`Complex32`], divided by
+/// [`aquila_types::IQ_COUNTS_PER_UNIT`] to recover the core's working unit; the
+/// conversion is exact and introduces no clamping or `NaN` (`signal.md` D3). The
+/// old on-node amplitude/phase derivation (`√(I²+Q²)`, `atan2(Q, I)`) now lives
+/// here, in the core.
 ///
 /// # Errors
 ///
-/// Returns [`DecodeError`] when the contract frame carries no subcarriers,
-/// mismatched `amplitude`/`phase` lengths, or a non-finite sample. A valid
-/// contract frame never fails.
+/// Returns [`DecodeError`] when the contract frame carries no subcarriers or an
+/// odd-length sample. A valid contract frame never fails.
 pub fn decode_csi(frame: &ContractFrame) -> Result<ComplexFrame, DecodeError> {
-    let n = frame.amplitude.len();
-    if n == 0 {
+    if frame.i_q.is_empty() {
         return Err(DecodeError::EmptyFrame);
     }
-    if frame.phase.len() != n {
-        return Err(DecodeError::LengthMismatch {
-            amplitude: n,
-            phase: frame.phase.len(),
-        });
+    if !frame.i_q.len().is_multiple_of(2) {
+        return Err(DecodeError::OddIqLength(frame.i_q.len()));
     }
+    let n = frame.i_q.len() / 2;
     let mut bins = Vec::with_capacity(n);
-    for i in 0..n {
-        let amplitude = frame.amplitude[i];
-        let phase = frame.phase[i];
-        if !amplitude.is_finite() {
-            return Err(DecodeError::NonFiniteSample {
-                field: "amplitude",
-                index: i,
-            });
-        }
-        if !phase.is_finite() {
-            return Err(DecodeError::NonFiniteSample {
-                field: "phase",
-                index: i,
-            });
-        }
-        bins.push(Complex32::new(
-            amplitude * cos_approx(phase),
-            amplitude * sin_approx(phase),
-        ));
+    for k in 0..n {
+        bins.push(Complex32::new(frame.i_at(k), frame.q_at(k)));
     }
 
     let bandwidth = if frame.bandwidth_mhz >= 40 {

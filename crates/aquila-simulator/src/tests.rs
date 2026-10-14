@@ -82,8 +82,8 @@ fn simulator_yields_every_frame_and_then_ends() {
 
     // Every frame round-trips the wire codec and obeys the contract.
     for env in &frames {
-        assert_eq!(env.frame.amplitude.len(), 64);
-        assert_eq!(env.frame.phase.len(), 64);
+        assert_eq!(env.frame.n_subcarriers(), 64);
+        assert_eq!(env.frame.i_q.len(), 128);
         env.frame.validate().unwrap();
     }
 }
@@ -94,18 +94,16 @@ fn simulator_emits_synthesised_ground_truth() {
     let source = SimulatorSource::new(script, config(3)).unwrap();
     let truth = source.ground_truth();
     assert!(!truth.is_empty());
-    assert!(truth.iter().any(|(_, r)| matches!(
-        &r.payload,
-        EventPayload::Presence { occupied: true, .. }
-    )));
+    assert!(truth
+        .iter()
+        .any(|(_, r)| matches!(&r.payload, EventPayload::Presence { occupied: true, .. })));
     assert!(truth.iter().any(|(_, r)| matches!(
         &r.payload,
         EventPayload::Vitals { metric, .. } if metric.as_str() == "breathing_rate"
     )));
-    assert!(truth.iter().any(|(_, r)| matches!(
-        &r.payload,
-        EventPayload::Count { people: 1 }
-    )));
+    assert!(truth
+        .iter()
+        .any(|(_, r)| matches!(&r.payload, EventPayload::Count { people: 1 })));
 }
 
 #[test]
@@ -178,7 +176,10 @@ fn simulator_session_replays_to_identical_frames() {
         ReplayMode::Deterministic,
         Arc::new(FixedClock(1_000)),
     );
-    let replayed: Vec<CsiFrame> = drain(&mut replay).into_iter().map(|env| env.frame).collect();
+    let replayed: Vec<CsiFrame> = drain(&mut replay)
+        .into_iter()
+        .map(|env| env.frame)
+        .collect();
 
     assert_eq!(
         replayed, direct_frames,

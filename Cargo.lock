@@ -172,6 +172,7 @@ dependencies = [
  "aquila-evaluation",
  "aquila-metrics",
  "aquila-sensing",
+ "aquila-signal",
  "aquila-simulator",
  "aquila-sources",
  "aquila-types",

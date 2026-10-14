@@ -80,14 +80,14 @@ the direct node control channel; there is no broker in the path.
 ## 3. The `CsiSource` seam
 
 `CsiSource` is the one seam where "where CSI comes from" is decided. It is owned
-by the `aquila-source` crate (roadmap). The seam MUST be satisfied by at least
+by the `aquila-sources` crate (roadmap). The seam MUST be satisfied by at least
 three adapters — simulator, recorded-replay, live-UDP — so that replay and live
 are genuinely interchangeable and the seam is real, not speculative.
 
 ### 3.1 Types
 
 ```rust
-// aquila-source
+// aquila-sources
 
 /// Stable node identity: the ESP32-S3 factory base MAC (six bytes).
 /// The home model maps it to a floor and room; it is the only node id on the wire.
@@ -155,7 +155,7 @@ and tests need no network.
 
 ### 3.2 Adapters
 
-All three live in `aquila-source` unless noted. Each takes an injected
+All three live in `aquila-sources` unless noted. Each takes an injected
 `Arc<dyn Clock>` (§4) so that `host_arrival_us` is deterministic under test.
 
 ```rust
@@ -221,11 +221,12 @@ These three rules are what let a metric be **deterministic** in the ledger
 
 ## 4. Time: the `Clock` seam and software time sync
 
-`aquila-clock` owns the `Clock` seam and per-node drift estimation (roadmap,
+The `Clock` trait is declared in `aquila-types` (ADR-0003 §5); the seam is owned
+by `aquila-sensing`, which also owns the per-node drift estimator (roadmap,
 Slice 3). Nodes do not own a shared clock.
 
 ```rust
-// aquila-clock
+// trait in aquila-types; implementations and the drift estimator in aquila-sensing
 pub trait Clock: Send + Sync {
     /// Host monotonic time in microseconds.
     fn now_us(&self) -> u64;
@@ -257,50 +258,65 @@ One CSI frame per UDP datagram, node → core, unicast, little-endian. No ACK: a
 lossy stream of observations tolerates loss, and loss is made visible rather
 than recovered (§5.4). Default port is `9100/udp`, configurable, private-only.
 The codec is owned by `aquila-wire` and is the single source of truth for both
-Rust and the firmware (§9.6).
+Rust and the firmware (§9.4).
 
 ### 5.1 Datagram layout
 
-`aqci` header is 56 bytes, fixed. `header_len` exists so fields can be appended
-without a version bump.
+Little-endian, packed, no trailing padding. This is exactly the
+`data-contracts.md` §9.1 layout carried under the `AQCI` magic (ADR-0004): the
+payload is the frozen `CsiFrame` contract (`data-contracts.md` §2) as the raw
+signed `int8` I/Q sample the esp-csi capture produced (ADR-0005), **not** a
+derived `f32` amplitude/phase pair. Max datagram is 1472 bytes (under a
+1500-byte MTU); oversized frames are dropped and counted, never fragmented at
+the application layer.
 
-| Offset | Size | Field | Notes |
+**Fixed header — 16 bytes**
+
+| Offset | Size | Field | Encoding |
 | --- | --- | --- | --- |
 | 0 | 4 | `magic` | ASCII `AQCI` (`41 51 43 49`) |
-| 4 | 1 | `version` | `1` |
-| 5 | 1 | `flags` | bit0 `FIRST_WORD_INVALID`; bit1 `TSF_VALID`; bit2 `SOURCE_KNOWN`; bits3–7 reserved, zero |
-| 6 | 2 | `header_len` | `56` |
-| 8 | 6 | `node` | factory base MAC |
-| 14 | 4 | `boot` | `BootId`, random per boot |
-| 18 | 8 | `sequence` | per-boot, from 0 |
-| 26 | 8 | `device_ts_us` | node monotonic, µs |
-| 34 | 4 | `tsf_us` | 802.11 TSF; zero unless `TSF_VALID` |
-| 38 | 1 | `chan_primary` | 802.11 channel |
-| 39 | 1 | `chan_bw` | 0=20, 1=40, 2=80, 3=160 MHz |
-| 40 | 1 | `chan_secondary` | 0=none, 1=above, 2=below |
-| 41 | 1 | `sig_mode` | 0=non-HT, 1=HT, 2=VHT, 3=HE |
-| 42 | 1 | `mcs` | |
-| 43 | 1 | `rate` | raw driver rate index |
-| 44 | 1 | `rssi` | `i8`, dBm |
-| 45 | 1 | `noise_floor` | `i8`, dBm |
-| 46 | 1 | `antenna` | |
-| 47 | 1 | `reserved` | zero |
-| 48 | 6 | `source_mac` | eliciting frame transmitter; zero unless `SOURCE_KNOWN` |
-| 54 | 2 | `csi_len` | bytes, even; subcarriers = `csi_len / 2` |
-| 56 | `csi_len` | `csi` | `int8`, interleaved I, Q |
+| 4 | 1 | `wire_major` | `u8` |
+| 5 | 1 | `wire_minor` | `u8` |
+| 6 | 1 | `msg_type` | `u8` (1 = `CsiFrame`) |
+| 7 | 1 | `sc_format` | `u8` (1 = raw signed int8 I/Q) |
+| 8 | 2 | `node_id` | `u16` (dense contract identity; ADR-0003 §3) |
+| 10 | 2 | `payload_len` | `u16` (bytes after the header) |
+| 12 | 1 | `band` | `u8` (0 = 2.4 GHz, 1 = 5 GHz, 255 = unknown) |
+| 13 | 1 | `channel` | `u8` |
+| 14 | 1 | `bandwidth_mhz` | `u8` |
+| 15 | 1 | `reserved` | `u8` = 0 |
 
-`csi_len` ≤ 612 (esp-csi maximum), so a datagram is ≤ 668 bytes — comfortably
-under a 1500-byte MTU, with no fragmentation. At 20 MHz HT there are ~64
-subcarriers (~128 bytes); at 40 MHz ~128.
+**Body (`msg_type` 1) — 28-byte fixed part, then `2 × n` bytes**
 
-The core decodes every datagram, but a mismatch between `header_len` and
-`version` is not fatal: unknown trailing bytes are ignored, so a newer node
-firmware is forward-compatible with an older core.
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 8 | `sequence` |
+| 8 | 8 | `device_time_us` |
+| 16 | 2 | `boot_epoch` |
+| 18 | 2 | `subcarrier_offset` (`i16`) |
+| 20 | 2 | `n_subcarriers` (`u16`) |
+| 22 | 1 | `rssi_dbm` (`i8`) |
+| 23 | 1 | `noise_floor_dbm` (`i8`) |
+| 24 | 2 | `phy_flags` (`u16`) |
+| 26 | 2 | reserved = 0 |
+| 28 | 2n | `i_q[0..2n]` (interleaved signed int8 `I, Q` per subcarrier) |
+
+A receiver validates `magic`, `wire_major`, `payload_len` and
+`payload_len == 28 + 2 * n_subcarriers` before trusting any field. A `wire_minor`
+mismatch is accepted (additive); a `wire_major` mismatch is rejected and counted
+once per `(node_id, boot_epoch)`, never guessed. The wire carries the dense
+`node_id`; the factory `MacAddr` is translated at the seam by `aquila-wire`'s
+node-identity map (ADR-0003 §3, ADR-0004 §2). The payload is copied from the
+receive buffer verbatim: the node performs no floating-point conversion
+(ADR-0005). The codec is `aquila-wire`'s
+`encode_datagram`/`decode_datagram`; `postcard` is not used on the wire
+(`data-contracts.md` §9.1).
 
 ### 5.2 Sequence
 
-`sequence` is monotonic per `(node, boot)`, assigned in the capture callback,
-starting at 0. A `(node, boot)` change resets the core's per-node state.
+`sequence` is monotonic per `(node_id, boot_epoch, band, channel)`, assigned in
+the capture callback, starting at 0 (`data-contracts.md` §2). A
+`(node_id, boot_epoch)` change resets the core's per-node state.
 Gaps are meaningful: a gap is a dropped frame, not a reordering (UDP does not
 reorder within a socket pair in practice, and any reorder is surfaced by the
 same gap detection). The core keeps a high-water sequence per node and counts
@@ -308,9 +324,11 @@ gaps as `csi.gap.total` for `system.health`.
 
 ### 5.3 Device timestamp and pacing
 
-`device_ts_us` is captured as close to the CSI callback as possible and is the
-canonical ordering key for one node; `host_arrival_us` is core-side only and
-never on the wire. `tsf_us` is optional and secondary.
+`device_time_us` is captured as close to the CSI callback as possible and is the
+canonical ordering key for one node; host arrival is core-side only, added by the
+`CsiEnvelope` wrapper (`data-contracts.md` §2), and never on the wire. The wire
+carries no TSF (ADR-0004 replaced the earlier 56-byte header and its optional
+`tsf_us`).
 
 **Pacing is RX-event-driven, not self-generated.** v1 nodes are passive
 observers: a CSI frame exists only when the radio receives an 802.11 frame,
@@ -319,7 +337,7 @@ a sample cadence, does not batch, and does not delay. It sends one CSI frame per
 datagram as fast as the ambient traffic and the sender task allow, subject to a
 configurable `max_tx_rate_hz` cap that protects the network (frames over the cap
 are dropped and counted, not queued). Inter-frame spacing is preserved by the
-node's own `device_ts_us`.
+node's own `device_time_us`.
 
 Consequence, stated honestly: live CSI rate and cross-node frame alignment
 depend on ambient traffic and cannot be guaranteed. The simulator and Sessions
@@ -341,8 +359,9 @@ There is no ACK, no retransmit and no flow control on the data plane.
 A separate UDP request/response protocol on the control port (default
 `9101/udp`), distinct from the CSI data plane. It is the "direct node control
 channel" of the brief; it is private, and it is not the core's HTTP+WS plane.
-Owned by the core (roadmap: `aquila-host`; `dashboard.md` calls the same core
-`aquila-core`).
+The `NodeControl` half of the `CsiSource` seam lives in `aquila-sources`; the
+core relays it through `aquila-api` inside the `aquila-addon` composition root
+(ADR-0003 §3, `interface-register.md`).
 
 ### 6.1 Framing
 
@@ -376,6 +395,16 @@ a retransmit is deduplicated by the node within a bounded window.
 | `0x0B` | `IDENTIFY` | core → node | blink LED |
 | `0x0C` | `FACTORY_RESET` | core → node | clear NVS and unpair |
 | `0x0D` | `EVENT` | node → core | noteworthy unsolicited event |
+| `0x0E` | `OTA_BEGIN` | core → node | start a firmware transfer (see §9.5, `firmware-ota.md` §5) |
+| `0x0F` | `OTA_CHUNK` | core → node | one image chunk |
+| `0x10` | `OTA_ACK` | node → core | cumulative chunk acknowledgement |
+| `0x11` | `OTA_STATUS` | node → core | OTA progress/state |
+| `0x12` | `OTA_END` | core → node | finalise, verify and activate |
+| `0x13` | `OTA_ABORT` | both | discard the transfer |
+| `0x14` | `OTA_RESULT` | node → core | OTA outcome |
+
+`0x0E`–`0x14` are the firmware-OTA extension of this table; their bodies and
+rules are specified in `docs/spec/firmware-ota.md` §5 and summarised in §9.5.
 
 `SET_CONFIG` carries a `config_version` and a `config_hash`; the node
 validates, applies atomically, and replies `ACTIVE` or `REJECTED` with a
@@ -433,7 +462,10 @@ H_k(t) = H0_k + Σ_i a_i(t) · exp( -j · 2π · f_k · d_i(t) / c ) + n_k(t)
 - `d_i(t) = d0_i + d_breath_i(t) + d_heart_i(t) + d_motion_i(t)` — path length.
 - `f_k` — the k-th subcarrier frequency; `c` — speed of light.
 - `n_k(t)` — additive noise at the configured floor.
-- Coefficients are quantised to `int8` with a configured scale; RSSI and noise
+- `H_k(t)` is **quantised to raw signed int8 I/Q** — the contract payload
+  (`data-contracts.md` §2, ADR-0005) — so the synthesised frame is byte-identical
+  in kind to a live one and the core's `int8 → f32` derivation is exercised.
+  Amplitude and phase are not emitted; the core derives them. RSSI and noise
   floor are derived from the same model.
 
 Modulations:
@@ -461,8 +493,9 @@ sim-based metrics; it is not a runtime input (§8.5).
 ### 7.4 Impairments
 
 Per-node clock skew (ppm) applied to timestamps; network jitter, loss and
-reordering applied at the datagram layer; random `FIRST_WORD_INVALID`; and the
-subcarrier count implied by bandwidth. Fakes for the whole pipeline — including
+reordering applied at the datagram layer; random first-word corruption (the
+leading subcarrier zeroed, the internal esp-csi quirk); and the subcarrier count
+implied by bandwidth. Fakes for the whole pipeline — including
 a fake `Clock` and a fake `Sink` — are ordinary structs, not fixtures.
 
 ## 8. Session format (recorded fixtures)
@@ -537,7 +570,7 @@ never consumed at runtime (the `GroundTruth` seam is research-only).
 
 Reference target: ESP32-S3 (ESP-IDF). ESP32-C6 is future and reuses the same
 components with a different chip target. The firmware is C/ESP-IDF, not a Rust
-crate; it lives under `firmware/esp32s3/`.
+crate; it lives under `firmware/esp32-s3-csi-node/`.
 
 ### 9.1 Responsibilities
 
@@ -548,11 +581,13 @@ crate; it lives under `firmware/esp32s3/`.
    promiscuous reception so ambient frames not addressed to the node still
    produce CSI.
 3. In the CSI callback: copy the CSI buffer, snapshot `rx_ctrl`, read
-   `esp_timer_get_time()` (monotonic µs), read the eliciting `mac`, assign the
-   per-boot `sequence`, set `FIRST_WORD_INVALID`, and enqueue into the ring. No
+   `esp_timer_get_time()` (monotonic µs), assign the per-boot `sequence`, record
+   the internal first-word-invalid quirk, and enqueue into the ring. No
    allocation, no logging, no floating point.
 4. A sender task drains the ring to the core's UDP endpoint, one CSI frame per
-   datagram, subject to `max_tx_rate_hz`; drop-and-count on overflow (§5.4).
+   datagram, subject to `max_tx_rate_hz`; drop-and-count on overflow (§5.4). The
+   sender copies the raw signed int8 I/Q buffer into the payload verbatim; the
+   node performs no conversion (ADR-0005).
 5. `boot` = random `u32` at boot; `sequence` resets per boot.
 6. Serve the control channel: pairing, config, status, sync echo, reboot,
    identify, factory reset (§6).
@@ -565,8 +600,9 @@ crate; it lives under `firmware/esp32s3/`.
 ### 9.2 What it MUST NOT do
 
 - No DSP, inference, fusion, calibration, feature extraction, filtering,
-  resampling, FFT or phase sanitisation. It ships the raw complex coefficients
-  exactly as esp-csi yields them.
+  resampling, FFT or phase sanitisation. It ships the raw signed int8 I/Q sample
+  the esp-csi capture produced, verbatim, without interpreting it or converting
+  it to amplitude/phase (ADR-0005).
 - Never sets, disciplines or corrects its clock; it emits free-running monotonic
   timestamps only. Time sync is host-side (§4).
 - Never transmits elicitation waveforms, selects subcarriers, steers, or shapes
@@ -604,25 +640,25 @@ if the new image does not self-confirm. The design is specified in
 `docs/spec/firmware-ota.md`; Home Assistant surfaces it as an `update` entity per
 node (`home-assistant.md` §6).
 
-## 10. Crate map (proposed additions)
+## 10. Crate map
 
-The roadmap's crate set is provisional and ADR-revisable. This document needs
-four crates beyond it, all `aquila-<english-descriptor>`; each owns one deep
+This document does not define a crate graph; `docs/spec/interface-register.md`
+is the single canonical crate list, settled by ADR-0003. Four of the register's
+crates are specified here, all `aquila-<english-descriptor>`; each owns one deep
 module:
 
-| Crate | Role | Depends on |
+| Crate | Role | Depends on (register) |
 | --- | --- | --- |
-| `aquila-wire` | CSI + control frame codec; generates the C header | — |
-| `aquila-session` | `.aqs` Session container read/write; manifest | `aquila-wire` |
-| `aquila-simulator` | deterministic scene synthesis; implements `CsiSource` | `aquila-source`, `aquila-wire`, `aquila-clock` |
-| `aquila-capture` | capture/synth/verify/provision binary (dev tool) | all of the above |
+| `aquila-wire` | CSI + control frame codec; generates the C header | `aquila-types` |
+| `aquila-session` | `.aqs` Session container read/write; manifest | `aquila-types`, `aquila-wire` |
+| `aquila-simulator` | deterministic scene synthesis; implements `CsiSource` | `aquila-types`, `aquila-wire`, `aquila-session`, `aquila-sources` |
+| `aquila-capture` | capture/synth/verify/provision binary (dev tool) | `aquila-types`, `aquila-session`, `aquila-sources`, `aquila-simulator`, `aquila-wire` |
 
-`CsiSource` and its replay/live adapters live in the roadmap's `aquila-source`;
-`Clock` and the drift estimator in `aquila-clock`; the `GroundTruth` adapter in
-`aquila-groundtruth`. The DAG is acyclic:
-`wire ← session ← source ← simulator ← capture`, with `clock` a leaf shared by
-`source` and `simulator`. The existing dependency-DAG check enforces it.
-Firmware (`firmware/esp32s3/`) is not a crate.
+`CsiSource` and its replay/live adapters live in `aquila-sources`; the `Clock`
+trait is declared in `aquila-types` and the drift estimator lives in
+`aquila-sensing` (ADR-0003 §5); the `GroundTruth` adapter lives in
+`aquila-evaluation`. The DAG is acyclic and enforced by the dependency-DAG check
+(`tools/dag.toml`). Firmware (`firmware/esp32-s3-csi-node/`) is not a crate.
 
 ## 11. Open decisions
 

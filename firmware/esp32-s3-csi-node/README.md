@@ -11,7 +11,8 @@ streams raw WiFi CSI to the Aquila core.
 
 It implements the node end of `docs/spec/capture-and-firmware.md` §5 (CSI data
 plane), §6 (node control channel) and §9 (firmware responsibilities and
-MUST-NOTs), under the wire layout of ADR-0004 and `ADR-0003` §7/§9.4.
+MUST-NOTs), under the wire layout of ADR-0004 (magic and framing) and ADR-0005
+(the raw int8 I/Q payload), and `ADR-0003` §7/§9.4.
 
 ## Target
 
@@ -105,11 +106,10 @@ NVS; pairing itself happens on the control channel.
   metadata in the receive callback — no allocation, no logging, no floating
   point — into a fixed-capacity single-producer/single-consumer ring. On
   overflow the frame is dropped and counted.
-- **Data plane** (sender task) converts the int8 I/Q pairs to the f32
-  amplitude/phase the AQCI payload carries (ADR-0004) and unicasts one datagram
-  per frame, subject to `max_tx_rate_hz`; frames over the cap are dropped, not
-  queued. The conversion is a wire-representation change performed outside the
-  callback, not DSP.
+- **Data plane** (sender task) copies the raw signed int8 I/Q buffer into the
+  AQCI payload verbatim (ADR-0005) and unicasts one datagram per frame, subject
+  to `max_tx_rate_hz`; frames over the cap are dropped, not queued. The node
+  performs no floating-point conversion: the core derives amplitude and phase.
 - **Control plane** (`node_control`) serves `JOIN_REQUEST`/`JOIN_ACK`,
   `GET_CONFIG`/`SET_CONFIG`/`SET_CSI`, `STATUS` heartbeats, `SYNC_PING` →
   `SYNC_ECHO`, `REBOOT`, `IDENTIFY` and `FACTORY_RESET`, persisting the pairing
@@ -122,9 +122,10 @@ NVS; pairing itself happens on the control channel.
 
 Everything in C under this directory. In particular:
 
-- the `esp-csi` raw buffer layout assumed by the int8 → f32 conversion
-  (`[imag, real]` per subcarrier, `first_word_invalid` nulling the first
-  subcarrier) — verify against the ESP-IDF version on the board;
+- the `esp-csi` raw buffer layout copied verbatim as the int8 I/Q payload
+  (`[imag, real]` versus `[real, imag]` per subcarrier, and `first_word_invalid`
+  nulling the first subcarrier) — verify the byte order against the ESP-IDF
+  version on the board;
 - `wifi_pkt_rx_ctrl_t` field names used for the PHY flags (`sig_mode`, `cwb`,
   `stbc`, `fec_coding`, `sgi`) — these vary across ESP-IDF versions;
 - the NVS provisioning path and `IDENTIFY` LED (currently disabled: set

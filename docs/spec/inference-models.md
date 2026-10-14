@@ -35,10 +35,9 @@ including licence handling.
 
 ### 0.1 The L0 contract crate
 
-ADR-0001 names the L0 vocabulary crate **`aquila-types`**; `data-contracts.md`
-§0.2 names it **`aquila-contracts`**. This is a genuine cross-doc discrepancy
-(flag, §8.1). Below, "the L0 crate" means whichever name is settled; the contract
-*types* are exactly those in `data-contracts.md`.
+The L0 vocabulary crate is **`aquila-types`** (ADR-0003 §2); the earlier
+`aquila-contracts` spelling is superseded. The contract *types* are exactly those
+in `data-contracts.md`. Below, "the L0 crate" means `aquila-types`.
 
 ## 1. The `PoseModel` / `VitalsModel` seam
 
@@ -555,9 +554,9 @@ Nuances that must be honoured:
 
 ### 8.1 Flags
 
-1. **L0 crate name.** ADR-0001 says `aquila-types`; `data-contracts.md` §0.2 says
-   `aquila-contracts`. Resolve before any crate is created (conflicts with
-   ADR-0001 as written).
+1. **L0 crate name — resolved.** The L0 crate is `aquila-types` (ADR-0003 §2);
+   `data-contracts.md` §0.2's earlier `aquila-contracts` spelling is superseded.
+   No action remains.
 2. **Seam output shape.** `data-contracts.md` §1 maps `PoseModel`/`VitalsModel` →
    `Pose`/`VitalsReading`. This spec returns `PoseOutcome` (pose + presence/count
    heads) so the shared trunk is one call. Recommend `data-contracts.md` adopt

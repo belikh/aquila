@@ -28,8 +28,9 @@ size_t aq_csi_datagram_len(uint16_t n_subcarriers);
 /*
  * Frame one AQCI datagram into `out` (capacity `out_cap`).
  *
- * `amplitude` and `phase` each hold `n_subcarriers` little-endian IEEE-754 f32
- * values, in ascending subcarrier order, as AQCI requires (ADR-0004). Returns
+ * `i_q` holds `2 * n_subcarriers` raw signed int8 I/Q bytes, interleaved `I, Q`
+ * per subcarrier in ascending order, as AQCI requires (ADR-0005). The buffer is
+ * copied verbatim; no floating-point conversion happens on the node. Returns
  * the datagram length in bytes, or 0 when the buffer is too small or the
  * subcarrier count is out of range.
  */
@@ -38,8 +39,7 @@ size_t aq_frame_csi(uint16_t node_id, uint8_t band, uint8_t channel,
                     uint64_t device_time_us, uint16_t boot_epoch,
                     int16_t subcarrier_offset, uint16_t n_subcarriers,
                     int8_t rssi_dbm, int8_t noise_floor_dbm, uint16_t phy_flags,
-                    const float *amplitude, const float *phase, uint8_t *out,
-                    size_t out_cap);
+                    const int8_t *i_q, uint8_t *out, size_t out_cap);
 
 /* The total AQCC message length for a body of `body_len` bytes. */
 size_t aq_control_msg_len(uint16_t body_len);

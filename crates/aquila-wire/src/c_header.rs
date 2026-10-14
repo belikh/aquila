@@ -8,16 +8,17 @@
 //!
 //! Scope: the fixed header and body fields, the magics, versions, ports, size
 //! limits and opcodes are emitted, with `_Static_assert`s pinning the struct
-//! sizes. The variable `f32` subcarrier arrays are reached through the emitted
-//! offset macros, not a C array member; emitting a full variable-length struct
-//! is a documented gap to be closed with the firmware component.
+//! sizes. The variable interleaved `int8` I/Q sample is reached through the
+//! emitted offset macros, not a fixed C array member; emitting a full
+//! variable-length struct is a documented gap to be closed with the firmware
+//! component.
 
 use core::fmt::Write as _;
 
 use crate::constants::{
     control_offset, csi_body_offset, csi_offset, Opcode, CONTROL_MAGIC, CONTROL_PORT,
     CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE,
-    MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_F32, WIRE_MAJOR, WIRE_MINOR,
+    MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
 };
 
 /// Render the canonical layout as a C header (`node_wire.h`).
@@ -46,7 +47,7 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "#define AQ_CSI_MESSAGE_TYPE {CSI_MESSAGE_TYPE}u");
     let _ = writeln!(
         s,
-        "#define AQ_SUBCARRIER_FORMAT_F32 {SUBCARRIER_FORMAT_F32}u"
+        "#define AQ_SUBCARRIER_FORMAT_INT8_IQ {SUBCARRIER_FORMAT_INT8_IQ}u"
     );
     let _ = writeln!(s);
 
@@ -63,16 +64,12 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "/* Variable-length CSI payload. */");
     let _ = writeln!(
         s,
-        "/* Interleaved f32 amplitude[n], then f32 phase[n]; 8 bytes per subcarrier. */"
+        "/* Interleaved signed int8 I/Q, I then Q per subcarrier; 2 bytes per subcarrier. */"
     );
-    let _ = writeln!(s, "#define AQ_CSI_FLOAT_BYTES 4u");
+    let _ = writeln!(s, "#define AQ_CSI_PAYLOAD_BYTES_PER_SUBCARRIER 2u");
     let _ = writeln!(
         s,
-        "#define AQ_CSI_PAYLOAD_FLOATS(n_subcarriers) (2u * (n_subcarriers))"
-    );
-    let _ = writeln!(
-        s,
-        "#define AQ_CSI_PAYLOAD_BYTES(n_subcarriers) (8u * (n_subcarriers))"
+        "#define AQ_CSI_PAYLOAD_BYTES(n_subcarriers) (2u * (n_subcarriers))"
     );
     let _ = writeln!(
         s,
@@ -167,11 +164,7 @@ pub fn generate_c_header() -> String {
         "AQ_CSI_BODY_OFF_RESERVED",
         csi_body_offset::RESERVED,
     );
-    emit_offset(
-        &mut s,
-        "AQ_CSI_BODY_OFF_AMPLITUDE",
-        csi_body_offset::AMPLITUDE,
-    );
+    emit_offset(&mut s, "AQ_CSI_BODY_OFF_IQ", csi_body_offset::IQ);
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* Control header field offsets. */");
@@ -231,18 +224,17 @@ pub fn generate_c_header() -> String {
     );
     let _ = writeln!(s, "typedef struct {{");
     let _ = writeln!(s, "    aq_csi_body_fixed_t fixed;");
-    let _ = writeln!(s, "    float payload[]; /* C99 flexible array member */");
+    let _ = writeln!(
+        s,
+        "    int8_t payload[]; /* C99 flexible array member: interleaved I,Q */"
+    );
     let _ = writeln!(s, "}} aq_csi_body_t;");
     let _ = writeln!(s);
     let _ = writeln!(
         s,
-        "/* Accessors: amplitude is payload[0..n), phase is payload[n..2n). */"
+        "/* Accessors: the raw interleaved I/Q sample begins at payload[0]. */"
     );
-    let _ = writeln!(s, "#define AQ_CSI_AMPLITUDE(body) ((body)->payload)");
-    let _ = writeln!(
-        s,
-        "#define AQ_CSI_PHASE(body) ((body)->payload + (body)->fixed.n_subcarriers)"
-    );
+    let _ = writeln!(s, "#define AQ_CSI_IQ(body) ((int8_t *)((body)->payload))");
     let _ = writeln!(s);
 
     let _ = writeln!(

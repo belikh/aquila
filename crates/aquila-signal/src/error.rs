@@ -40,22 +40,10 @@ pub enum DecodeError {
     /// The contract frame carried no subcarriers.
     #[error("contract frame carries no subcarriers")]
     EmptyFrame,
-    /// The contract frame's amplitude and phase arrays disagree in length.
-    #[error("contract frame amplitude length {amplitude} does not match phase length {phase}")]
-    LengthMismatch {
-        /// The number of amplitude samples.
-        amplitude: usize,
-        /// The number of phase samples.
-        phase: usize,
-    },
-    /// The contract frame carried a non-finite sample.
-    #[error("contract frame {field} is not finite at index {index}")]
-    NonFiniteSample {
-        /// The offending array: `"amplitude"` or `"phase"`.
-        field: &'static str,
-        /// The index of the offending sample.
-        index: usize,
-    },
+    /// The contract frame's interleaved I/Q sample has an odd length, so it is
+    /// not whole `I/Q` pairs.
+    #[error("contract frame I/Q sample length {0} is odd")]
+    OddIqLength(usize),
 }
 
 /// Everything `resample_uniform` can reject.

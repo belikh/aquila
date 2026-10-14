@@ -8,15 +8,15 @@ outputs through the interfaces named below.
 
 Vocabulary follows the Aquila brief. Prose is Australian English.
 
-Related crates (proposed, in DAG order — no cycles):
+Related crates (canonical, per `docs/spec/interface-register.md`; no extra
+crates — time sync and fusion are internal modules):
 
 ```
-aquila-core        # shared value types: CoreTime, DeviceTime, NodeId, RoomId, FloorId, Topology
-aquila-timesync    # offset + drift estimation, device→core time correction  (depends: aquila-core)
-aquila-fusion      # feature/detection fusion, spatial units, conflict resolution (depends: aquila-core, aquila-timesync)
+aquila-types      # shared value types: CoreTime, DeviceTime, NodeId, RoomId, FloorId, Topology
+aquila-sensing    # offset + drift estimation (device→core time correction) and feature/detection fusion
 ```
 
-`aquila-timesync` MUST NOT depend on `aquila-fusion`; fusion consumes a
+The time-sync module MUST NOT depend on the fusion module; fusion consumes a
 `NodeClockModel` but never mutates one.
 
 ---

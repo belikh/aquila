@@ -41,6 +41,25 @@ const ACTOR_SCATTER: f64 = 0.7;
 /// single point is weaker than the point-actor [`ACTOR_SCATTER`].
 const ACTOR_TORSO_SCATTER: f64 = 0.5;
 
+/// The int8 counts one unit of synthesised complex CSI maps to.
+///
+/// The simulator synthesises `H_k` in the core's working linear unit and then
+/// **quantises** it to the raw signed int8 `I/Q` the hardware produces
+/// (ADR-0005), so the whole pipeline — including the core's `int8 → f32`
+/// derivation — is exercised by tests. The scale is the reference node's
+/// fixed-point gain: it matches [`aquila_types::IQ_COUNTS_PER_UNIT`], large
+/// enough that a quiet breather's sub-radian phase modulation survives
+/// quantisation, and small enough that a multi-scatterer scene does not
+/// saturate the int8 range.
+fn iq_scale() -> f64 {
+    f64::from(aquila_types::IQ_COUNTS_PER_UNIT)
+}
+
+/// Quantise one synthesised complex component to the raw int8 the node emits.
+fn quantise_i8(value: f64) -> i8 {
+    (value * iq_scale()).round().clamp(-128.0, 127.0) as i8
+}
+
 // Stream tags keep independent draws independent.
 const TAG_LOSS: u64 = 11;
 const TAG_IMPAIRED: u64 = 22;
@@ -256,13 +275,16 @@ impl SimulatorSource {
     /// makes them unrecoverable. This is a correction, not a tuning: the
     /// dynamics are unchanged and determinism (`§7.1`) still holds, because the
     /// centre is a pure function of `(band, channel)`.
+    ///
+    /// The synthesised complex `H_k` is then quantised to the raw signed int8
+    /// `I/Q` the hardware emits, so the frame the core receives is byte-identical
+    /// in kind to a live one (ADR-0005).
     fn synth_frame(&self, node_index: usize, tick: usize) -> CsiFrame {
         let node = &self.script.nodes[node_index];
         let t = tick as f64 / self.script.tick_hz;
         let n = self.script.subcarriers;
         let centre_hz = centre_freq_hz(self.script.band, self.script.channel);
-        let mut amplitude = Vec::with_capacity(n);
-        let mut phase = Vec::with_capacity(n);
+        let mut i_q = Vec::with_capacity(2 * n);
 
         for k in 0..n {
             let f_rf = centre_hz
@@ -291,19 +313,30 @@ impl SimulatorSource {
             re += self.noise(node_index, tick, k, TAG_NOISE_RE);
             im += self.noise(node_index, tick, k, TAG_NOISE_IM);
 
-            amplitude.push((re * re + im * im).sqrt() as f32);
-            phase.push(im.atan2(re) as f32);
+            // Model the hardware: quantise the complex sample to signed int8.
+            i_q.push(quantise_i8(re));
+            i_q.push(quantise_i8(im));
         }
 
         if self.is_impaired(node_index, tick) {
             // A nulled first subcarrier stands in for the capture layer's
-            // `FIRST_WORD_INVALID`; the frozen `CsiFrame` has no such flag
-            // (ADR-0004 chose the f32 layout), so the impairment is expressed
-            // as an unusable subcarrier rather than an invented field.
-            amplitude[0] = 0.0;
+            // `FIRST_WORD_INVALID`; the frozen `CsiFrame` has no such flag, so
+            // the impairment is expressed as an unusable subcarrier rather than
+            // an invented field.
+            i_q[0] = 0;
+            i_q[1] = 0;
         }
 
-        let mean = amplitude.iter().map(|a| f64::from(*a)).sum::<f64>() / n as f64;
+        // Derive the mean amplitude from the quantised sample, in unit scale, so
+        // the synthetic RSSI tracks the payload the core will actually see.
+        let sum_amplitude: f64 = (0..n)
+            .map(|k| {
+                let i = f64::from(i_q[2 * k]);
+                let q = f64::from(i_q[2 * k + 1]);
+                (i * i + q * q).sqrt()
+            })
+            .sum();
+        let mean = sum_amplitude / (n as f64 * iq_scale());
         let rssi = (-90.0 + 15.0 * mean).clamp(-120.0, -10.0).round() as i8;
         let noise_floor = (f64::from(rssi) - 30.0).clamp(-120.0, -10.0).round() as i8;
 
@@ -321,8 +354,7 @@ impl SimulatorSource {
             channel: self.script.channel,
             bandwidth_mhz: self.script.bandwidth_mhz,
             subcarrier_offset: -((n / 2) as i16),
-            amplitude,
-            phase,
+            i_q,
             rssi_dbm: rssi,
             noise_floor_dbm: noise_floor,
             phy: PhyFlags(phy),

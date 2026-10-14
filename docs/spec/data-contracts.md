@@ -25,7 +25,7 @@ There are exactly **two version numbers**, and they move together:
 
 | Version | Carried by | Scope |
 | --- | --- | --- |
-| **Contract version** | `ContractVersion` on every `Session`, `LedgerRecord`, session archive | The set of serde types in `aquila-contracts` |
+| **Contract version** | `ContractVersion` on every `Session`, `LedgerRecord`, session archive | The set of serde types in `aquila-types` |
 | **Wire version** | Bytes 4–5 of every UDP header | The on-air binary layout only |
 
 The **one rule**: *a contract is append-only within a major version.* You may add
@@ -40,7 +40,7 @@ field or variant. Anything else is a **major** bump.
   `Unknown` fallback (see §0.3). Old readers ignore what they don't know.
 - **MAJOR (`1.x` → `2.0`)**: any removal, retype, unit change, meaning change,
   reordering, or change to an invariant. Requires: this document revised, the
-  `aquila-contracts` crate major-bumped, the wire header major-bumped, and a
+  `aquila-types` crate major-bumped, the wire header major-bumped, and a
   migration note. A core receiving a mismatched **wire major** MUST reject the
   datagram and record it once per `(node_id, boot_epoch)`. It MUST NOT guess.
 - **Units and semantics are part of the contract.** Changing `f32` metres to
@@ -50,11 +50,12 @@ field or variant. Anything else is a **major** bump.
 
 ### 0.2 Single crate, no forks
 
-All types live in **`aquila-contracts`** (a `no_std`-friendly, `serde` crate).
-Every other crate — `aquila-csi`, `aquila-fusion`, `aquila-pose`,
-`aquila-vitals`, `aquila-topology`, `aquila-measure` — imports them. Adapters may
-*wrap* a contract type (e.g. `CsiEnvelope`), never re-declare it. A repository
-check asserts that the canonical struct names are declared in exactly one crate.
+All types live in **`aquila-types`** — the L0 vocabulary crate (ADR-0003 §2).
+Every other crate — `aquila-wire`, `aquila-signal`, `aquila-geometry`,
+`aquila-metrics`, `aquila-session`, `aquila-inference`, `aquila-sources`,
+`aquila-sensing` and the L4 edges — imports them. Adapters may *wrap* a contract
+type (e.g. `CsiEnvelope`), never re-declare it. A repository check asserts that
+the canonical struct names are declared in exactly one crate.
 
 ### 0.3 Unknown values are preserved, never invented
 
@@ -185,9 +186,10 @@ missing input is hardware (`evaluation.md` §5.1–§5.2).
 
 ## 2. `CsiFrame` — the raw sensing sample
 
-One received 802.11 packet's complex channel state information from a single
-node: a complex coefficient per subcarrier plus capture metadata. A modem output,
-not raw I/Q.
+One received 802.11 packet's raw channel state information from a single node:
+the esp-csi **signed int8 I/Q** sample per subcarrier plus capture metadata. The
+modem's native form, carried verbatim; amplitude and phase are **derived** in the
+core, never stored (ADR-0005).
 
 **Fields**
 
@@ -200,15 +202,15 @@ not raw I/Q.
 | `band` | `Band` | — | 2.4 / 5 GHz / Unknown |
 | `channel` | `u8` | channel | 1–14 (2.4 GHz); 32–177 (5 GHz) |
 | `bandwidth_mhz` | `u8` | MHz | 20 or 40 |
-| `subcarrier_offset` | `i16` | index | Index of first element below |
-| `amplitude` | `Vec<f32>` | linear, arbitrary | Non-negative, finite |
-| `phase` | `Vec<f32>` | radians | Wrapped to `[-π, π]`; per-frame phase is uncalibrated |
+| `subcarrier_offset` | `i16` | index | Index of the first interleaved sample below |
+| `i_q` | `Vec<i8>` | raw counts | Interleaved `I, Q` per subcarrier, ascending index |
 | `rssi_dbm` | `i8` | dBm | Whole-frame RSSI |
 | `noise_floor_dbm` | `i8` | dBm | Whole-frame noise floor |
 | `phy` | `PhyFlags` | bitset | See below |
 
-`n_subcarriers` is **derived** (`amplitude.len()`) and is not a separate stored
-field, so it cannot disagree with the arrays.
+`n_subcarriers` is **derived** (`i_q.len() / 2`) and is not a separate stored
+field, so it cannot disagree with the sample. Amplitude (`√(I²+Q²)`) and phase
+(`atan2(Q, I)`) are derived accessors on the frame, not stored fields.
 
 ```rust
 bitflags-like newtype (u16):
@@ -217,28 +219,29 @@ pub struct PhyFlags(pub u16);
 // bit 4: short GI, bit 5: sounding/NDP.
 ```
 
-**Invariants (enforced by `aquila-csi` on ingest; violations are rejected and counted)**
+**Invariants (enforced by `aquila-sources` on ingest; violations are rejected and counted)**
 
-1. `amplitude.len() == phase.len() >= 1`.
-2. `amplitude` and `phase` are in **ascending subcarrier index** order, contiguous,
-   starting at `subcarrier_offset`. Null/guard subcarriers may appear with
-   `amplitude == 0.0`; downstream DSP decides whether to use them.
-3. Every `amplitude[i] >= 0.0` and finite; every `phase[i]` finite and in `[-π, π]`.
+1. `i_q.len()` is even and `>= 2` (`n_subcarriers >= 1`).
+2. `i_q` is in **ascending subcarrier index** order, contiguous, starting at
+   `subcarrier_offset`: `[I0, Q0, I1, Q1, …]`. Null/guard subcarriers may appear
+   as the pair `(0, 0)`; downstream DSP decides whether to use them.
+3. Every element is a signed int8, so its derived amplitude and phase are finite
+   by construction; there is no range check to fail.
 4. `device_time_us` is non-decreasing within a `boot_epoch`.
 5. `sequence` strictly increases within a `(node, boot_epoch, band, channel)`
    stream modulo loss. Gaps quantify loss; duplicates (`sequence` seen twice) are
    dropped by the ingest deduplicator.
 6. A reboot is detected when `boot_epoch` changes, or `device_time_us`/`sequence`
    goes backwards. On reboot the core opens a new epoch; it never splices across it.
-7. `phase` is **per-frame uncalibrated** (independent PLL/AGC phase per frame).
+7. Per-frame phase is **uncalibrated** (independent PLL/AGC phase per frame).
    Cross-frame phase comparison is out of scope for v1 and MUST NOT be inferred
-   from this field alone.
+   from the derived phase alone.
 
 **Serialisation**
 
 - **Wire (UDP):** fixed little-endian header, then body. See §9.
 - **On disk:** postcard-encoded `CsiEnvelope` inside a session archive (§9).
-- **JSON (fixtures/debug only):** `f32` arrays as arrays of numbers; never the
+- **JSON (fixtures/debug only):** `i8` samples as arrays of integers; never the
   production transport.
 
 **Rust sketch**
@@ -254,13 +257,16 @@ pub struct CsiFrame {
     pub channel: u8,
     pub bandwidth_mhz: u8,
     pub subcarrier_offset: i16,
-    pub amplitude: Vec<f32>,
-    pub phase: Vec<f32>,
+    pub i_q: Vec<i8>, // interleaved I, Q per subcarrier
     pub rssi_dbm: i8,
     pub noise_floor_dbm: i8,
     pub phy: PhyFlags,
 }
-impl CsiFrame { pub fn n_subcarriers(&self) -> usize { self.amplitude.len() } }
+impl CsiFrame {
+    pub fn n_subcarriers(&self) -> usize { self.i_q.len() / 2 }
+    pub fn amplitude(&self) -> Vec<f32> { /* √(I²+Q²) */ }
+    pub fn phase(&self) -> Vec<f32> { /* atan2(Q, I) */ }
+}
 ```
 
 **`CsiEnvelope`** — the core-side wrapper. The node frame stays pure; the core
@@ -308,7 +314,7 @@ a declared pair.
 
 The physical model, defined from day one: **Home → Floors → Rooms → Nodes →
 NodePairs**. Stored as JSON in `config/topology.json` and loaded by the
-`aquila-topology` module. Nodes and rooms are *configured*, not inferred. A
+`aquila-geometry` module. Nodes and rooms are *configured*, not inferred. A
 **Zone** is a Room in v1 (`ZoneId == RoomId`).
 
 ### 3.1 Coordinate model (one frame, no ambiguity)
@@ -808,13 +814,13 @@ without a `LedgerRecord` is `Claimed`, and no headline claim may carry that grad
 
 ## 8. Types that must NEVER be redefined
 
-These are frozen names owned by `aquila-contracts`. A second declaration anywhere
+These are frozen names owned by `aquila-types`. A second declaration anywhere
 (in the firmware, a Python model I/O class, an adapter, a test fixture type) is a
 defect:
 
-1. **`CsiFrame`** — and its subcarrier representation (ordered `amplitude`/`phase`
-   in linear/radian, ascending index). The firmware emits the wire form; it does
-   not own a competing struct.
+1. **`CsiFrame`** — and its subcarrier representation (raw signed int8 `i_q`,
+   interleaved `I, Q`, ascending index). Amplitude and phase are derived, never
+   stored. The firmware emits the wire form; it does not own a competing struct.
 2. **`CsiEnvelope`**, **`SensingFrame`**, `SensingScope`, `ClockGrid` — the only
    core-side wrappers; do not add second versions.
 3. **`NodeId`**, `HomeId`/`FloorId`/`RoomId`/`ZoneId`/`PairId`, `MacAddr`,
@@ -846,11 +852,11 @@ application layer.
 
 | Offset | Size | Field | Encoding |
 | --- | --- | --- | --- |
-| 0 | 4 | magic | ASCII `AQCS` |
+| 0 | 4 | magic | ASCII `AQCI` |
 | 4 | 1 | `wire_major` | `u8` |
 | 5 | 1 | `wire_minor` | `u8` |
 | 6 | 1 | `msg_type` | `u8` (1 = `CsiFrame`) |
-| 7 | 1 | `sc_format` | `u8` (0 = `f32` amplitude+phase) |
+| 7 | 1 | `sc_format` | `u8` (1 = raw signed int8 I/Q) |
 | 8 | 2 | `node_id` | `u16` |
 | 10 | 2 | `payload_len` | `u16` (bytes after the header) |
 | 12 | 1 | `band` | `u8` (0 = 2.4 GHz, 1 = 5 GHz, 255 = unknown) |
@@ -858,7 +864,7 @@ application layer.
 | 14 | 1 | `bandwidth_mhz` | `u8` |
 | 15 | 1 | `reserved` | `u8` = 0 |
 
-**Body (msg_type 1) — 28-byte fixed part, then `8 × n` bytes**
+**Body (msg_type 1) — 28-byte fixed part, then `2 × n` bytes**
 
 | Offset | Size | Field |
 | --- | --- | --- |
@@ -871,14 +877,14 @@ application layer.
 | 23 | 1 | `noise_floor_dbm` (`i8`) |
 | 24 | 2 | `phy_flags` (`u16`) |
 | 26 | 2 | reserved = 0 |
-| 28 | 4n | `amplitude[0..n]` (`f32` LE) |
-| 28+4n | 4n | `phase[0..n]` (`f32` LE) |
+| 28 | 2n | `i_q[0..2n]` (interleaved signed int8 `I, Q` per subcarrier) |
 
 Rules: a receiver validates `magic`, `wire_major`, `payload_len` and
-`payload_len == 28 + 8 * n_subcarriers` before trusting any field. `wire_minor`
-mismatches are accepted (additive); `wire_major` mismatches are rejected. The
-`aquila-contracts` crate provides `encode_datagram`/`decode_datagram`; `postcard`
-is **not** used on the wire.
+`payload_len == 28 + 2 * n_subcarriers` before trusting any field. `wire_minor`
+mismatches are accepted (additive); `wire_major` mismatches are rejected and
+counted once per `(node_id, boot_epoch)`. The `magic` is `AQCI` and the payload
+is the raw signed int8 I/Q sample (ADR-0005). The `aquila-wire` crate provides
+`encode_datagram`/`decode_datagram`; `postcard` is **not** used on the wire.
 
 ### 9.2 On disk
 
@@ -987,12 +993,12 @@ contract additively, they do not replace it.
 1. Decide MINOR or MAJOR with §0.1.
 2. Update this document **first** (fields, units, invariants, serialisation).
 3. Check the change against `CONTEXT.md` vocabulary; use its terms and no others.
-4. Update `aquila-contracts`; keep derives and defaults consistent with §0.3.
+4. Update `aquila-types`; keep derives and defaults consistent with §0.3.
 5. If the wire changed, bump `wire_minor`/`wire_major` and update §9.1.
-6. Add a fixture in `aquila-contracts` that round-trips the new shape and pins it.
+6. Add a fixture in `aquila-types` that round-trips the new shape and pins it.
 7. If MAJOR: add a migration note and update `CONTRACT_VERSION`.
 8. Never touch a name on the §8 frozen list except by a MAJOR bump.
 
 _This document is canonical. Where it and any code disagree, this document and the
-`aquila-contracts` crate are the tie-breakers — and if they disagree with each
+`aquila-types` crate are the tie-breakers — and if they disagree with each
 other, that is a bug._

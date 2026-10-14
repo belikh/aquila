@@ -49,8 +49,8 @@ specification makes that operational:
 
 `GroundTruth` is the only source of reference labels for scoring. It is a deep
 module: a tiny interface that hides every adapter's capture format, clock
-alignment and calibration. It is owned by `aquila-groundtruth` (roadmap seam
-map). A second adapter is required for the seam to exist — a fixture labeller
+alignment and calibration. It is owned by `aquila-evaluation` (the register's
+seam list). A second adapter is required for the seam to exist — a fixture labeller
 and at least one physical reference (chest strap or MM-Fi) are the first two.
 
 ### 2.1 Interface
@@ -77,7 +77,7 @@ Rules the seam enforces:
 
 - **Aligned, not assumed.** `label` returns records already mapped onto the
   session's common clock grid (software time sync + per-node drift estimation,
-  `aquila-clock`). An adapter that cannot align returns `None` with a coverage
+  `aquila-sensing`). An adapter that cannot align returns `None` with a coverage
   gap, never an interpolated guess.
 - **Reference is calibrated.** Each adapter records its own calibration
   (time offset, gain, unit) in `ReferenceProvenance`; an uncalibrated reference
@@ -410,7 +410,7 @@ Guarantees:
 ## 9. Open questions
 
 - The exact torso keypoint schema and torso-span normaliser, to be fixed by ADR
-  with the `aquila-pose` crate.
+  with the `aquila-inference` crate.
 - Whether the vitals eval rig uses a respiratory belt, chest-strap-derived
   respiration, or both; the belt is the direct reference, the strap the
   independent cross-check.

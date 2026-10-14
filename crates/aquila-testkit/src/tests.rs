@@ -2020,3 +2020,64 @@ fn node_control_full_round_trip_succeeds() {
         other => panic!("expected SyncEcho, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0005 — the int8 → f32 derivation, end to end
+// ---------------------------------------------------------------------------
+
+/// Prove the whole int8 I/Q path is exercised: a simulator frame is quantised
+/// to raw signed int8, framed on the `AQCI` wire, decoded, and then the core
+/// derives the complex bins — the derivation the firmware used to do on-node.
+#[test]
+fn int8_iq_derivation_is_exercised_end_to_end() {
+    use aquila_simulator::SimulatorSource;
+    use aquila_sources::{CsiSource, FrameOrEnd};
+    use aquila_wire::{decode_datagram, encode_datagram};
+
+    let script = tracer_scene();
+    let sim_config = SimConfig::new(2026, Slug("iq-derivation".to_string()), 0, 0);
+    let mut source = SimulatorSource::new(script, sim_config).expect("simulator");
+    let frame = match source.recv().expect("recv") {
+        FrameOrEnd::Frame(envelope) => envelope.frame,
+        FrameOrEnd::End => panic!("the scene must yield at least one frame"),
+    };
+
+    // The frame carries the raw sample verbatim: whole I/Q pairs, every count a
+    // legal int8, and a non-trivial spread of levels.
+    frame.validate().expect("valid frame");
+    assert_eq!(frame.i_q.len(), 2 * frame.n_subcarriers());
+    assert!(!frame.i_q.is_empty());
+    let distinct: std::collections::BTreeSet<i8> = frame.i_q.iter().copied().collect();
+    assert!(
+        distinct.len() > 8,
+        "the int8 path must be genuinely exercised, got {} levels",
+        distinct.len()
+    );
+
+    // Simulator -> wire -> decode: the raw counts survive the codec unchanged.
+    let bytes = encode_datagram(&frame);
+    let decoded = decode_datagram(&bytes).expect("decode");
+    assert_eq!(decoded, frame);
+
+    // Decode: the core derives the complex bins from the int8 sample.
+    let complex = aquila_signal::decode_csi(&decoded).expect("decode_csi");
+    assert_eq!(complex.bins.len(), decoded.n_subcarriers());
+    let full_scale = aquila_types::IQ_COUNTS_PER_UNIT;
+    for k in 0..decoded.n_subcarriers() {
+        let i = f32::from(decoded.i_q[2 * k]) / full_scale;
+        let q = f32::from(decoded.i_q[2 * k + 1]) / full_scale;
+        assert!((complex.bins[k].re - i).abs() < 1e-6);
+        assert!((complex.bins[k].im - q).abs() < 1e-6);
+    }
+
+    // The derived amplitude and phase are the magnitude and argument of the
+    // same int8 sample; nothing was stored on the node.
+    let amplitude = decoded.amplitude();
+    let phase = decoded.phase();
+    for k in 0..decoded.n_subcarriers() {
+        let i = f32::from(decoded.i_q[2 * k]) / full_scale;
+        let q = f32::from(decoded.i_q[2 * k + 1]) / full_scale;
+        assert!((amplitude[k] - (i * i + q * q).sqrt()).abs() < 1e-6);
+        assert!((phase[k] - q.atan2(i)).abs() < 1e-6);
+    }
+}

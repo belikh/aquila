@@ -7,9 +7,8 @@
  * single-producer/single-consumer ring; a sender task drains the ring to the
  * core, one AQCI datagram per frame, subject to the configured transmit-rate
  * cap. The callback never allocates, never blocks and never uses floating point
- * (§9.1.3). The int8 I/Q to f32 amplitude/phase conversion required by
- * ADR-0004 happens in the sender task, not the callback; it is a wire
- * representation change, not signal processing.
+ * (§9.1.3). The payload is the raw signed int8 I/Q buffer, copied verbatim
+ * (ADR-0005); the node performs no amplitude/phase conversion.
  *
  * This file is a reference implementation. It is NOT compiled, flashed or
  * tested in this repository (see the firmware README).
@@ -17,7 +16,6 @@
 
 #include "csi_node.h"
 
-#include <math.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -175,16 +173,13 @@ static void apply_esp_csi(const csi_node_config_t *cfg)
 }
 
 /*
- * The sender task: drain the ring, convert the raw int8 I/Q pairs to the f32
- * amplitude/phase the AQCI payload carries (ADR-0004), frame the datagram and
- * unicast it to the core.
+ * The sender task: drain the ring, frame the datagram with the raw signed int8
+ * I/Q buffer copied verbatim (ADR-0005) and unicast it to the core.
  */
 static void csi_sender_task(void *arg)
 {
     (void)arg;
     static uint8_t datagram[AQ_CSI_MAX_DATAGRAM_LEN];
-    static float amplitude[AQ_CSI_MAX_SUBCARRIERS];
-    static float phase[AQ_CSI_MAX_SUBCARRIERS];
     csi_slot_t slot;
 
     for (;;) {
@@ -225,21 +220,16 @@ static void csi_sender_task(void *arg)
         /* The first 4 bytes are invalid when the driver says so; the frozen
          * CsiFrame has no such flag, so the first subcarrier is nulled, exactly
          * as the simulator does (capture-and-firmware.md §7.4). */
-        for (uint16_t k = 0; k < n; ++k) {
-            float imag = (float)slot.csi[2u * k];
-            float real = (float)slot.csi[2u * k + 1u];
-            amplitude[k] = sqrtf(real * real + imag * imag);
-            phase[k] = atan2f(imag, real);
-        }
         if (slot.first_word_invalid) {
-            amplitude[0] = 0.0f;
+            slot.csi[0] = 0;
+            slot.csi[1] = 0;
         }
 
         int16_t subcarrier_offset = (int16_t)(-(int16_t)(n / 2u));
         size_t length = aq_frame_csi(
             cfg.node_id, slot.band, slot.channel, cfg.bandwidth_mhz, slot.sequence,
             slot.device_ts_us, (uint16_t)s_boot_epoch, subcarrier_offset, n,
-            slot.rssi, slot.noise_floor, slot.phy_flags, amplitude, phase, datagram,
+            slot.rssi, slot.noise_floor, slot.phy_flags, slot.csi, datagram,
             sizeof(datagram));
         if (length > 0u && s_sock >= 0) {
             sendto(s_sock, datagram, length, 0, (struct sockaddr *)&s_core,

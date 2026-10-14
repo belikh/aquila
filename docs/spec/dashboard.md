@@ -76,13 +76,13 @@ API contract has a single source of truth.
 
 | Crate | Role | May depend on |
 | --- | --- | --- |
-| `aquila-dashboard` | Leptos SPA; HTTP+WS client; UI | `aquila-types` |
+| `aquila-dashboard` | Leptos SPA; HTTP+WS client; UI | `aquila-types`, `aquila-api` |
 | `aquila-types` | API and stream types; leaf | — |
-| `aquila-core` | Sensing core; private HTTP+WS server | `aquila-types` |
+| `aquila-api` | Private HTTP+WS control plane; server | `aquila-types`, `aquila-geometry`, `aquila-sensing`, `aquila-sources`, `aquila-ha` |
 
-Enforced DAG: `dashboard → types ← core`. Workspace checks
-(`cargo-deny` and a dependency-DAG check) reject any edge from
-`aquila-dashboard` into `aquila-core`.
+Enforced DAG: `dashboard → api → types`. Workspace checks (`cargo-deny` and a
+dependency-DAG check) reject any edge from `aquila-dashboard` into the sensing
+core (`aquila-sensing`).
 
 ### Test seam
 
@@ -105,7 +105,7 @@ Components and flows are written against the trait.
 
 ## 4. Serving and Home Assistant ingress
 
-The add-on image contains two artefacts: the `aquila-core` binary and the built
+The add-on image contains two artefacts: the `aquila-addon` binary and the built
 dashboard `dist/` (WASM, JS glue, CSS, bundled icon sprite). **One** HTTP server
 inside the add-on serves both the static assets and the `/api/v1/*` control
 plane on the same port, so the panel is same-origin and needs no CORS.
@@ -114,7 +114,7 @@ Indicative add-on manifest (`config.yaml`):
 
 ```yaml
 ingress: true
-ingress_port: 8080
+ingress_port: 8099
 panel_title: Aquila
 panel_icon: mdi:wifi
 panel_admin: false

@@ -29,13 +29,14 @@ pub const CONTROL_VERSION: u8 = WIRE_MAJOR;
 /// The only CSI message type: a `CsiFrame`.
 pub const CSI_MESSAGE_TYPE: u8 = 1;
 
-/// The only subcarrier format: interleaved `f32` amplitude then `f32` phase.
-pub const SUBCARRIER_FORMAT_F32: u8 = 0;
+/// The only subcarrier format: interleaved signed int8 `I, Q` pairs, two bytes
+/// per subcarrier (ADR-0005).
+pub const SUBCARRIER_FORMAT_INT8_IQ: u8 = 1;
 
 /// The fixed CSI header length in bytes.
 pub const CSI_HEADER_LEN: usize = 16;
 
-/// The fixed part of the CSI body, before the `f32` arrays, in bytes.
+/// The fixed part of the CSI body, before the `int8` I/Q payload, in bytes.
 pub const CSI_BODY_FIXED_LEN: usize = 28;
 
 /// The default CSI data-plane UDP port (node → core).
@@ -50,11 +51,11 @@ pub const MAX_DATAGRAM_LEN: usize = 1472;
 
 /// The largest supported subcarrier count.
 ///
-/// Derived from [`MAX_DATAGRAM_LEN`]: with `f32` amplitude plus `f32` phase
-/// (8 bytes per subcarrier) the body budget is
-/// `(1472 - 16 - 28) / 8 = 178`.
+/// Derived from [`MAX_DATAGRAM_LEN`]: with interleaved signed int8 `I, Q`
+/// (2 bytes per subcarrier) the body budget is
+/// `(1472 - 16 - 28) / 2 = 714`.
 pub const MAX_SUBCARRIERS: u16 =
-    ((MAX_DATAGRAM_LEN - CSI_HEADER_LEN - CSI_BODY_FIXED_LEN) / 8) as u16;
+    ((MAX_DATAGRAM_LEN - CSI_HEADER_LEN - CSI_BODY_FIXED_LEN) / 2) as u16;
 
 /// The fixed control header length in bytes.
 pub const CONTROL_HEADER_LEN: usize = 12;
@@ -174,8 +175,8 @@ pub(crate) mod csi_body_offset {
     pub(crate) const PHY_FLAGS: usize = 24;
     /// Reserved, zero (`u16`).
     pub(crate) const RESERVED: usize = 26;
-    /// The first `f32` amplitude word.
-    pub(crate) const AMPLITUDE: usize = 28;
+    /// The first interleaved signed int8 `I/Q` byte.
+    pub(crate) const IQ: usize = 28;
 }
 
 /// Byte offsets within the fixed 12-byte control header

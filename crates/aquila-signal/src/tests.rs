@@ -127,8 +127,7 @@ fn decode_csi_bridges_the_contract_frame() {
         channel: 6,
         bandwidth_mhz: 20,
         subcarrier_offset: 1,
-        amplitude: vec![2.0, 0.0],
-        phase: vec![0.0, 0.0],
+        i_q: vec![64, 0, 0, 0],
         rssi_dbm: -50,
         noise_floor_dbm: -90,
         phy: PhyFlags::empty(),
@@ -138,8 +137,8 @@ fn decode_csi_bridges_the_contract_frame() {
     assert_eq!(decoded.meta.seq, 5);
     assert_eq!(decoded.meta.bandwidth, Bandwidth::Ht20);
     assert_eq!(decoded.bins.len(), 2);
-    // amplitude 2 at phase 0 is real 2, imaginary 0.
-    assert!((decoded.bins[0].re - 2.0).abs() < 1e-4);
+    // I/Q (64, 0) is a full-scale count, so one unit of working amplitude.
+    assert!((decoded.bins[0].re - 1.0).abs() < 1e-4);
     assert!(decoded.bins[0].im.abs() < 1e-4);
     assert_eq!(decoded.bins[1], Complex32::ZERO);
 }
@@ -156,23 +155,17 @@ fn decode_csi_rejects_malformed_contract_frames() {
         channel: 0,
         bandwidth_mhz: 20,
         subcarrier_offset: 0,
-        amplitude: vec![1.0, 1.0],
-        phase: vec![0.0],
+        i_q: vec![1, 1, 1],
         rssi_dbm: -50,
         noise_floor_dbm: -90,
         phy: PhyFlags::empty(),
     };
+    // An odd-length interleaved sample is not whole I/Q pairs.
     assert!(matches!(
         decode_csi(&frame),
-        Err(DecodeError::LengthMismatch { .. })
+        Err(DecodeError::OddIqLength(3))
     ));
-    frame.phase = vec![0.0, f32::NAN];
-    assert!(matches!(
-        decode_csi(&frame),
-        Err(DecodeError::NonFiniteSample { .. })
-    ));
-    frame.phase = vec![0.0, 0.0];
-    frame.amplitude.clear();
+    frame.i_q.clear();
     assert!(matches!(decode_csi(&frame), Err(DecodeError::EmptyFrame)));
 }
 
@@ -336,7 +329,11 @@ fn bandpass_f2_linearity() {
     let x: Vec<f32> = (0..64).map(|i| ((i % 9) as f32 - 4.0) * 0.3).collect();
     let y: Vec<f32> = (0..64).map(|i| ((i % 5) as f32 - 2.0) * 0.2).collect();
     let (alpha, beta) = (0.75_f32, -0.4_f32);
-    let combined: Vec<f32> = x.iter().zip(y.iter()).map(|(a, b)| alpha * a + beta * b).collect();
+    let combined: Vec<f32> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(a, b)| alpha * a + beta * b)
+        .collect();
     let lhs = bandpass(&combined, &coeffs);
     let bx = bandpass(&x, &coeffs);
     let by = bandpass(&y, &coeffs);
@@ -399,11 +396,19 @@ fn tone(n: usize, bin: usize, amp: f32, window: usize) -> Vec<f32> {
 
 #[test]
 fn stft_b1_linearity() {
-    let cfg = StftConfig { window: 8, hop: 4, fs_hz: 20.0 };
+    let cfg = StftConfig {
+        window: 8,
+        hop: 4,
+        fs_hz: 20.0,
+    };
     let x: Vec<f32> = (0..16).map(|i| ((i % 7) as f32 - 3.0) * 0.3).collect();
     let y: Vec<f32> = (0..16).map(|i| ((i % 5) as f32 - 2.0) * 0.2).collect();
     let (alpha, beta) = (0.6_f32, -0.35_f32);
-    let combined: Vec<f32> = x.iter().zip(y.iter()).map(|(a, b)| alpha * a + beta * b).collect();
+    let combined: Vec<f32> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(a, b)| alpha * a + beta * b)
+        .collect();
     let lhs = stft(&combined, &cfg);
     let sx = stft(&x, &cfg);
     let sy = stft(&y, &cfg);
@@ -418,7 +423,11 @@ fn stft_b1_linearity() {
 
 #[test]
 fn stft_b5_monotone_tone_response() {
-    let cfg = StftConfig { window: 16, hop: 16, fs_hz: 20.0 };
+    let cfg = StftConfig {
+        window: 16,
+        hop: 16,
+        fs_hz: 20.0,
+    };
     let small = stft(&tone(16, 4, 0.5, 16), &cfg);
     let large = stft(&tone(16, 4, 2.0, 16), &cfg);
     let a = small.value(0, 4).magnitude();
@@ -428,7 +437,11 @@ fn stft_b5_monotone_tone_response() {
 
 #[test]
 fn bvp_track_finds_in_band_bin() {
-    let cfg = StftConfig { window: 64, hop: 64, fs_hz: 20.0 };
+    let cfg = StftConfig {
+        window: 64,
+        hop: 64,
+        fs_hz: 20.0,
+    };
     // A 1.25 Hz tone: bin = 1.25 * 64 / 20 = 4.
     let spec = stft(&tone(64, 4, 1.0, 64), &cfg);
     let track = bvp_track(&spec, Band::new(0.8, 2.5));
@@ -475,11 +488,8 @@ fn selection_k6_permutation_invariance() {
 
 #[test]
 fn selection_nonfinite_excluded() {
-    let matrix = SubcarrierFeatureMatrix::new(
-        vec![1, 2, 3],
-        vec![f32::NAN, 2.0, 3.0],
-        vec![1.0, 1.0, 1.0],
-    );
+    let matrix =
+        SubcarrierFeatureMatrix::new(vec![1, 2, 3], vec![f32::NAN, 2.0, 3.0], vec![1.0, 1.0, 1.0]);
     let mask = select_subcarriers(&matrix, 3);
     assert!(!mask.contains(1));
 }
@@ -653,7 +663,10 @@ fn process_packs_the_canonical_feature_vector() {
     let mut expected = source.amplitude_rms.clone();
     expected.extend_from_slice(&source.motion_energy);
     assert_eq!(vector.values(), expected.as_slice());
-    assert_eq!(vector.len(), source.amplitude_rms.len() + source.motion_energy.len());
+    assert_eq!(
+        vector.len(),
+        source.amplitude_rms.len() + source.motion_energy.len()
+    );
     assert!(!vector.is_empty());
     assert!(features.feature_vector(NodeId(999)).is_none());
 }
@@ -683,7 +696,9 @@ fn process_calibration_shape_mismatch_errors() {
 
 #[test]
 fn config_default_is_valid() {
-    assert!(Config::default_reference(SubcarrierLayout::ht20()).validate().is_ok());
+    assert!(Config::default_reference(SubcarrierLayout::ht20())
+        .validate()
+        .is_ok());
     assert!(SubcarrierLayout::ht20().validate().is_ok());
     assert!(SubcarrierLayout::ht40().validate().is_ok());
 }

@@ -92,3 +92,13 @@ Highest-severity overlaps: the dashboard finding is simultaneously **aborted + m
 **Freeze the interface and the toolchain in one *committed* baseline before any implementation fan-out, then dispatch implementers against that commit — sequentially, or in isolated worktrees.** Concretely: commit the staged `flake.nix`/`flake.lock` (wasm32 + trunk + wasm-bindgen) so the dashboard is buildable at all; move `FeatureVector` into `aquila-types` and settle one `CsiFrame` and one on-air layout; add `tools/dag.toml` + `xtask`; and either scaffold `aquila-api`/`aquila-ha`/`aquila-addon` or strike them from the register. Then re-dispatch ticket #10 (dashboard), whose abort is the single largest concrete loss (an entire v1 deliverable, three omissions deep).
 
 This one change removes the causes behind #1, #2, #9, #11, #13, #16, #21 and #23 simultaneously: a frozen, single-source-of-truth commit makes the scope restrictions safe, gives every agent a clean baseline, and guarantees the toolchain the prompts assume is actually present.
+
+---
+
+## Addendum — finding #36 (user-caught)
+
+| # | Session | Evidence | Omission | Consequence | Fixed? |
+| --- | --- | --- | --- | --- | --- |
+| 36 | Implement live nodes (`ses_ec8a605bfffe3Qs7XlMcRCATwp`) + ADR-0004 | `firmware/esp32-s3-csi-node/components/csi_node/csi_node.c` computes `sqrtf(real*real+imag*imag)`/`atan2f(imag,real)` from the esp-csi **int8** I/Q and puts **f32** amplitude/phase on the wire; `aquila-simulator/src/source.rs:294` synthesises amp/phase directly and never models int8 | Wrong canonical representation: ADR-0004 chose a wire form (f32 amp/phase) that **contradicts the hardware** (esp-csi emits int8 I/Q) and was frozen into `CsiFrame` | The node does on-node floating point against the "dumb sensor / no on-node processing" rule; the wire is ~3.2× larger; and the conversion is untested because the simulator skips the int8 path | Remediated by ADR-0005 (raw int8 I/Q on the wire; amplitude/phase derived in the core) |
+
+Root cause: same as #16 — a representation was frozen (in `data-contracts.md` §9.1 and then ADR-0004) without checking it against what the hardware actually produces. The lesson generalises: **the canonical wire/contract representation must be the hardware's native form; derivations belong downstream, in the core.**

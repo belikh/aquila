@@ -170,7 +170,7 @@ before its slice can exit.
 **Data, model and provenance**
 
 - **Q-07:** What are the exact licence terms of the ruvnet NC weights, and can GPL-3.0-only Aquila legally ship derivatives of them?
-  *Blocks:* whether those weights may be a seed at all; `aquila-model` licensing; packaging.
+  *Blocks:* whether those weights may be a seed at all; `aquila-inference` licensing; packaging.
 - **Q-08:** Can MM-Fi (or any NC dataset) legally fine-tune weights that ship and are redistributed, and are derived weights themselves redistributable?
   *Blocks:* the training pipeline, the eval split, and model distribution.
 - **Q-09:** How much own-capture data, across 3 floors / 9+ nodes / multiple people / multiple sessions, is needed to train and to evidence the bars, and who captures it?
@@ -203,7 +203,7 @@ before its slice can exit.
 - **Q-18:** What software time-sync precision is achievable across 9+ nodes over consumer WiFi, and is it sufficient for node-pair fusion and breathing?
   *Blocks:* the `Clock` design, drift-estimation method and fusion viability.
 - **Q-19:** How is per-node drift estimated without a phase-coherent reference, and what residual jitter is tolerable for breathing MAE ≤ 2 brpm?
-  *Blocks:* the `aquila-clock` algorithm and the vitals window length.
+  *Blocks:* the `aquila-sensing` drift-estimation algorithm and the vitals window length.
 - **Q-20:** How are UDP loss and reordering detected and recorded so that no corrupted session carries a `Measured` gated result?
   *Blocks:* session integrity, ledger authority, and Slice 7 parity claims.
 - **Q-21:** What end-to-end latency is acceptable for HA automations, and does batching for fusion meet it at reference scale?
@@ -211,7 +211,7 @@ before its slice can exit.
 
 **Packaging, process and honesty**
 
-- **Q-22:** What HA OS/add-on constraints (ingress, host networking for UDP, local-only access, WASM serving) bind `aquila-host` and the dashboard?
+- **Q-22:** What HA OS/add-on constraints (ingress, host networking for UDP, local-only access, WASM serving) bind `aquila-addon`/`aquila-api` and the dashboard?
   *Blocks:* the host/dashboard design, Slice 7/8 packaging and the security posture.
 - **Q-23:** Which exact dependency-DAG edges are allowed, and how is the allowlist kept honest without blocking legitimate crate splits?
   *Blocks:* `structure.dag.violations` policy, the crate map and the DAG ADR.

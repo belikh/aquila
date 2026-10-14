@@ -95,7 +95,7 @@ pub(crate) fn amplitude_variability(frames: &[CsiEnvelope]) -> AmplitudeVariabil
     }
     let bins = frames
         .iter()
-        .map(|env| env.frame.amplitude.len())
+        .map(|env| env.frame.n_subcarriers())
         .min()
         .unwrap_or(0);
     if bins == 0 {
@@ -113,7 +113,7 @@ pub(crate) fn amplitude_variability(frames: &[CsiEnvelope]) -> AmplitudeVariabil
     for k in 0..bins {
         let mut sum = 0.0_f64;
         for env in frames {
-            let a = env.frame.amplitude[k];
+            let a = env.frame.amplitude_at(k);
             if a.is_finite() {
                 sum += a as f64;
             }
@@ -121,7 +121,7 @@ pub(crate) fn amplitude_variability(frames: &[CsiEnvelope]) -> AmplitudeVariabil
         let mean = sum / n;
         let mut var = 0.0_f64;
         for env in frames {
-            let a = env.frame.amplitude[k];
+            let a = env.frame.amplitude_at(k);
             if a.is_finite() {
                 let d = a as f64 - mean;
                 var += d * d;

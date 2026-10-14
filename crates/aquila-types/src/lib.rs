@@ -45,7 +45,7 @@ mod vitals;
 mod tests;
 
 pub use calibration::{Baseline, BaselineScope, Calibration, ClockModel, PairCorrection};
-pub use csi::{ClockGrid, CsiEnvelope, CsiFrame, SensingFrame, SensingScope};
+pub use csi::{ClockGrid, CsiEnvelope, CsiFrame, SensingFrame, SensingScope, IQ_COUNTS_PER_UNIT};
 pub use detection::{
     Detection, DetectionKind, DetectionScope, DetectionValue, Event, EventKind, EventPayload,
     EventScope, MAX_COUNT_V1,

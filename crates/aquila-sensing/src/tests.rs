@@ -35,8 +35,16 @@ fn envelope(node: u16, sequence: u64, arrival_ns: u64) -> CsiEnvelope {
             channel: 6,
             bandwidth_mhz: 20,
             subcarrier_offset: -32,
-            amplitude: (0..64).map(|k| 1.0 + (k as f32) * 0.01).collect(),
-            phase: (0..64).map(|k| (k as f32 / 64.0) - 0.5).collect(),
+            i_q: (0..64)
+                .flat_map(|k| {
+                    let a = 1.0 + (k as f32) * 0.01;
+                    let ph = (k as f32 / 64.0) - 0.5;
+                    [
+                        (a * ph.cos() * 64.0).round() as i8,
+                        (a * ph.sin() * 64.0).round() as i8,
+                    ]
+                })
+                .collect(),
             rssi_dbm: -40,
             noise_floor_dbm: -90,
             phy: PhyFlags(PhyFlags::HT),
@@ -410,14 +418,9 @@ fn calibrate_refuses_empty_inputs_honestly() {
 fn calibration_carries_per_node_quality_and_fusion_weights_by_it() {
     use crate::calibration::{calibrate, CalibrationInputs, CalibrationRequest};
 
-    let topology =
-        aquila_geometry::Topology::load(one_room_topology()).expect("valid topology");
+    let topology = aquila_geometry::Topology::load(one_room_topology()).expect("valid topology");
     let config = SensingConfig::default();
-    let request = CalibrationRequest::new(
-        "0".repeat(40),
-        "cal-quality",
-        "2026-10-14T00:00:00Z",
-    );
+    let request = CalibrationRequest::new("0".repeat(40), "cal-quality", "2026-10-14T00:00:00Z");
 
     // Node 1 is well sampled (25 empty-home windows); node 2 barely (3).
     let mut empty = Vec::new();
@@ -548,8 +551,11 @@ fn ambiguous_room_attribution_raises_a_conflict() {
 
 #[test]
 fn uncovered_room_forces_unknown_floor_count() {
-    let covered =
-        crate::escalation::RoomSummary::covered(Slug("kitchen".into()), 0.99, fusion::node_count_pmf(0.99, 8));
+    let covered = crate::escalation::RoomSummary::covered(
+        Slug("kitchen".into()),
+        0.99,
+        fusion::node_count_pmf(0.99, 8),
+    );
     let uncovered = crate::escalation::RoomSummary::uncovered(Slug("lounge".into()), 8);
     let summary = crate::escalation::aggregate_floor(
         Slug("ground".into()),
@@ -558,7 +564,10 @@ fn uncovered_room_forces_unknown_floor_count() {
         0.8,
         8,
     );
-    assert_eq!(summary.count, None, "an uncovered room must not be counted as zero");
+    assert_eq!(
+        summary.count, None,
+        "an uncovered room must not be counted as zero"
+    );
     // Coverage is not conflation: presence is still the soft-OR over the
     // covered room only.
     assert!(summary.presence_probability.unwrap_or(0.0) > 0.9);
@@ -568,7 +577,10 @@ fn uncovered_room_forces_unknown_floor_count() {
 fn no_covered_rooms_is_unknown_not_absent() {
     let summary = crate::escalation::aggregate_floor(
         Slug("ground".into()),
-        &[crate::escalation::RoomSummary::uncovered(Slug("lounge".into()), 8)],
+        &[crate::escalation::RoomSummary::uncovered(
+            Slug("lounge".into()),
+            8,
+        )],
         0.15,
         0.8,
         8,
@@ -605,7 +617,7 @@ fn floor_vitals_take_the_highest_confidence() {
 // Home escalation (Slice 6)
 // ---------------------------------------------------------------------------
 
-use crate::escalation::{aggregate_home, aggregate_floor, Conflict, FloorSummary, RoomSummary};
+use crate::escalation::{aggregate_floor, aggregate_home, Conflict, FloorSummary, RoomSummary};
 
 /// Aggregate a floor of one-room-per-entry presence probabilities.
 fn home_test_floor(floor: &str, rooms: &[(&str, f64)]) -> FloorSummary {
@@ -675,7 +687,10 @@ fn unknown_floor_forces_unknown_home_count() {
         8,
     );
     let home = aggregate_home(&[covered, uncovered], 0.15, 0.8, 8);
-    assert_eq!(home.count, None, "an unknown floor must not be counted as zero");
+    assert_eq!(
+        home.count, None,
+        "an unknown floor must not be counted as zero"
+    );
     // Presence is still the soft-OR over the covered floor.
     assert!(home.presence_probability.unwrap_or(0.0) > 0.9);
 }
