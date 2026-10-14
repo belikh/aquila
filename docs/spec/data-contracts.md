@@ -197,7 +197,7 @@ Amplitude and phase are **derived** in the core, never stored (ADR-0005).
 | Field | Type | Unit | Notes |
 | --- | --- | --- | --- |
 | `node_id` | `NodeId` | — | On-air identity; see §1 |
-| `boot_epoch` | `u16` | — | Incremented every boot; persisted in node NVS |
+| `boot_epoch` | `u16` | — | A fresh value each boot from the node RNG; **not** persisted (`capture-and-firmware.md` §9.1.5). The core treats a change as a reboot |
 | `sequence` | `u64` | count | Monotonic within `(node, boot_epoch, band, channel)` |
 | `device_time_us` | `u64` | µs | Node-local monotonic; **not** synchronised |
 | `band` | `Band` | — | 2.4 / 5 GHz / Unknown |
@@ -220,7 +220,8 @@ the *first* (imaginary-first).
 bitflags-like newtype (u16):
 pub struct PhyFlags(pub u16);
 // bit 0: HT (11n), bit 1: secondary present, bit 2: STBC, bit 3: LDPC,
-// bit 4: short GI, bit 5: sounding/NDP.
+// bit 4: short GI, bit 5: sounding/NDP, bit 6: IQ saturated (capture/simulator
+// diagnostic), bit 7: VHT (11ac), bit 8: HE (11ax). Bits 9–15 reserved.
 ```
 
 **Invariants (enforced by `aquila-sources` on ingest; violations are rejected and counted)**

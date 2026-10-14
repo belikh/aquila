@@ -280,7 +280,8 @@ impl Sensing {
                 if let Some(batch) = self.assembler.finish() {
                     report.windows_emitted = 1;
                     report.events_emitted = self.process_batch(&batch)?;
-                    report.floors_summarised = self.floor_history.last().map_or(0, |w| w.floors.len());
+                    report.floors_summarised =
+                        self.floor_history.last().map_or(0, |w| w.floors.len());
                     report.home_summarised = 1;
                 }
                 self.finished = true;
@@ -298,7 +299,8 @@ impl Sensing {
                 if let Some(batch) = self.assembler.push(envelope) {
                     report.windows_emitted = 1;
                     report.events_emitted = self.process_batch(&batch)?;
-                    report.floors_summarised = self.floor_history.last().map_or(0, |w| w.floors.len());
+                    report.floors_summarised =
+                        self.floor_history.last().map_or(0, |w| w.floors.len());
                     report.home_summarised = 1;
                 }
                 Ok(report)
@@ -425,7 +427,10 @@ impl Sensing {
     /// Returns [`SensingError::Calibration`] on a digest mismatch, a schema or
     /// semantics mismatch, a topology/commit/firmware change, a failed quality
     /// gate, or a JSON error computing the current topology digest.
-    pub fn apply_calibration(&mut self, artifact: &CalibrationArtifact) -> Result<(), SensingError> {
+    pub fn apply_calibration(
+        &mut self,
+        artifact: &CalibrationArtifact,
+    ) -> Result<(), SensingError> {
         artifact.verify_digest()?;
         let topology_digest = crate::calibration::topology_digest(self.topology.model())?;
         let expect =
@@ -459,9 +464,10 @@ impl Sensing {
     /// asserted.
     fn presence_logit(&self, room: &RoomId, node: NodeId, window_std: f64) -> f64 {
         if let Some(calibration) = self.config.calibration.as_ref() {
-            if let (Some(zone), Some(baseline)) =
-                (calibration.zone_for_room(room), calibration.node_baseline(node))
-            {
+            if let (Some(zone), Some(baseline)) = (
+                calibration.zone_for_room(room),
+                calibration.node_baseline(node),
+            ) {
                 return calibrated_logit(
                     window_std,
                     f64::from(baseline.amplitude_std_mean),
@@ -471,9 +477,7 @@ impl Sensing {
             }
         }
         match self.config.presence_motion_threshold {
-            Some(threshold) => {
-                (window_std - threshold) / self.config.presence_motion_scale
-            }
+            Some(threshold) => (window_std - threshold) / self.config.presence_motion_scale,
             // No baseline: unknown, never a decision.
             None => 0.0,
         }
@@ -587,13 +591,16 @@ impl Sensing {
                 &self.signal_config,
                 &self.signal_cal,
             );
-            signal_energy_total += feature.signal_motion_energy;
+            // `None` is unknown, not zero: only sum and count nodes the signal
+            // pipeline actually produced a feature for (`sister-issues-core.md`
+            // S16).
+            if let Some(energy) = feature.signal_motion_energy {
+                signal_energy_total += energy;
+                signal_nodes += 1;
+            }
             presence_energy_total += feature.presence_energy;
             motion_cv_total += feature.amplitude_cv;
             motion_std_total += feature.amplitude_std;
-            if feature.used_signal {
-                signal_nodes += 1;
-            }
             nodes_seen += 1;
             if sensing_frame.frames.len() < self.config.min_frames_per_node {
                 continue;
@@ -809,7 +816,10 @@ impl Sensing {
     ) -> Result<usize, SensingError> {
         let mut emitted = 0usize;
         let (occupied_changed, count_changed, occupied, count, probability) = {
-            let state = self.floor_previous.entry(summary.floor.clone()).or_default();
+            let state = self
+                .floor_previous
+                .entry(summary.floor.clone())
+                .or_default();
             let mut occupied_changed = false;
             if let Some(p) = summary.presence_probability {
                 state.presence_probability = p;
@@ -1020,7 +1030,10 @@ impl Sensing {
             }
         }
 
-        self.home_history.push(HomeWindow { t_ms, home: summary });
+        self.home_history.push(HomeWindow {
+            t_ms,
+            home: summary,
+        });
         Ok(emitted)
     }
 
@@ -1425,7 +1438,13 @@ impl Sensing {
             let aggregated =
                 aggregate_floor_vitals(&rooms, self.config.vitals_floor_min_confidence);
             if let Some((_, estimate)) = &aggregated.breathing {
-                self.emit_floor_vital(&floor, "breathing_rate", estimate.value, "brpm", floor_t_ms)?;
+                self.emit_floor_vital(
+                    &floor,
+                    "breathing_rate",
+                    estimate.value,
+                    "brpm",
+                    floor_t_ms,
+                )?;
                 emitted += 1;
                 self.record(
                     "vitals.floor.breathing.brpm",

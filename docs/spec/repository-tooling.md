@@ -456,7 +456,7 @@ xtask/
   src/lib.rs            # check_dag(manifest: &Path) -> Result<Report>
   src/dag.rs            # graph build + rule evaluation
   src/coverage.rs       # coverage-floor: parse an LCOV record vs tools/coverage-floor.txt
-  src/claims.rs         # claims-verify: validate claims.toml (testing.md §7)
+  src/claims.rs         # claims-verify: validate claims.toml and the docs/README.md claims table are a bijection (testing.md §7)
   src/scaffolding.rs    # check-scaffolding: git ls-files vs tools/no-agent-scaffolding.txt
   src/main.rs           # clap: dag-check | check-scaffolding | coverage-floor | claims-verify
   tests/dag.rs          # #[test] fn dag_is_respected() { ... }

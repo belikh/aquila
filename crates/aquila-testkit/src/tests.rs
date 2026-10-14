@@ -38,6 +38,14 @@ use crate::{
 
 /// The window hop used to align predictions with ground truth, in milliseconds.
 const HOP_MS: i64 = 1_000;
+
+/// A fixed, non-zero 40-hex build identity for tests.
+///
+/// [`SensingConfig::validate`] refuses an empty or all-zero commit, so every
+/// test that builds a core supplies this real-looking commit rather than the
+/// fabricated zero hash the default used to carry (`sister-issues-core.md`
+/// S15).
+const TEST_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 /// The clock step between replayed frames, in nanoseconds.
 ///
 /// Two nodes share each simulation tick, so a frame advances the clock by half
@@ -191,10 +199,10 @@ fn synthetic_config() -> SensingConfig {
     SensingConfig {
         presence_motion_threshold: Some(0.04375),
         presence_motion_scale: 0.013125,
+        measurement: aquila_sensing::MeasurementConfig::with_commit(TEST_COMMIT),
         ..SensingConfig::default()
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Slice 2 — vitals tracer bullet (`roadmap.md`, Slice 2)
@@ -281,6 +289,7 @@ fn run_vitals_tracer() -> VitalsRun {
         vitals_window_ns: 15_000_000_000,
         presence_motion_threshold: Some(0.04375),
         presence_motion_scale: 0.013125,
+        measurement: aquila_sensing::MeasurementConfig::with_commit(TEST_COMMIT),
         ..SensingConfig::default()
     };
 
@@ -636,7 +645,9 @@ fn unique_temp_dir() -> std::path::PathBuf {
 
 #[test]
 fn calibration_tracer_calibrates_persists_and_detects() {
-    let commit = "0".repeat(40);
+    // The artefact is commit-keyed, so this must match the core's commit
+    // (`TEST_COMMIT`); a zero hash is now refused (S15).
+    let commit = TEST_COMMIT.to_string();
     let topology = Topology::load(topology_for(&calibration_empty_scene())).expect("topology");
     let config = SensingConfig::default();
     let request = CalibrationRequest::new(commit.clone(), "cal-run-1", "2026-10-14T00:00:00Z");
@@ -784,6 +795,7 @@ fn calibration_tracer_calibrates_persists_and_detects() {
     let event_handle = collector.handle();
     let cal_config = SensingConfig {
         calibration: Some(reloaded),
+        measurement: aquila_sensing::MeasurementConfig::with_commit(TEST_COMMIT),
         ..SensingConfig::default()
     };
     let mut sensing = Sensing::new(
@@ -1019,6 +1031,7 @@ fn run_pose_tracer_with(search: DitherSearch) -> PoseRun {
         pose_dither_search: search,
         presence_motion_threshold: Some(0.04375),
         presence_motion_scale: 0.013125,
+        measurement: aquila_sensing::MeasurementConfig::with_commit(TEST_COMMIT),
         ..SensingConfig::default()
     };
 
@@ -2208,7 +2221,10 @@ fn phase_sign_is_imaginary_first_end_to_end() {
 
     // The full round trip: raw sample → AQCI wire → contract frame → core bins.
     let decoded = decode_datagram(&encode_datagram(&frame)).expect("wire round trip");
-    assert_eq!(decoded, frame, "the raw sample must survive the wire verbatim");
+    assert_eq!(
+        decoded, frame,
+        "the raw sample must survive the wire verbatim"
+    );
 
     let complex = aquila_signal::decode_csi(&decoded).expect("decode_csi");
     assert_eq!(complex.bins.len(), 1);

@@ -319,8 +319,7 @@ impl SimulatorSource {
         let mut saturated = false;
 
         for k in 0..n {
-            let f_rf = centre_hz
-                + (k as f64 - n as f64 / 2.0) * self.script.subcarrier_spacing_hz;
+            let f_rf = centre_hz + (k as f64 - n as f64 / 2.0) * self.script.subcarrier_spacing_hz;
             let (mut re, mut im) = self.baseline(node_index, k);
             for (index, actor) in self.script.actors.iter().enumerate() {
                 if actor.room != node.room || !actor.present(t) {
@@ -388,8 +387,9 @@ impl SimulatorSource {
         } else {
             1.0
         };
-        let rssi =
-            (SIM_NOISE_FLOOR_DBM + 10.0 * snr_linear.log10()).clamp(-120.0, -10.0).round() as i8;
+        let rssi = (SIM_NOISE_FLOOR_DBM + 10.0 * snr_linear.log10())
+            .clamp(-120.0, -10.0)
+            .round() as i8;
         let noise_floor = SIM_NOISE_FLOOR_DBM.clamp(-120.0, -10.0).round() as i8;
 
         let mut phy = PhyFlags::HT | PhyFlags::SHORT_GI;
@@ -401,6 +401,13 @@ impl SimulatorSource {
             phy |= PhyFlags::IQ_SATURATED;
         }
 
+        // PROVISIONAL: the contract has not yet pinned the HT20/HT40
+        // subcarrier-offset convention, so `-(n/2)` is a placeholder shared with
+        // the firmware, not a verified bin map (signal.md §7; S11, F19). The
+        // simulator must agree with the node byte-for-byte; when a real capture
+        // fixes the map, both change together.
+        let subcarrier_offset = -((n / 2) as i16);
+
         CsiFrame {
             node_id: node.id,
             boot_epoch: 1,
@@ -409,7 +416,7 @@ impl SimulatorSource {
             band: self.script.band,
             channel: self.script.channel,
             bandwidth_mhz: self.script.bandwidth_mhz,
-            subcarrier_offset: -((n / 2) as i16),
+            subcarrier_offset,
             i_q,
             rssi_dbm: rssi,
             noise_floor_dbm: noise_floor,
@@ -498,8 +505,8 @@ pub fn synthesise_ground_truth(
     let mut out = Vec::new();
     for tick in 0..ticks {
         let t = tick as f64 / script.tick_hz;
-        let host_us = config.start_host_us
-            + ((tick as f64) * 1_000_000.0 / script.tick_hz).round() as u64;
+        let host_us =
+            config.start_host_us + ((tick as f64) * 1_000_000.0 / script.tick_hz).round() as u64;
         let t_unix_ms = config.start_unix_ms + (t * 1_000.0).round() as i64;
         for room in &rooms {
             let present: Vec<&crate::scene::Actor> = script

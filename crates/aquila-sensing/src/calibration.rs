@@ -55,9 +55,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use aquila_geometry::Topology;
-use aquila_types::{
-    sha256, to_hex, CsiEnvelope, DeviceType, HomeId, NodeId, NodeQuality, RoomId,
-};
+use aquila_types::{sha256, to_hex, CsiEnvelope, DeviceType, HomeId, NodeId, NodeQuality, RoomId};
 use serde::{Deserialize, Serialize};
 
 use crate::config::SensingConfig;
@@ -273,13 +271,22 @@ impl ClockCalibration {
 /// A node's channel configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChannelCalibration {
+    /// Whether the channel facts were derived from observed frames.
+    ///
+    /// `false` means the node carried no frames in the capture, so the numeric
+    /// fields below are placeholders (`0`) and the band is `"unknown"`; a
+    /// consumer MUST treat them as unknown, never as measurements
+    /// (`sister-issues-core.md` S16). It defaults to `false` when absent, so an
+    /// older artefact is read as unknown rather than assumed to be known.
+    #[serde(default)]
+    pub known: bool,
     /// The band label: `"2.4ghz"`, `"5ghz"` or `"unknown"`.
     pub band: String,
-    /// The primary channel.
+    /// The primary channel (meaningful only when `known`).
     pub primary_channel: u8,
-    /// The channel width in MHz.
+    /// The channel width in MHz (meaningful only when `known`).
     pub bandwidth_mhz: u8,
-    /// The subcarrier count.
+    /// The subcarrier count (meaningful only when `known`).
     pub subcarriers: usize,
 }
 
@@ -567,8 +574,7 @@ impl CalibrationArtifact {
         body.calibration_id = String::new();
         body.body_sha256 = String::new();
         body.invalidation.history_pointer = String::new();
-        serde_json::to_string(&body)
-            .map_err(|error| CalibrationError::Json(error.to_string()))
+        serde_json::to_string(&body).map_err(|error| CalibrationError::Json(error.to_string()))
     }
 
     /// Seal the artefact: compute `body_sha256` and `calibration_id`.
@@ -619,10 +625,7 @@ impl CalibrationArtifact {
     pub fn from_json(json: &str) -> Result<Self, CalibrationError> {
         let artifact: Self = serde_json::from_str(json)
             .map_err(|error| CalibrationError::Json(error.to_string()))?;
-        if !artifact
-            .schema_version
-            .starts_with("aquila.calibration/v1")
-        {
+        if !artifact.schema_version.starts_with("aquila.calibration/v1") {
             return Err(CalibrationError::UnsupportedSchema {
                 found: artifact.schema_version,
             });
@@ -665,7 +668,10 @@ impl CalibrationArtifact {
                 expected: expect.core_commit.clone(),
             });
         }
-        let firmware = self.nodes.first().map_or_else(String::new, |n| n.firmware.clone());
+        let firmware = self
+            .nodes
+            .first()
+            .map_or_else(String::new, |n| n.firmware.clone());
         if !expect.firmware.is_empty() && firmware != expect.firmware {
             reasons.push(InvalidationReason::FirmwareChanged {
                 found: firmware,
@@ -842,10 +848,7 @@ pub struct CalibrationInputs {
 impl CalibrationInputs {
     /// Construct inputs from an empty-home capture and labelled walk-throughs.
     #[must_use]
-    pub fn new(
-        empty_home: Vec<CsiEnvelope>,
-        walkthrough: Vec<(RoomId, Vec<CsiEnvelope>)>,
-    ) -> Self {
+    pub fn new(empty_home: Vec<CsiEnvelope>, walkthrough: Vec<(RoomId, Vec<CsiEnvelope>)>) -> Self {
         Self {
             empty_home,
             walkthrough,
@@ -1004,7 +1007,10 @@ pub fn calibrate(
     let metrics = QualityMetrics {
         link_coverage: link_coverage(&links, topology),
         baseline_snr_db: finite_or(
-            links.iter().map(|l| f64::from(l.baseline.snr_db)).fold(f64::INFINITY, f64::min),
+            links
+                .iter()
+                .map(|l| f64::from(l.baseline.snr_db))
+                .fold(f64::INFINITY, f64::min),
             0.0,
         ),
         excess_dynamic_range_db: finite_or(
@@ -1092,9 +1098,9 @@ struct NodeAnalysis {
     device_ns: Vec<f64>,
     host_ns: Vec<f64>,
     band: aquila_types::Band,
-    channel: u8,
-    bandwidth_mhz: u8,
-    subcarriers: usize,
+    channel: Option<u8>,
+    bandwidth_mhz: Option<u8>,
+    subcarriers: Option<usize>,
 }
 
 /// Group a capture's envelopes by node and analyse each.
@@ -1119,10 +1125,7 @@ fn analyse_node(envelopes: &[&CsiEnvelope], hop_ns: u64) -> NodeAnalysis {
     let mut windows: BTreeMap<u64, Vec<CsiEnvelope>> = BTreeMap::new();
     for envelope in envelopes {
         let slot = envelope.host_rx_mono_ns / hop_ns;
-        windows
-            .entry(slot)
-            .or_default()
-            .push((*envelope).clone());
+        windows.entry(slot).or_default().push((*envelope).clone());
     }
 
     let window_stds: Vec<f64> = windows
@@ -1177,9 +1180,11 @@ fn analyse_node(envelopes: &[&CsiEnvelope], hop_ns: u64) -> NodeAnalysis {
         device_ns,
         host_ns,
         band: first.map_or(aquila_types::Band::Unknown, |e| e.frame.band),
-        channel: first.map_or(0, |e| e.frame.channel),
-        bandwidth_mhz: first.map_or(0, |e| e.frame.bandwidth_mhz),
-        subcarriers: first.map_or(0, |e| e.frame.n_subcarriers()),
+        // No frame means genuinely unknown, not channel 0 at 0 MHz with 0
+        // subcarriers (`sister-issues-core.md` S16).
+        channel: first.map(|e| e.frame.channel),
+        bandwidth_mhz: first.map(|e| e.frame.bandwidth_mhz),
+        subcarriers: first.map(|e| e.frame.n_subcarriers()),
     }
 }
 
@@ -1192,16 +1197,18 @@ fn build_node_clock_and_channel(
     let firmware = format!("{} {}", device_label(node.device), node.firmware.version);
     let channel = analysis.map_or_else(
         || ChannelCalibration {
+            known: false,
             band: "unknown".to_string(),
             primary_channel: 0,
             bandwidth_mhz: 0,
             subcarriers: 0,
         },
         |a| ChannelCalibration {
+            known: a.channel.is_some() && a.bandwidth_mhz.is_some() && a.subcarriers.is_some(),
             band: band_label(a.band).to_string(),
-            primary_channel: a.channel,
-            bandwidth_mhz: a.bandwidth_mhz,
-            subcarriers: a.subcarriers,
+            primary_channel: a.channel.unwrap_or(0),
+            bandwidth_mhz: a.bandwidth_mhz.unwrap_or(0),
+            subcarriers: a.subcarriers.unwrap_or(0),
         },
     );
 
@@ -1911,7 +1918,9 @@ impl CalibrationStore {
 
 /// Strip a `sha256:` prefix, returning the bare hex name.
 fn hex_name(calibration_id: &str) -> &str {
-    calibration_id.strip_prefix("sha256:").unwrap_or(calibration_id)
+    calibration_id
+        .strip_prefix("sha256:")
+        .unwrap_or(calibration_id)
 }
 
 /// Map a filesystem error to a typed calibration error.

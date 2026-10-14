@@ -199,7 +199,10 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "    uint8_t  band;");
     let _ = writeln!(s, "    uint8_t  channel;");
     let _ = writeln!(s, "    uint8_t  bandwidth_mhz;");
-    let _ = writeln!(s, "    uint8_t  flags; /* bit0 = AQ_CSI_FLAG_FIRST_WORD_INVALID */");
+    let _ = writeln!(
+        s,
+        "    uint8_t  flags; /* bit0 = AQ_CSI_FLAG_FIRST_WORD_INVALID */"
+    );
     let _ = writeln!(s, "}} aq_csi_header_t;");
     let _ = writeln!(s);
     let _ = writeln!(s, "typedef struct {{");
@@ -232,7 +235,7 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "    aq_csi_body_fixed_t fixed;");
     let _ = writeln!(
         s,
-        "    int8_t payload[]; /* C99 flexible array member: interleaved I,Q */"
+        "    int8_t payload[]; /* C99 flexible array member: interleaved Q,I (imaginary first) */"
     );
     let _ = writeln!(s, "}} aq_csi_body_t;");
     let _ = writeln!(s);

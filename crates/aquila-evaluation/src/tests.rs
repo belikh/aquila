@@ -8,8 +8,8 @@ use aquila_simulator::{
     Actor, Impairments, Motion, NodeSpec, SceneScript, SimConfig, SimulatorSource,
 };
 use aquila_types::{
-    Band, DeviceType, FirmwareRef, Floor, Home, MacAddr, Node, NodeId, Room, RoomId, RoomKind, Slug,
-    Topology, CONTRACT_VERSION,
+    Band, DeviceType, FirmwareRef, Floor, Home, MacAddr, Node, NodeId, Room, RoomId, RoomKind,
+    Slug, Topology, CONTRACT_VERSION,
 };
 
 use crate::{CollectorSink, EvalScope, FixtureGroundTruth, GroundTruth, Harness};
@@ -149,6 +149,11 @@ fn scores_a_simulated_run() {
             // generator drives presence decisions (`sister-issues-core.md` S9).
             presence_motion_threshold: Some(0.04375),
             presence_motion_scale: 0.013125,
+            // A real-looking build identity: the default's empty commit is
+            // refused (`sister-issues-core.md` S15).
+            measurement: aquila_sensing::MeasurementConfig::with_commit(
+                "0123456789abcdef0123456789abcdef01234567",
+            ),
             ..SensingConfig::default()
         },
     )

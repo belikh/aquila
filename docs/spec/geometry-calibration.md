@@ -464,8 +464,8 @@ CalibrationArtefact
 │     ├── clock           object   { offset_s, skew_ppm, fit_residual_ms,
 │     │                              estimated_at }
 │     ├── firmware        string           esp32s3-csi x.y.z
-│     ├── channel         object   { band, primary_channel, bandwidth_mhz,
-│     │                              subcarriers }
+│     ├── channel         object   { known, band, primary_channel,
+│     │                              bandwidth_mhz, subcarriers }   known=false ⇒ numbers are placeholders
 │     ├── gain_drift      object   { amplitude_db_per_h, phase_basis[],
 │     │                              confidence }
 │     └── quality         f32      per-node calibration quality q_n in [0,1]
@@ -553,7 +553,7 @@ CalibrationArtefact
     "clock": { "offset_s": 0.014, "skew_ppm": 3.2, "fit_residual_ms": 0.9,
                "estimated_at": "2026-10-13T09:05:00Z" },
     "firmware": "esp32s3-csi 0.4.1",
-    "channel": { "band": "2.4ghz", "primary_channel": 6,
+    "channel": { "known": true, "band": "2.4ghz", "primary_channel": 6,
                  "bandwidth_mhz": 20, "subcarriers": 64 },
     "gain_drift": { "amplitude_db_per_h": 0.02, "phase_basis": [],
                     "confidence": 0.7 },

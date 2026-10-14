@@ -23,6 +23,12 @@ use crate::pose::DitherSearch;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeasurementConfig {
     /// The full 40-character hex commit the measurement is keyed to.
+    ///
+    /// This is **required**: it is empty in [`MeasurementConfig::default`] and
+    /// [`SensingConfig::validate`] refuses an empty or all-zero commit, so a
+    /// core cannot be constructed without a real build identity. A fabricated
+    /// zero hash would attribute every ledger row to no build
+    /// (`sister-issues-core.md` S15).
     pub commit: String,
     /// A stable host fingerprint.
     pub host: String,
@@ -30,10 +36,25 @@ pub struct MeasurementConfig {
     pub prefix: String,
 }
 
+impl MeasurementConfig {
+    /// Build a provenance record keyed to a real commit.
+    #[must_use]
+    pub fn with_commit(commit: impl Into<String>) -> Self {
+        Self {
+            commit: commit.into(),
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for MeasurementConfig {
     fn default() -> Self {
+        // No commit is known until the composition root supplies one; the empty
+        // string is an explicit "unknown", never a zero hash presented as a
+        // commit. `validate` rejects it, so the default is not usable to build a
+        // core (`sister-issues-core.md` S15).
         Self {
-            commit: "0".repeat(40),
+            commit: String::new(),
             host: "aquila-sensing".to_string(),
             prefix: "sensing".to_string(),
         }
@@ -190,6 +211,19 @@ impl Default for SensingConfig {
 }
 
 impl SensingConfig {
+    /// Return this configuration with the measurement commit set to `commit`.
+    ///
+    /// The composition root (or a test) must call this — or set
+    /// `measurement.commit` directly — before [`Sensing::new`](crate::Sensing::new):
+    /// the default carries an explicit unknown commit, and `validate` refuses
+    /// it, so the ledger is never keyed to a fabricated hash
+    /// (`sister-issues-core.md` S15).
+    #[must_use]
+    pub fn with_commit(mut self, commit: impl Into<String>) -> Self {
+        self.measurement.commit = commit.into();
+        self
+    }
+
     /// Validate the configuration's internal consistency.
     ///
     /// # Errors
@@ -217,7 +251,10 @@ impl SensingConfig {
             ("p_lo", self.p_lo),
             ("p_hi", self.p_hi),
             ("node_weight", self.node_weight),
-            ("calibration_scale_floor_db", self.calibration_scale_floor_db),
+            (
+                "calibration_scale_floor_db",
+                self.calibration_scale_floor_db,
+            ),
         ] {
             if !value.is_finite() {
                 return Err(bad(&format!("{name} must be finite")));
@@ -225,7 +262,9 @@ impl SensingConfig {
         }
         if let Some(threshold) = self.presence_motion_threshold {
             if !threshold.is_finite() {
-                return Err(bad("presence_motion_threshold must be finite when declared"));
+                return Err(bad(
+                    "presence_motion_threshold must be finite when declared",
+                ));
             }
         }
         if self.calibration_scale_floor_db <= 0.0 {
@@ -275,7 +314,10 @@ impl SensingConfig {
             }
             let geometry = &self.pose_geometry;
             for (name, value) in [
-                ("pose_geometry.shoulder_half_width_m", geometry.shoulder_half_width_m),
+                (
+                    "pose_geometry.shoulder_half_width_m",
+                    geometry.shoulder_half_width_m,
+                ),
                 ("pose_geometry.hip_half_width_m", geometry.hip_half_width_m),
                 ("pose_geometry.torso_length_m", geometry.torso_length_m),
             ] {
@@ -289,15 +331,17 @@ impl SensingConfig {
                 return Err(bad("pose_uncalibrated_quality must lie in [0, 1]"));
             }
         }
-        if self.measurement.commit.len() != 40
-            || !self
-                .measurement
-                .commit
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit())
-        {
+        let commit = &self.measurement.commit;
+        if commit.len() != 40 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(bad(
-                "measurement.commit must be a full 40-character hex SHA",
+                "measurement.commit must be a full 40-character hex SHA set at the \
+                 composition root; an empty or absent commit is not a build identity",
+            ));
+        }
+        if commit.bytes().all(|b| b == b'0') {
+            return Err(bad(
+                "measurement.commit must be a real build commit, not the all-zero \
+                 placeholder (sister-issues-core.md S15)",
             ));
         }
         if self.measurement.host.is_empty() {

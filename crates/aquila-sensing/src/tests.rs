@@ -20,6 +20,10 @@ use crate::sink::Sink;
 use crate::time::TimeSync;
 use crate::window::WindowAssembler;
 
+/// A real-looking build identity for tests: `SensingConfig::validate` refuses
+/// the default's empty/zero commit (`sister-issues-core.md` S15).
+const TEST_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -371,7 +375,7 @@ fn engine_steps_and_emits_measurements() {
         None,
         None,
         one_room_topology(),
-        SensingConfig::default(),
+        SensingConfig::default().with_commit(TEST_COMMIT),
     )
     .expect("valid core");
 
@@ -401,7 +405,7 @@ fn calibrate_refuses_empty_inputs_honestly() {
         None,
         None,
         one_room_topology(),
-        SensingConfig::default(),
+        SensingConfig::default().with_commit(TEST_COMMIT),
     )
     .unwrap();
     let request = crate::calibration::CalibrationRequest::new(
@@ -703,4 +707,23 @@ fn home_with_no_floors_is_unknown_not_absent() {
     assert!(home.presence_probability.is_none());
     assert!(home.count.is_none());
     assert!(home.attribution.is_none());
+}
+
+#[test]
+fn a_zero_or_empty_commit_is_refused() {
+    // The default carries no commit: the ledger must not be keyed to a
+    // fabricated zero hash (S15).
+    assert!(SensingConfig::default().validate().is_err());
+    let zero = SensingConfig::default().with_commit("0".repeat(40));
+    assert!(
+        zero.validate().is_err(),
+        "the all-zero placeholder must be refused"
+    );
+    assert!(
+        SensingConfig::default()
+            .with_commit(TEST_COMMIT)
+            .validate()
+            .is_ok(),
+        "a real commit must validate"
+    );
 }

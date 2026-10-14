@@ -60,15 +60,13 @@ pub use ids::{
     FloorId, HomeId, MacAddr, MetricId, NodeId, NodePairId, PairId, RoomId, SessionId, Slug,
     SubjectId, ZoneId,
 };
-pub use ledger::{
-    DatasetRef, EnvFingerprint, Interval, LedgerRecord, MetricKind, ModelRef, Split,
-};
+pub use ledger::{DatasetRef, EnvFingerprint, Interval, LedgerRecord, MetricKind, ModelRef, Split};
 pub use pose::{
     Keypoint, KeypointId, Pose, KEYPOINT_COUNT, TORSO_DITHER_BAND_HZ,
     TORSO_DITHER_MIN_SEPARATION_HZ, TORSO_SCATTERER_COUNT,
 };
 pub use primitives::{
-    Band, Confidence, NodeQuality, PhyFlags, Quality, SecondaryChannel, Witness,
+    Band, Confidence, NodeQuality, PhyFlags, Quality, SecondaryChannel, UnitScalar, Witness,
 };
 pub use session::{
     BuildId, GroundTruthRecord, GroundTruthRef, GtKind, Session, SessionArtifact, SessionManifest,

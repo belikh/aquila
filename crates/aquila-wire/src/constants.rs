@@ -7,10 +7,10 @@
 
 /// The CSI data-plane magic, ASCII `AQCI` (`41 51 43 49`).
 ///
-/// `capture-and-firmware.md` §5.1 and the interface register name this plane
-/// `AQCI`. `data-contracts.md` §9.1 spells the same canonical body `AQCS`; this
-/// codec follows the task and §5 and uses `AQCI` for the data plane. See the
-/// crate-level *Layout decision* note.
+/// `capture-and-firmware.md` §5.1, the interface register and
+/// `data-contracts.md` §9.1 all name the single canonical data-plane body
+/// `AQCI`; there is no second spelling. See the crate-level *Layout decision*
+/// note.
 pub const CSI_MAGIC: [u8; 4] = *b"AQCI";
 
 /// The node control-plane magic, ASCII `AQCC` (`41 51 43 43`).
@@ -30,7 +30,10 @@ pub const CONTROL_VERSION: u8 = WIRE_MAJOR;
 pub const CSI_MESSAGE_TYPE: u8 = 1;
 
 /// The only subcarrier format: interleaved signed int8 `Q, I` pairs
-/// (imaginary first), two bytes per subcarrier (ADR-0005).
+/// (imaginary first), two bytes per subcarrier.
+///
+/// Carrying the raw int8 sample verbatim is ADR-0005; the imaginary-first byte
+/// order (`[Q0, I0, Q1, I1, …]`) is ADR-0006.
 pub const SUBCARRIER_FORMAT_INT8_IQ: u8 = 1;
 
 /// The CSI header flags byte's bit 0: the leading `I/Q` pair is unreliable.
@@ -57,8 +60,8 @@ pub const MAX_DATAGRAM_LEN: usize = 1472;
 
 /// The largest supported subcarrier count.
 ///
-/// Derived from [`MAX_DATAGRAM_LEN`]: with interleaved signed int8 `I, Q`
-/// (2 bytes per subcarrier) the body budget is
+/// Derived from [`MAX_DATAGRAM_LEN`]: with interleaved signed int8 `Q, I`
+/// (imaginary first, 2 bytes per subcarrier) the body budget is
 /// `(1472 - 16 - 28) / 2 = 714`.
 pub const MAX_SUBCARRIERS: u16 =
     ((MAX_DATAGRAM_LEN - CSI_HEADER_LEN - CSI_BODY_FIXED_LEN) / 2) as u16;
@@ -83,6 +86,11 @@ pub const MAX_SOURCE_MACS: usize = u8::MAX as usize;
 /// The control opcodes of `capture-and-firmware.md` §6.2.
 ///
 /// Each discriminant is the on-wire opcode byte.
+///
+/// The firmware-OTA extension opcodes `0x0E`–`0x14` are **specified but not
+/// implemented in v1** (`firmware-ota.md`; tickets #13–#15) and are
+/// deliberately absent here: defining them would imply a wire contract the node
+/// and core do not yet honour (`sister-issues-firmware-ha.md` F2/F29/F36/F38).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Opcode {
@@ -189,7 +197,7 @@ pub(crate) mod csi_body_offset {
     pub(crate) const PHY_FLAGS: usize = 24;
     /// Reserved, zero (`u16`).
     pub(crate) const RESERVED: usize = 26;
-    /// The first interleaved signed int8 `I/Q` byte.
+    /// The first interleaved signed int8 byte: `Q` (imaginary first), then `I`.
     pub(crate) const IQ: usize = 28;
 }
 

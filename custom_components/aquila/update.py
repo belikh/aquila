@@ -5,6 +5,12 @@ Implements ``docs/spec/firmware-ota.md`` §7 and home-assistant.md §6.1:
 ``latest_version``, ``update_available``, an install action, ``in_progress`` and
 ``update_percentage``. OTA rides the node control channel; the component only
 drives the core's private API.
+
+**Not yet implemented — see ticket #14.** The entity surface exists and
+``async_install``/``async_abort`` call the core, but neither the core's OTA
+manager nor the node's OTA agent is shipped in v1: the install/abort endpoints
+fail closed with a typed ``503 ota_unavailable`` (sister-issues-firmware-ha.md
+F2/F28/F29). This platform is the HA end of a design, not a working updater.
 """
 
 from __future__ import annotations

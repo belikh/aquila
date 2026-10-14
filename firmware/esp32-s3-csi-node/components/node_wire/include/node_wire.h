@@ -125,7 +125,7 @@ typedef struct {
 /* The variable-length AQCI body: the fixed fields, then the payload array. */
 typedef struct {
     aq_csi_body_fixed_t fixed;
-    int8_t payload[]; /* C99 flexible array member: interleaved I,Q */
+    int8_t payload[]; /* C99 flexible array member: interleaved Q,I (imaginary first) */
 } aq_csi_body_t;
 
 /* Accessors: the raw interleaved I/Q sample begins at payload[0]. */

@@ -1,7 +1,9 @@
 # Honest-claims registry (testing.md §7; verified by `cargo xtask claims-verify`).
 #
-# Each claim is one row of the README's claims table and its ledger metric. A
-# claim without evidence is a defect; a test without a claim it backs is
+# Each claim is one row of the claims table in `docs/README.md` (the **Claims**
+# section) and its ledger metric. `claims-verify` parses both this registry and
+# that table and fails unless their `CLM-<slug>` id sets are a bijection: a
+# claim without a table row is a defect; a table row without a registry entry is
 # orphaned. The three v1 gated bars (evaluation.md §6) are `target` until they
 # are measured on the commit-keyed ledger; none is presented as achieved.
 

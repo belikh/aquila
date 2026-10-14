@@ -163,8 +163,10 @@ but none of it is exercised on hardware. In particular:
   nulling the first subcarrier) — verify the byte order against the ESP-IDF
   version on the board;
 - `wifi_pkt_rx_ctrl_t` field names used for the PHY flags (`sig_mode`, `cwb`,
-  `stbc`, `fec_coding`, `sgi`) — these vary across ESP-IDF versions. The v1
-  contract has only one "HT" bit, so VHT/HE frames cannot be distinguished;
+  `stbc`, `fec_coding`, `sgi`, `not_sounding`) — these vary across ESP-IDF
+  versions. `sig_mode` 1 sets the HT bit and 3 sets VHT; the ESP32-S3 radio is
+  11n, so VHT and the reserved HE bit never occur on this target, but the
+  vocabulary no longer conflates 11ac/11ax with 11n (F10);
 - the NVS provisioning path;
 - the control-channel HMAC-SHA256 verification and replay window
   (`mbedtls_md_hmac`), and the matching core-side trailer;

@@ -279,6 +279,9 @@ fn route(
                 not_found(stream)
             }
         }
+        // OTA is specified (`firmware-ota.md`) but not implemented in v1: the
+        // endpoints exist only to fail closed with a typed 503, and the node
+        // control opcodes 0x0E–0x14 are unimplemented (F2/F28/F29/F36/F38).
         ("POST", ["api", "v1", "nodes", node, "firmware", "install"])
         | ("POST", ["api", "v1", "nodes", node, "firmware", "abort"]) => {
             if handle.node_firmware_json(node).is_some() {

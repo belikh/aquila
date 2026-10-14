@@ -46,16 +46,11 @@ pub enum Authority {
 }
 
 /// The epistemic class that governs how [`diff`](crate::diff) reads a change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Grade {
-    /// Same inputs imply a byte-identical value on a pinned toolchain.
-    Deterministic,
-    /// Run-to-run variance; compared as a distribution, never asserted exactly.
-    Statistical,
-    /// Statistical in nature, plus an explicit threshold bar.
-    Gated,
-}
+///
+/// This is [`aquila_types::MetricKind`], re-exported under the name the
+/// measurement module uses. The two used to be identical, hand-maintained
+/// enums; there is now exactly one (`sister-issues-core.md` S19).
+pub use aquila_types::MetricKind as Grade;
 
 /// A tagged observation value: never a bare `f64`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

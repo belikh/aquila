@@ -294,8 +294,9 @@ mismatch is accepted (additive); a `wire_major` mismatch is rejected and counted
 once per `(node_id, boot_epoch)`, never guessed. The wire carries the dense
 `node_id`; the factory `MacAddr` is translated at the seam by `aquila-wire`'s
 node-identity map (ADR-0003 §3, ADR-0004 §2). The payload is copied from the
-receive buffer verbatim — interleaved `Q, I`, imaginary byte first (ADR-0005,
-ADR-0006) — so the node performs no floating-point conversion. Header `flags`
+receive buffer verbatim — interleaved `Q, I`, imaginary byte first (ADR-0006;
+the raw int8 sample verbatim is ADR-0005) — so the node performs no
+floating-point conversion. Header `flags`
 bit 0 (`first_word_invalid`) marks a frame whose leading complex sample (two
 bytes) the driver reported unreliable. The codec is `aquila-wire`'s
 `encode_datagram`/`decode_datagram`; `postcard` is not used on the wire
@@ -447,6 +448,9 @@ and replays scripted replies. Only `send`/`shutdown` are exposed; retransmission
 
 `0x0E`–`0x14` are the firmware-OTA extension of this table; their bodies and
 rules are specified in `docs/spec/firmware-ota.md` §5 and summarised in §9.5.
+**Not yet implemented — see ticket #14:** the firmware defines no OTA handler
+and `node_wire.h` stops at `0x0D`; these rows are a specification, not shipped
+behaviour (F2/F29/F36/F38).
 
 `SET_CONFIG` carries a `config_version` and a `config_hash`; the node rejects a
 stale `config_version`, applies atomically, and replies `ACTIVE` or `REJECTED`
@@ -651,7 +655,10 @@ crate; it lives under `firmware/esp32-s3-csi-node/`.
 7. Send a periodic `STATUS` heartbeat (§6.4).
 8. Persist config, token and credentials in NVS; load and apply at boot; enter
    pairing if unpaired (§6.3).
-9. `IDENTIFY` blinks an LED; `REBOOT` reboots; `FACTORY_RESET` clears NVS.
+9. `IDENTIFY` blinks an LED; `REBOOT` reboots; `FACTORY_RESET` clears NVS. The
+   `IDENTIFY` blink is **compiled out** until a board GPIO is assigned
+   (`IDENTIFY_GPIO (-1)`), so today the node acknowledges the command but shows
+   no light (F33).
 10. Serial logging is development-only and off or trivial in production.
 
 ### 9.2 What it MUST NOT do
@@ -691,6 +698,12 @@ implementations — the check that would close this — are planned, not yet
 present (F37).
 
 ### 9.5 Firmware update (OTA)
+
+> **Not yet implemented — see ticket #14.** Everything below is the specified
+> design, not shipped behaviour: no `esp_ota_*` call, no `partitions.csv`, no
+> key-provisioning path and no OTA handler exist under `firmware/`, and the
+> control opcodes `0x0E`–`0x14` are absent from `node_wire.h` (F2/F29/F36/F38).
+> The core's OTA endpoints fail closed with a typed `503 ota_unavailable`.
 
 Node firmware is updated over the LAN by the core, with no cloud. OTA rides the
 **node control plane** (`9101/udp`) via opcodes `0x0E`–`0x14` (new, extending

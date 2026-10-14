@@ -2,6 +2,14 @@
 
 Status: draft for review (v1.1). Prose in Australian English.
 
+> **Not yet implemented — see ticket #14.** This document specifies the OTA
+> design (tickets #13–#15); none of it is shipped in v1. There is no OTA handler
+> in the firmware, no `esp_ota_*` call, no partition table and no
+> key-provisioning path, and the `0x0E`–`0x14` opcodes are absent from
+> `node_wire.h`. The core's OTA endpoints exist only to fail closed with a typed
+> `503 ota_unavailable`. Read every present-tense statement below as a
+> requirement, not a fact about the build (F2/F29/F36/F38).
+
 Scope: how an ESP32-S3 node's firmware is updated over the private LAN from the
 Aquila core, triggered and observed from Home Assistant, with no cloud. Subordinate
 to `CONTEXT.md` and to `docs/adr/0003-interface-reconciliation.md`; interfaces

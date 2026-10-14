@@ -301,8 +301,9 @@ static void send_status(uint32_t request_id)
     offset += 2;
     aq_put_u32_le(&body[offset], atomic_load(&s_config_version));
     offset += 4;
-    /* Field named `last_rtt_us` in the contract; the node reports its own
-     * echo turnaround (t3 - t2). Only the core can measure the true RTT. */
+    /* The contract's STATUS latency field is the node's own SYNC_PING echo
+     * turnaround (t3 - t2), not an RTT: only the core can measure the true
+     * round-trip time (`capture-and-firmware.md` §6.4, F32). */
     aq_put_u32_le(&body[offset], atomic_load(&s_echo_turnaround_us));
     offset += 4;
     send_message(AQ_OP_STATUS, request_id, body, (uint16_t)offset);

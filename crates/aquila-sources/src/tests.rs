@@ -199,6 +199,9 @@ fn udp_live_source_counts_bad_frames_and_keeps_going() {
     };
     assert_eq!(env.frame, good);
     assert_eq!(env.host_rx_mono_ns, 5);
+    // The exact bytes behind the frame are retained, so `record` stores what
+    // the node actually sent rather than a re-encoding (S17).
+    assert_eq!(source.last_datagram(), encode_datagram(&good).as_slice());
     let snapshot = stats.snapshot();
     assert_eq!(snapshot.decoded, 1);
     assert_eq!(snapshot.bad_frame, 1);

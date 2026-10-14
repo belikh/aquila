@@ -63,6 +63,8 @@ fn print_usage() {
     println!("    dag-check           enforce the dependency allow-list in tools/dag.toml");
     println!("    check-scaffolding   fail if agent scaffolding is git-tracked");
     println!("    coverage-floor      enforce the line-coverage floor from an LCOV record");
-    println!("    claims-verify       validate claims.toml (the honest-claims registry)");
+    println!(
+        "    claims-verify       validate claims.toml and enforce its bijection with the\n                        docs/README.md claims table"
+    );
     println!("    help                print this message");
 }

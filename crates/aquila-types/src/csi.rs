@@ -69,7 +69,11 @@ pub const fn channel_centre_freq_mhz(band: Band, channel: u8) -> u32 {
 pub struct CsiFrame {
     /// On-air identity of the sending node.
     pub node_id: NodeId,
-    /// Boot epoch; incremented every boot and persisted in node NVS.
+    /// Boot epoch: a fresh value each boot, **not** persisted.
+    ///
+    /// The node draws it from its RNG at boot (`main.c`); the core keys
+    /// per-node state to `(node_id, boot_epoch)` and treats a change as a
+    /// reboot, never splicing across it (`sister-issues-firmware-ha.md` F18).
     pub boot_epoch: u16,
     /// Monotonic within `(node, boot_epoch, band, channel)`.
     pub sequence: u64,

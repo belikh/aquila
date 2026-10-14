@@ -31,10 +31,13 @@ pub struct NodeMotionFeature {
     pub amplitude_std: f64,
     /// The mean per-subcarrier mean amplitude (the node's presence energy).
     pub presence_energy: f64,
-    /// The summed `aquila-signal` motion energy, or `0.0` when unavailable.
-    pub signal_motion_energy: f64,
-    /// Whether `aquila-signal` produced a feature for this node.
-    pub used_signal: bool,
+    /// The summed `aquila-signal` motion energy.
+    ///
+    /// `None` means the signal pipeline could not produce a feature (empty
+    /// input, a bridge failure or a processing error): the value is
+    /// **unknown**, never a plausible-looking `0.0` (`sister-issues-core.md`
+    /// S16). Every consumer must handle `None` explicitly.
+    pub signal_motion_energy: Option<f64>,
 }
 
 /// Extract the motion features of one node's window.
@@ -50,12 +53,7 @@ pub fn extract_motion(
     calibration: &Calibration,
 ) -> NodeMotionFeature {
     let variability = amplitude_variability(frames);
-
-    let (signal_motion_energy, used_signal) =
-        match signal_motion_energy(frames, signal_config, calibration) {
-            Some((energy, found)) => (energy, found),
-            None => (0.0, false),
-        };
+    let signal_motion_energy = signal_motion_energy(frames, signal_config, calibration);
 
     NodeMotionFeature {
         node,
@@ -64,7 +62,6 @@ pub fn extract_motion(
         amplitude_std: variability.std,
         presence_energy: variability.mean,
         signal_motion_energy,
-        used_signal,
     }
 }
 
@@ -141,11 +138,15 @@ pub(crate) fn amplitude_variability(frames: &[CsiEnvelope]) -> AmplitudeVariabil
 
 /// Run the window through `aquila-signal`'s reference pipeline and return the
 /// summed motion energy for the node, or `None` when it cannot be computed.
+///
+/// `None` is an explicit unknown: it is never collapsed to `0.0`, which would
+/// be indistinguishable from a genuinely motionless window (`sister-issues-core.md`
+/// S16).
 fn signal_motion_energy(
     frames: &[CsiEnvelope],
     config: &SignalConfig,
     calibration: &Calibration,
-) -> Option<(f64, bool)> {
+) -> Option<f64> {
     if frames.is_empty() {
         return None;
     }
@@ -153,10 +154,11 @@ fn signal_motion_energy(
     let features = aquila_signal::process(&chunk, calibration, config).ok()?;
     let node = frames[0].frame.node_id;
     let node_features = features.nodes.iter().find(|n| n.node == node)?;
-    let energy: f64 = node_features
-        .motion_energy
-        .iter()
-        .map(|e| f64::from(*e))
-        .sum();
-    Some((energy, true))
+    Some(
+        node_features
+            .motion_energy
+            .iter()
+            .map(|e| f64::from(*e))
+            .sum(),
+    )
 }

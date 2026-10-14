@@ -27,8 +27,9 @@
 //! The CSI data plane is one layout under the `AQCI` magic that
 //! `capture-and-firmware.md` §5.1 and the interface register name. The header
 //! and body offsets are those of `data-contracts.md` §9.1; the payload is the
-//! raw signed int8 I/Q sample the esp-csi capture produced (ADR-0005), two
-//! bytes per subcarrier, not a derived `f32` amplitude/phase pair. The identity
+//! raw signed int8 I/Q sample the esp-csi capture produced — the verbatim
+//! sample is ADR-0005, the imaginary-first byte order is ADR-0006 — two bytes
+//! per subcarrier, not a derived `f32` amplitude/phase pair. The identity
 //! field is the dense [`NodeId`](aquila_types::NodeId) that `CsiFrame` carries,
 //! not a MAC; the MAC↔`NodeId` translation that `ADR-0003` §3 places at the
 //! seam is provided by [`NodeIdentityMap`], which `aquila-sources` maintains

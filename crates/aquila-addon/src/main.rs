@@ -24,8 +24,8 @@ use aquila_simulator::{
 };
 use aquila_sources::CsiSource;
 use aquila_types::{
-    DeviceType, FirmwareRef, Floor, Home, MacAddr, Node, NodeId, Room, RoomId, RoomKind, Slug,
-    Topology as ContractTopology, Band, CONTRACT_VERSION,
+    Band, DeviceType, FirmwareRef, Floor, Home, MacAddr, Node, NodeId, Room, RoomId, RoomKind,
+    Slug, Topology as ContractTopology, CONTRACT_VERSION,
 };
 
 /// The default control-plane port (`core-api.md` §2).
@@ -114,6 +114,17 @@ fn run(options: &Options) -> Result<(), String> {
     let sink = Box::new(ChannelSink::new(handle.clone()));
     let metrics = Box::new(InMemoryMetricSink::new());
 
+    // Provenance is required: the ledger is commit-keyed, so the composition
+    // root supplies the real build commit rather than letting the core fabricate
+    // a zero hash (`sister-issues-core.md` S15). The build/release tooling sets
+    // `AQUILA_COMMIT`; refusing to start without it is the honest default.
+    let commit = std::env::var("AQUILA_COMMIT").map_err(|_| {
+        "AQUILA_COMMIT is not set: the sensing core will not key its ledger to an \
+         unknown commit"
+            .to_string()
+    })?;
+    let sensing_config = SensingConfig::default().with_commit(commit);
+
     let mut sensing = Sensing::new(
         source,
         clock,
@@ -122,7 +133,7 @@ fn run(options: &Options) -> Result<(), String> {
         None,
         None,
         topology.model().clone(),
-        SensingConfig::default(),
+        sensing_config,
     )
     .map_err(|e| format!("cannot build the sensing core: {e}"))?;
 

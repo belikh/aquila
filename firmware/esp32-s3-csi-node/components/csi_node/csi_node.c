@@ -70,18 +70,38 @@ static int s_sock = -1;
 static struct sockaddr_in s_core;
 static int64_t s_last_send_us;
 
-/* The 2.4 GHz band byte for channels 1..14, otherwise the 5 GHz band byte. */
+/* The band byte: 0 (2.4 GHz) for channels 1..14, 1 (5 GHz) for the standard
+ * UNII channels 32..177, and 255 (unknown) otherwise. The receiver can report
+ * a channel outside the contract's known set; the node must not claim a band it
+ * cannot know (F20). */
 static uint8_t band_from_channel(uint8_t channel)
 {
-    return channel <= 14u ? 0u : 1u;
+    if (channel >= 1u && channel <= 14u) {
+        return 0u; /* 2.4 GHz */
+    }
+    if (channel >= 32u && channel <= 177u) {
+        return 1u; /* 5 GHz */
+    }
+    return 255u; /* unknown */
 }
 
-/* Map the receiver's sig_mode to the Aquila PHY flag bits. */
+/*
+ * Map the receiver's sig_mode and sounding flag to the Aquila PHY flag bits.
+ *
+ * `sig_mode`: 0 non-HT (11b/g), 1 HT (11n), 3 VHT (11ac). The ESP32-S3 radio is
+ * 11n, so VHT never occurs on this target; the VHT bit is still decoded so a
+ * VHT-capable receiver can distinguish 11ac from 11n, and the HE bit is
+ * reserved for the ESP32-C6 target. This replaces the old code that collapsed
+ * every 11n-or-later mode onto the HT bit (F10). `not_sounding` is 0 for a
+ * sounding PPDU, which is what the contract's sounding/NDP bit records.
+ */
 static uint16_t phy_flags_from_rx(const wifi_pkt_rx_ctrl_t *rx)
 {
     uint16_t flags = 0u;
-    if (rx->sig_mode >= 1u) { /* 1 HT, 2 VHT, 3 HE all imply 11n-or-later */
-        flags |= 1u << 0;     /* HT */
+    if (rx->sig_mode == 1u) {
+        flags |= 1u << 0; /* HT (11n) */
+    } else if (rx->sig_mode == 3u) {
+        flags |= 1u << 7; /* VHT (11ac) */
     }
     if (rx->cwb != 0u) {
         flags |= 1u << 1; /* secondary present */
@@ -94,6 +114,9 @@ static uint16_t phy_flags_from_rx(const wifi_pkt_rx_ctrl_t *rx)
     }
     if (rx->sgi != 0u) {
         flags |= 1u << 4; /* short GI */
+    }
+    if (rx->not_sounding == 0u) {
+        flags |= 1u << 5; /* sounding/NDP */
     }
     return flags;
 }
@@ -221,6 +244,11 @@ static void csi_sender_task(void *arg)
             slot.csi[1] = 0;
         }
 
+        /* PROVISIONAL: the contract has not yet pinned the HT20/HT40
+         * subcarrier-offset convention, so this `-(n/2)` is a placeholder, not
+         * a verified bin map (signal.md §7; S11, F19). It is isolated here so
+         * it can become a Config value once a real capture fixes it; do not
+         * read it as a correctness claim. */
         int16_t subcarrier_offset = (int16_t)(-(int16_t)(n / 2u));
         size_t length = aq_frame_csi(
             cfg.node_id, slot.band, slot.channel, cfg.bandwidth_mhz, slot.sequence,
