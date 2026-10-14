@@ -16,6 +16,7 @@ members = [
     "crates/aquila-capture",
     "crates/aquila-ha",
     "crates/aquila-api",
+    "crates/aquila-dashboard",
     "crates/aquila-addon",
     "xtask",
 ]

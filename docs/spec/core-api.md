@@ -52,29 +52,37 @@ this section is the invariant that must hold.
 
 ## 3. Authentication and trust
 
-Every request MUST be authenticated. Exactly two trust modes exist; there is no
-anonymous mode except the liveness probe in §4.
+Every request MUST be authenticated, and there is no anonymous mode except the
+liveness probe in §4. Authentication is the **loopback/ingress trust boundary**:
+the control plane binds loopback only (§2) and the only network-facing piece is
+the add-on ingress proxy, so a request is authenticated by exactly one of three
+mutually exclusive modes.
 
-### 3.1 Ingress identity
+### 3.1 Loopback peer
+
+A connection whose peer address is loopback (`127.0.0.1` or `::1`) is trusted.
+This covers the add-on's own process, its CLI, its probes, and any tooling
+co-located in the core's network namespace. The loopback connection **is** the
+credential; no header is required.
+
+### 3.2 Ingress identity
 
 Requests that arrive through the add-on ingress proxy carry identity headers set
-by the proxy and signed with a per-boot HMAC key shared only between the proxy and
-the core:
+by the proxy (and, when a per-boot HMAC key is configured, signed with it):
 
 - `X-Aquila-Ingress: <hmac>` — signature over the headers below plus method, path
   and body digest.
 - `X-Remote-User-Id`, `X-Remote-User-Name`, `X-Remote-User-Display-Name`.
-- `X-Aquila-Request-Id` — opaque correlation id, echoed in every response and WS
-  envelope.
+- `X-Aquila-Request-Id` — opaque correlation id, echoed in every response.
 
-The core verifies the HMAC in constant time and rejects the request if the
-signature is missing or invalid, even on loopback. Ingress therefore provides
+The core verifies the HMAC in constant time when a key is configured and rejects
+the request if the signature is missing or invalid. Ingress therefore provides
 **user authentication**; the core does not re-authenticate the HA user.
 
-### 3.2 Local token
+### 3.3 Local token
 
-A process sharing the core's loopback namespace (the add-on's own probes, CLI,
-tests, and any co-located tooling) authenticates with a bearer token:
+A process that prefers not to rely on the loopback peer may authenticate with a
+bearer token:
 
 - Generated at first start, 256 bits, written to `<data>/core.token`, mode `0600`.
 - Presented as `Authorization: Bearer <token>`.
@@ -82,20 +90,22 @@ tests, and any co-located tooling) authenticates with a bearer token:
   restarting the core.
 
 A token **MUST NOT** be passed in a query string (log leakage); the core rejects
-`?token=`, `?access_token=` and similar with `401`.
+`?token=`, `?access_token=` and similar with `401` **before** any other check,
+including on a loopback connection.
 
-### 3.3 Authorisation
+### 3.4 Authorisation
 
 v1 has a single role: an authenticated principal may read and write everything in
 the single Aquila home. There is no tenant model and no per-room ACL. The API
 records the acting identity on every mutation for the audit log.
 
-### 3.4 Failure responses
+### 3.5 Failure responses
 
 | Condition | Status | `code` |
 | --- | --- | --- |
-| No credentials | 401 | `unauthenticated` |
+| No accepted trust mode | 401 | `unauthenticated` |
 | Bad token / bad ingress HMAC | 401 | `unauthenticated` |
+| Token present in a query string | 401 | `unauthenticated` |
 | Authenticated but disallowed | 403 | `forbidden` |
 
 ## 4. Health and capabilities
@@ -131,20 +141,20 @@ records the acting identity on every mutation for the audit log.
 ```json
 {
   "api": { "major": 1, "minor": 0 },
-  "ws": { "subprotocols": ["aquila.v1"], "maxSubscriptions": 32 },
+  "transports": { "http": true, "websocket": false },
   "features": {
-    "calibrationWizard": true, "nodeControl": true,
-    "presence": true, "count": true, "pose": true, "vitals": true
+    "polling": true, "calibrationWizard": false,
+    "nodeControl": false, "firmwareOta": false
   },
-  "limits": {
-    "httpBodyBytes": 1048576, "wsFrameBytes": 65536, "wsBufferBytes": 262144
-  },
-  "minComponentVersion": "0.4.0"
+  "limits": { "httpBodyBytes": 1048576 },
+  "minComponentVersion": "0.1.0"
 }
 ```
 
 Clients MUST call this once per connection and MUST refuse to operate if the
-returned `api.major` differs from theirs.
+returned `api.major` differs from theirs. In v1 `transports.websocket` is
+`false`: the stream is HTTP polling only (§10), and `GET /api/v1/stream` returns
+a typed `501`.
 
 ## 5. Conventions
 
@@ -173,7 +183,9 @@ require `If-Match` where a `revision` exists.
 
 | Method | Path | Purpose | Idem. |
 | --- | --- | --- | --- |
-| `GET` | `/home` | Read the home (name, timezone, storey count). | — |
+| `GET` | `/state` | Full current snapshot: every zone's readings plus health (client poll / initial load). | — |
+| `GET` | `/schema` | Home → floor → room tree, metric vocabulary and units. | — |
+| `GET` | `/home` | Read the home (name, timezone, floor count). | — |
 | `PATCH` | `/home` | Update home metadata. | — |
 | `GET` | `/floors` | List floors (ordered by `index`). | — |
 | `POST` | `/floors` | Create a floor. | key |
@@ -208,11 +220,22 @@ require `If-Match` where a `revision` exists.
 | `POST` | `/calibration/{sessionId}/commit` | Finalise and persist the calibration. | key |
 | `POST` | `/calibration/{sessionId}/abort` | Abort and discard the session. | key |
 | `GET` | `/metrics/snapshot` | Read the commit-keyed metric snapshot (§13). | — |
+| `GET` | `/firmware` | Firmware image store manifest (`firmware-ota.md` §7). | — |
+| `GET` | `/nodes/{nodeId}/firmware` | Installed version, boot partition, pending state, last OTA result. | — |
+| `POST` | `/nodes/{nodeId}/firmware/install` | Begin a firmware OTA (`{image_id, force?}`) → job id. | key |
+| `GET` | `/nodes/{nodeId}/firmware/job` | OTA job progress/state. | — |
+| `POST` | `/nodes/{nodeId}/firmware/abort` | Abort an in-progress OTA. | key |
 | `GET` | `/health` | Subsystem health (§4.1). | — |
 | `GET` | `/capabilities` | Version/feature negotiation (§4.2). | — |
-| `GET` | `/stream` | WebSocket upgrade (§10). | — |
+| `GET` | `/stream` | WebSocket upgrade — `501` in v1; clients poll (§10). | — |
 
 No other routes exist. Unknown paths return `404 not_found`.
+
+**Implementation status.** The firmware routes exist and **fail closed** until
+the OTA manager lands (ticketed #13–#15): `POST .../firmware/install` and
+`POST .../firmware/abort` return a typed `503 ota_unavailable`. The topology
+CRUD and calibration routes are the dashboard's contract (ticket #10); the HACS
+component consumes the read-only subset listed in `home-assistant.md` §5.2.
 
 ## 7. Resource representations
 
@@ -309,160 +332,72 @@ Unknown commands are `422 validation_failed`. Commands to an `offline` node retu
 `409 node_offline` unless the command is queued (only `reboot` and `ping` are
 never queued).
 
-## 10. WebSocket streaming model
+## 10. Transport: HTTP polling (v1)
 
-### 10.1 Handshake
+**v1 does not implement the WebSocket stream.** `GET /api/v1/stream` returns a
+typed, fail-closed `501 websocket_unimplemented`, so no client ever
+reconnect-loops against a stream that cannot carry state. Both in-tree clients
+therefore **poll** the same authenticated HTTP surface.
 
-`GET /api/v1/stream` with `Upgrade: websocket`, and exactly one subprotocol
-`aquila.v1` in `Sec-WebSocket-Protocol`. The core selects `aquila.v1` or fails the
-handshake (`400`). Authentication is identical to HTTP: ingress identity headers
-(used by the browser dashboard through the add-on ingress) or a bearer token (used
-by co-located processes that can set handshake headers). A token in the query
-string is rejected.
+This is a deliberate v1 scope decision, not an omission: the stream protocol is
+recorded below so it can be implemented behind the same envelope without a
+major-version bump, but until it lands polling is the contract and the clients
+MUST NOT open a socket.
 
-The server's first frame is always `welcome`:
+`GET /api/v1/stream` responses:
 
-```json
-{ "v": 1, "type": "welcome", "seq": 0, "ts": "2026-10-13T20:45:00.000Z",
-  "data": { "requestId": "req_...", "principal": { "name": "matt" },
-            "serverUpMs": 813000, "heartbeatMs": 15000,
-            "maxSubscriptions": 32 } }
-```
-
-### 10.2 Envelope
-
-Every frame is a JSON text object with this envelope. `v` is the protocol major
-(always `1` for `aquila.v1`).
-
-| Field | Type | Notes |
+| Condition | Status | `code` |
 | --- | --- | --- |
-| `v` | int | Protocol major. |
-| `type` | string | Frame type (below). |
-| `seq` | int | Server→client: monotonic per connection, starting `1`. Client→server: optional echo id. |
-| `ts` | string | RFC 3339 UTC; server send time. |
-| `id` | string? | Correlation/target id (subscription id, message id). |
-| `data` | object | Type-specific payload. |
+| `Upgrade: websocket` present | 501 | `websocket_unimplemented` |
+| plain `GET` (no upgrade) | 400 | `validation_failed` |
 
-Clients MUST drop frames whose `v` differs from `1`, and MUST tolerate unknown
-`type` values by ignoring the frame.
+### 10.1 Polling contract
 
-### 10.3 Subscriptions
+- The HACS component polls `GET /api/v1/state` (the coordinator's reconciliation
+  and primary source), and fetches `GET /api/v1/nodes`, `GET /api/v1/firmware`
+  and, per node, `GET /api/v1/nodes/{nodeId}/firmware` best-effort on the same
+  cadence (`home-assistant.md` §6.2). Its default interval is 60 s.
+- The dashboard polls the §6 routes it needs; it opens no socket
+  (`dashboard.md` §5).
+- Poll responses are ordinary §6 resources: there is no envelope, no `seq` and
+  no `subscribe`. Staleness is judged from the client's own successful-poll time
+  (or `uptimeMs` where a resource carries it).
+- Polling uses `GET`, is idempotent, and is subject to the read limits in §12.
+  Clients MUST back off (base 1 s, factor 2, cap 30 s, with jitter) after a
+  failed poll, exactly as a stream client would after a drop.
 
-The client sends `subscribe` with a filter; the server replies `subscribed` with
-the effective (possibly clamped) configuration, then streams `event` frames.
+### 10.2 The deferred stream protocol
 
-```json
-// client → server
-{ "v": 1, "type": "subscribe", "id": "sub-a",
-  "data": { "kinds": ["presence", "count", "vitals"],
-            "scope": { "floorIds": [], "roomIds": ["rom_..."], "nodeIds": [] },
-            "maxRateHz": { "vitals": 1, "count": 1 },
-            "snapshot": true,
-            "backpressure": "drop_oldest" } }
-
-// server → client
-{ "v": 1, "type": "subscribed", "id": "sub_01J...", "seq": 1, "ts": "...",
-  "data": { "kinds": ["presence", "count", "vitals"],
-            "scope": { "roomIds": ["rom_..."] },
-            "effectiveRateHz": { "presence": 1, "count": 1, "vitals": 1 },
-            "backpressure": "drop_oldest", "snapshot": true } }
-```
-
-`subscribe` `data` fields:
-
-| Field | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `kinds` | string[] | required | Event kinds to receive. |
-| `scope.roomIds` | string[] | `[]` = all | Restrict room-scoped kinds. |
-| `scope.floorIds` | string[] | `[]` = all | Restrict floor-scoped kinds. |
-| `scope.nodeIds` | string[] | `[]` = all | Restrict node-scoped kinds. |
-| `maxRateHz` | object | per-kind default | Requested ceiling; the core may clamp down. |
-| `snapshot` | bool | `true` | Send current state for state-like kinds immediately. |
-| `backpressure` | string | `drop_oldest` | `drop_oldest` or `disconnect` (see §10.6). |
-
-An empty `scope` array means "unrestricted", not "nothing". A client may hold up
-to `maxSubscriptions` subscriptions (32). Exceeding it is an error frame with code
-`too_many_subscriptions`; the connection survives unless it keeps retrying.
-
-`unsubscribe` takes `{ "subscriptionId": "sub_01J..." }` and is acknowledged by
-`unsubscribed`.
-
-### 10.4 Event kinds and payloads
-
-`event` frames carry one `kind` and a payload. State-like kinds
-(`presence`, `count`, `node_status`, `health`, `calibration_progress`) are
-**conflated** per key; discrete kinds (`pose`, `vitals`, `measurement`,
-`node_command`) are delivered as they occur, subject to the rate ceiling.
-
-| `kind` | Default rate | Max rate | Payload |
-| --- | --- | --- | --- |
-| `presence` | 1 Hz | 2 Hz | `{ "roomId", "present": bool, "probability": 0..1 }` |
-| `count` | 1 Hz | 2 Hz | `{ "roomId", "count": int, "confidence": 0..1 }` |
-| `pose` | 10 Hz | 30 Hz | `{ "roomId", "trackId", "frame": [ { "joint": string, "x", "y", "z", "confidence" } ], "quality": 0..1 }` |
-| `vitals` | 1 Hz | 2 Hz | `{ "roomId", "subjectId", "breathingBrpm", "heartBpm", "confidence", "windowS" }` |
-| `node_status` | 0.2 Hz | 1 Hz | `{ "nodeId", "state", "rssi", "rateHz", "clockOffsetUs", "driftPpm", "queueDepth" }` |
-| `calibration_progress` | on change | 2 Hz | `{ "sessionId", "stepId", "status", "progress", "awaiting", "detail" }` |
-| `node_command` | on change | 2 Hz | `{ "commandId", "nodeId", "command", "state", "result" }` |
-| `measurement` | 0.2 Hz | 1 Hz | `{ "commit", "name", "kind", "unit", "value", "n", "gate" }` |
-| `health` | on change | 0.2 Hz | Same shape as §4.1. |
-
-Payload values are rounded to a stable precision before transmission so that two
-clients observe byte-identical frames for the same underlying state. `pose` frames
-carry a `trackId` so the client can keep a skeleton stable across frames; joints
-are the fixed coarse set (`nose`, `l_shoulder`, `r_shoulder`, `l_hip`, `r_hip`,
-`l_knee`, `r_knee`, `l_ankle`, `r_ankle`).
-
-When `snapshot` is requested, the server sends one immediate `event` per matching
-state-like key with `"snapshot": true` in `data`, before live events.
-
-### 10.5 Heartbeat and liveness
-
-Every `heartbeatMs` (default 15 s) the server sends `heartbeat` with
-`{ "serverUpMs": int, "dropped": int, "subscriptions": int }`. The client MAY send
-`ping` (`{ "nonce": ... }`); the server replies `pong` echoing `nonce`. If the
-server sees no client frame and no successful TCP write for 45 s it closes with
-`1001` (going away). Clients should reconnect with exponential backoff (base 1 s,
-factor 2, cap 30 s, with jitter) and MUST re-subscribe; `snapshot: true` restores
-state cleanly.
-
-### 10.6 Backpressure, conflation and drop policy
-
-Each connection has a bounded outbound queue (default 256 KiB / 512 frames, from
-`capabilities.limits.wsBufferBytes`). The model is:
-
-1. **Conflate state-like kinds per key.** If the queue already holds a
-   not-yet-sent frame for the same `(kind, key)`, replace it. News of the current
-   state always supersedes news of a past state.
-2. **Rate-ceil each stream** at the effective `maxRateHz`. Excess discrete events
-   are dropped before they reach the queue.
-3. **Queue overflow**, per the subscription's `backpressure` policy:
-   - `drop_oldest` (default): discard the oldest frames, keep counting drops, and
-     report the running `dropped` count in the next `heartbeat`. The connection is
-     never broken for slowness.
-   - `disconnect`: close the connection with `1013` (try again later) so a client
-     that must not miss events can reconnect and re-snapshot.
-
-The core never blocks the sensing pipeline on a slow client under any policy.
-
-### 10.7 Error frames and close codes
+When the RFC 6455 stream is implemented (a future ticket) it will reuse the
+`aquila.v1` envelope already reserved here: a `welcome` first frame, a monotonic
+per-connection `seq`, `subscribe`/`subscribed`/`event`/`heartbeat` frames, and
+the event kinds below. Until then `capabilities.transports.websocket` is `false`
+and clients MUST treat `501` as "use polling", not as a retryable transport
+error.
 
 ```json
-{ "v": 1, "type": "error", "seq": 12, "ts": "...",
-  "data": { "code": "too_many_subscriptions", "message": "...", "retryable": true,
-            "fatal": false, "requestId": "req_..." } }
+{ "v": 1, "type": "event", "seq": 12, "ts": "2026-10-13T20:45:00.000Z",
+  "id": "sub_01J...", "data": { "kind": "presence", "roomId": "rom_...",
+    "present": true, "probability": 0.94 } }
 ```
 
-`fatal: true` means the server closes immediately after the frame.
-
-| Close code | Meaning |
+| `kind` | Payload |
 | --- | --- |
-| `1000` | Normal closure by either side. |
-| `1001` | Going away / idle timeout. |
-| `1008` | Policy violation (bad auth or malformed frame). |
-| `1013` | Try again later (slow consumer, `disconnect` policy). |
-| `4001` | Unsupported protocol version. |
-| `4002` | Too many subscriptions. |
-| `4003` | Frame/message too large or rate exceeded persistently. |
+| `presence` | `{ "roomId", "present": bool, "probability": 0..1 }` |
+| `count` | `{ "roomId", "count": int, "confidence": 0..1 }` |
+| `pose` | `{ "roomId", "trackId", "frame": [ { "joint", "x", "y", "z", "confidence" } ], "quality" }` |
+| `vitals` | `{ "roomId", "subjectId", "breathingBrpm", "heartBpm", "confidence", "windowS" }` |
+| `node_status` | `{ "nodeId", "state", "rssi", "rateHz", "clockOffsetUs", "driftPpm" }` |
+| `calibration_progress` | `{ "sessionId", "stepId", "status", "progress", "awaiting" }` |
+| `node_command` | `{ "commandId", "nodeId", "command", "state", "result" }` |
+| `measurement` | `{ "commit", "name", "kind", "unit", "value", "n", "gate" }` |
+| `health` | Same shape as §4.1. |
+| `firmware` | `{ "node", "state", "progress" }` |
+
+Close codes and the backpressure model (`drop_oldest` / `disconnect`, a bounded
+outbound queue) are reserved for that stream: `1000` normal, `1001` going away,
+`1008` policy violation, `1013` try again later, `4001` unsupported protocol
+version, `4002` too many subscriptions, `4003` message too large.
 
 ## 11. Error model
 
@@ -496,6 +431,8 @@ documentation by design.)
 | `precondition_required` | 428 | no | Missing `If-Match` on a mutable update. |
 | `rate_limited` | 429 | yes | Token bucket exhausted; see `Retry-After`. |
 | `internal` | 500 | yes | Unhandled fault. |
+| `websocket_unimplemented` | 501 | no | v1 has no WebSocket stream; poll instead (§10). |
+| `ota_unavailable` | 503 | yes | Firmware OTA is not built yet; the route fails closed (§6). |
 | `degraded` | 503 | yes | Subsystem unavailable (e.g. models loading). |
 | `version_unsupported` | 400 | no | Client major version unsupported. |
 
@@ -559,38 +496,41 @@ The snapshot reflects the v1 bars exactly and carries no claim beyond the data i
 can cite. `commit` is the ledger commit the values were computed at; a client that
 caches a snapshot MUST key its cache on `commit`, not on wall-clock time.
 
-## 14. Sequence example — calibrate then stream
+## 14. Sequence example — calibrate then poll
 
 ```
 client → GET  /api/v1/capabilities
+client → GET  /api/v1/schema                                    → zone tree + metrics
 client → POST /api/v1/calibration            (Idempotency-Key)   → 201 session
 client → GET  /api/v1/calibration/{id}                           → running
-client → WS   /api/v1/stream (aquila.v1)
-client → subscribe { kinds:["calibration_progress","node_status"] }
-server → event  calibration_progress  (step baseline_empty, awaiting_user)
+client → GET  /api/v1/calibration/{id}                           → step baseline_empty, awaiting_user
 client → POST /api/v1/calibration/{id}/steps/{sid}/complete  { inputs:{} }
-server → event  calibration_progress  (step global_fit, awaiting_core)
-server → event  calibration_progress  (step commit, awaiting_user)
+client → GET  /api/v1/calibration/{id}                           → step global_fit, awaiting_core
+client → GET  /api/v1/calibration/{id}                           → step commit, awaiting_user
 client → POST /api/v1/calibration/{id}/commit                    → 200 committed
-client → subscribe — replace with { kinds:["presence","pose","vitals"] }
-server → event  presence (snapshot)  ... then live events
+client → GET  /api/v1/state            (every poll interval)     → snapshot + health
+client → GET  /api/v1/nodes                                      → node list + firmware
 ```
+
+There is no `WS /api/v1/stream` step in v1 (§10): the client polls the resources
+above on its interval.
 
 ## 15. Security notes
 
 - **Loopback is the boundary.** No LAN bind, no TLS termination, no certificate
   management, no cloud relay. A component that must reach the core does so through
   the add-on ingress seam (§2), never by widening the bind.
-- **Two credentials, one role.** Ingress HMAC and local bearer token are
-  independently verifiable and mutually exclusive per request.
+- **Three trust modes, one role.** A loopback peer, the ingress identity header,
+  and the local bearer token are independently verifiable and mutually exclusive
+  per request; none grants a different authorisation.
 - **Constant-time comparison** for both the HMAC and the token; failures are
   indistinguishable to the caller.
 - **No secrets in logs, errors or query strings.** Request bodies are not logged;
   the token and HMAC key never appear in `/health`, `/capabilities` or any error.
 - **Mutation audit.** Every write and node command records acting principal,
   request id, timestamp and resource revision in the add-on audit log.
-- **Denial-of-service containment.** The limits in §12 and the never-block-on-slow-
-  client rule in §10.6 protect the sensing pipeline from the API, not the reverse.
+- **Denial-of-service containment.** The limits in §12 protect the sensing
+  pipeline from the API, not the reverse.
 
 ## 16. Open questions
 

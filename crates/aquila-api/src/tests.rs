@@ -12,7 +12,7 @@ use aquila_types::{
     Node, NodeId, Room, RoomKind, Slug, Witness, CONTRACT_VERSION,
 };
 
-use crate::{ApiError, ChannelSink, Server};
+use crate::{ApiError, Auth, ChannelSink, Server};
 
 fn slug(value: &str) -> Slug {
     Slug(value.to_string())
@@ -82,13 +82,16 @@ fn presence_event() -> Event {
 
 /// A blocking one-shot HTTP GET, returning the whole response as a string.
 fn http_get(addr: SocketAddr, path: &str) -> String {
+    http_request(
+        addr,
+        &format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
+    )
+}
+
+/// A blocking one-shot HTTP request with a raw request head.
+fn http_request(addr: SocketAddr, raw: &str) -> String {
     let mut stream = TcpStream::connect(addr).expect("connect");
-    stream
-        .write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
-        .expect("write request");
+    stream.write_all(raw.as_bytes()).expect("write request");
     let mut response = String::new();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -109,8 +112,8 @@ fn binding_a_non_loopback_address_is_refused() {
 
 #[test]
 fn health_and_state_are_served_over_loopback() {
-    let server = Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test")
-        .expect("bind");
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
     let addr = server.local_addr().expect("local addr");
     assert!(addr.ip().is_loopback());
     let handle = server.handle();
@@ -135,9 +138,113 @@ fn health_and_state_are_served_over_loopback() {
 }
 
 #[test]
+fn the_canonical_read_endpoints_are_served() {
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let schema = http_get(addr, "/api/v1/schema");
+    assert!(schema.starts_with("HTTP/1.1 200 OK"), "{schema}");
+    assert!(schema.contains("\"living-room\""), "{schema}");
+    assert!(schema.contains("breathing_rate"), "{schema}");
+
+    let nodes = http_get(addr, "/api/v1/nodes");
+    assert!(nodes.starts_with("HTTP/1.1 200 OK"), "{nodes}");
+    assert!(nodes.contains("00:00:00:00:00:01"), "{nodes}");
+    assert!(nodes.contains("\"installed_version\":\"test\""), "{nodes}");
+
+    let firmware = http_get(addr, "/api/v1/firmware");
+    assert!(firmware.starts_with("HTTP/1.1 200 OK"), "{firmware}");
+    assert!(firmware.contains("\"items\":[]"), "{firmware}");
+
+    let node_firmware = http_get(addr, "/api/v1/nodes/00:00:00:00:00:01/firmware");
+    assert!(
+        node_firmware.starts_with("HTTP/1.1 200 OK"),
+        "{node_firmware}"
+    );
+    assert!(
+        node_firmware.contains("\"installed_version\":\"test\""),
+        "{node_firmware}"
+    );
+
+    let metrics = http_get(addr, "/api/v1/metrics/snapshot");
+    assert!(metrics.starts_with("HTTP/1.1 200 OK"), "{metrics}");
+    assert!(metrics.contains("\"metrics\":[]"), "{metrics}");
+
+    guard.shutdown();
+}
+
+#[test]
+fn a_token_in_the_query_string_is_rejected() {
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let response = http_get(addr, "/api/v1/state?token=leaked");
+    assert!(response.starts_with("HTTP/1.1 401"), "{response}");
+    assert!(response.contains("unauthenticated"), "{response}");
+
+    guard.shutdown();
+}
+
+#[test]
+fn an_invalid_bearer_token_is_rejected_even_on_loopback() {
+    let server = Server::bind_with_auth(
+        "127.0.0.1:0".parse().expect("addr"),
+        &topology(),
+        "test",
+        Auth::new(Some("secret".to_string())),
+    )
+    .expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let wrong = http_request(
+        addr,
+        "GET /api/v1/state HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer nope\r\n\r\n",
+    );
+    assert!(wrong.starts_with("HTTP/1.1 401"), "{wrong}");
+
+    let right = http_request(
+        addr,
+        "GET /api/v1/state HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer secret\r\n\r\n",
+    );
+    assert!(right.starts_with("HTTP/1.1 200 OK"), "{right}");
+
+    guard.shutdown();
+}
+
+#[test]
+fn the_ota_mutations_fail_closed() {
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let install = http_request(
+        addr,
+        "POST /api/v1/nodes/00:00:00:00:00:01/firmware/install HTTP/1.1\r\n\
+         Host: localhost\r\nContent-Length: 0\r\n\r\n",
+    );
+    assert!(install.starts_with("HTTP/1.1 503"), "{install}");
+    assert!(install.contains("ota_unavailable"), "{install}");
+
+    let unknown = http_request(
+        addr,
+        "POST /api/v1/nodes/00:00:00:00:00:99/firmware/abort HTTP/1.1\r\n\
+         Host: localhost\r\nContent-Length: 0\r\n\r\n",
+    );
+    assert!(unknown.starts_with("HTTP/1.1 404"), "{unknown}");
+
+    guard.shutdown();
+}
+
+#[test]
 fn the_channel_sink_delivers_events_to_subscribers() {
-    let server = Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test")
-        .expect("bind");
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
     let handle = server.handle();
     let receiver = handle.subscribe();
     let mut sink = ChannelSink::new(handle.clone());
@@ -152,8 +259,8 @@ fn the_channel_sink_delivers_events_to_subscribers() {
 
 #[test]
 fn the_websocket_upgrade_is_a_typed_fail_closed_stub() {
-    let server = Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test")
-        .expect("bind");
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
     let addr = server.local_addr().expect("local addr");
     let mut guard = server.serve_in_background().expect("serve");
 

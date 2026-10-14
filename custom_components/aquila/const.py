@@ -25,7 +25,8 @@ API_MAJOR: Final = 1
 #: (``aquila_core`` → ``aquila-core``); see home-assistant.md §2/§4.
 DEFAULT_URL: Final = "http://aquila-core:8099"
 
-#: Coordinator reconciliation cadence in seconds (home-assistant.md §6.2).
+#: Coordinator poll cadence in seconds (home-assistant.md §6.2). v1 has no
+#: WebSocket stream (core-api.md §10), so polling is the primary source.
 DEFAULT_UPDATE_INTERVAL: Final = 60
 MIN_UPDATE_INTERVAL: Final = 10
 MAX_UPDATE_INTERVAL: Final = 600
@@ -90,20 +91,6 @@ CALIBRATION_STATES: Final = (
     "calibrated",
     "degraded",
 )
-
-# WebSocket event types (home-assistant.md §5.2).
-EVENT_TYPE_STATE: Final = "state"
-EVENT_TYPE_HEALTH: Final = "health"
-EVENT_TYPE_FIRMWARE: Final = "firmware"
-
-# WS stream constants. The subprotocol is required by core-api.md §10.1; the
-# reconnect policy (base 1 s, factor 2, cap 30 s, jitter) is from §10.5.
-WS_PATH: Final = "/api/v1/stream"
-WS_SUBPROTOCOL: Final = "aquila.v1"
-WS_HEARTBEAT_S: Final = 30
-WS_RECONNECT_BASE: Final = 1.0
-WS_RECONNECT_FACTOR: Final = 2.0
-WS_RECONNECT_MAX: Final = 30.0
 
 PLATFORMS: Final = [
     Platform.BINARY_SENSOR,

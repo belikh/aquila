@@ -14,3 +14,7 @@
 # OS / editor
 .DS_Store
 *.swp
+
+# Python
+__pycache__/
+*.pyc

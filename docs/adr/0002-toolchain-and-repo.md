@@ -133,7 +133,9 @@ Negative / accepted costs:
 ## Follow-ups
 
 - Land `xtask` (`dag-check`, `check-scaffolding`, `coverage-floor`,
-  `claims-verify`, `ledger-comment`) with the first crates, per ADR-0001.
+  `claims-verify`) with the first crates, per ADR-0001. (`ledger-comment` was
+  dropped: the ledger diff is posted with `gh pr comment`, not a bespoke
+  subcommand — `sister-issues-specs.md` D41.)
 - Reconcile the three flagged divergences in `docs/spec/repository-tooling.md`
   §13 with ADR-0001 and the measurement owner: the `architecture.md` §2/§5 layer
   labels, the ledger path, and the HA tree location.

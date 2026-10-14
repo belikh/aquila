@@ -50,7 +50,6 @@ from .const import (
     SERVICE_INSTALL_FIRMWARE,
 )
 from .coordinator import AquilaCoordinator, AquilaRuntimeData
-from .stream import AquilaStreamClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -113,28 +112,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = AquilaCoordinator(hass, client, update_interval, instance_id, entry)
 
-    def _on_connected() -> None:
-        # A fresh WS connection restarts its sequence; resync the snapshot.
-        coordinator.reset_seq()
-        coordinator.set_stream_connected(True)
-        hass.async_create_task(coordinator.async_request_refresh())
-
-    def _on_disconnected() -> None:
-        coordinator.set_stream_connected(False)
-
-    def _on_gap() -> None:
-        # A seq gap forces a resync (home-assistant.md §5.2).
-        hass.async_create_task(coordinator.async_request_refresh())
-
-    stream = AquilaStreamClient(
-        hass,
-        client,
-        on_event=coordinator.apply_event,
-        on_connected=_on_connected,
-        on_disconnected=_on_disconnected,
-        on_gap=_on_gap,
-    )
-
     runtime = AquilaRuntimeData(
         client=client,
         coordinator=coordinator,
@@ -144,12 +121,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_interval=update_interval,
         expose_floors=expose_floors,
         expose_room_vitals=expose_room_vitals,
-        stream=stream,
     )
     domain_data[entry.entry_id] = runtime
 
+    # v1 has no WebSocket stream (core-api.md §10); the first refresh is the
+    # initial load and the coordinator's interval is the ongoing source.
     await coordinator.async_config_entry_first_refresh()
-    await stream.async_start()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -161,16 +138,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry, stopping the stream and tearing down shared state."""
+    """Unload a config entry and tear down shared state."""
     domain_data = hass.data.get(DOMAIN, {})
-    runtime: AquilaRuntimeData | None = domain_data.get(entry.entry_id)
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if not unload_ok:
         return False
 
-    if runtime is not None and runtime.stream is not None:
-        await runtime.stream.async_stop()
     domain_data.pop(entry.entry_id, None)
 
     remaining = [

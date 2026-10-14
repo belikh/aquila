@@ -2,8 +2,9 @@
 //!
 //! This is deliberately **not** an async server and carries no framework: the
 //! control plane is loopback-only, small, and speaks one request per
-//! connection (`core-api.md` §2). It parses only the request line and whether an
-//! upgrade was requested; headers and bodies are not modelled yet.
+//! connection (`core-api.md` §2). It parses the request line, the headers the
+//! trust boundary needs, and whether an upgrade was requested; request bodies
+//! are not modelled (no v1 route reads one).
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -13,15 +14,47 @@ use crate::error::ApiError;
 /// The largest request head this reader will accept, in bytes.
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
-/// A parsed request line plus the one header fact the router needs.
-#[derive(Debug, Clone)]
+/// A parsed request line plus the header facts the router and the trust
+/// boundary need.
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Request {
     /// The HTTP method, upper-case.
     pub method: String,
-    /// The request target, including any query string.
+    /// The request path, without any query string.
     pub path: String,
+    /// The raw query string (no leading `?`), empty when absent.
+    pub query: String,
+    /// Header name/value pairs, names lower-cased and values trimmed.
+    pub headers: Vec<(String, String)>,
     /// Whether `Upgrade: websocket` was present.
     pub websocket: bool,
+}
+
+impl Request {
+    /// The first value of a header, matched case-insensitively.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        let name = name.to_ascii_lowercase();
+        self.headers
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// Whether the query string carries a token-shaped credential.
+    ///
+    /// Tokens in a query string leak into logs and referrers and are always
+    /// rejected (`core-api.md` §3.2).
+    #[must_use]
+    pub fn query_has_credential(&self) -> bool {
+        self.query.split('&').any(|pair| {
+            let key = pair.split('=').next().unwrap_or("").to_ascii_lowercase();
+            matches!(
+                key.as_str(),
+                "token" | "access_token" | "api_key" | "apikey"
+            )
+        })
+    }
 }
 
 /// Read one request head from `stream`.
@@ -53,14 +86,34 @@ pub(crate) fn read_request(stream: &mut TcpStream) -> Result<Request, ApiError> 
     let request_line = lines.next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_string();
-    let path = parts.next().unwrap_or_default().to_string();
-    if method.is_empty() || path.is_empty() {
+    let target = parts.next().unwrap_or_default().to_string();
+    if method.is_empty() || target.is_empty() {
         return Err(ApiError::Http("malformed request line".to_string()));
     }
-    let websocket = head.to_ascii_lowercase().contains("upgrade: websocket");
+
+    let (path, query) = match target.split_once('?') {
+        Some((path, query)) => (path.to_string(), query.to_string()),
+        None => (target, String::new()),
+    };
+
+    let mut headers = Vec::new();
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+        }
+    }
+    let websocket = headers
+        .iter()
+        .any(|(name, value)| name == "upgrade" && value.to_ascii_lowercase().contains("websocket"));
+
     Ok(Request {
         method,
         path,
+        query,
+        headers,
         websocket,
     })
 }
@@ -92,8 +145,10 @@ fn reason_phrase(status: u16) -> &'static str {
     match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         404 => "Not Found",
         501 => "Not Implemented",
+        503 => "Service Unavailable",
         _ => "Status",
     }
 }

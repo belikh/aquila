@@ -390,14 +390,14 @@ external reference point is superseded for that scope.
 
 ## 8. Reproducer and ledger
 
-Proposed shape of a reproducer (tooling TBD by ADR):
+The evaluation harness (`aquila-evaluation::Harness::run`) is the reproducer:
+it replays recorded fixtures through the real pipeline and writes ledger rows.
+There is **no `cargo xtask eval` subcommand** — it was struck, not left
+declared-but-absent (`sister-issues-specs.md` D41/D45); a bespoke xtask
+reproducer would duplicate the harness and is deferred until a real need
+appears.
 
-```
-cargo xtask eval --protocol loso --metric torso_pck20 --commit <sha> \
-    --fixtures <digest> --out ledger.json
-```
-
-Guarantees:
+Guarantees (enforced by the harness, not by a shell command):
 
 - Runs offline from recorded fixtures; no nodes, no camera, no strap.
 - Deterministic: fixed seed, pinned model and calibration digests; identical

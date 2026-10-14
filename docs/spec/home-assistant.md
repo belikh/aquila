@@ -136,7 +136,7 @@ custom_components/aquila/
 ├── manifest.json
 ├── const.py             # DOMAIN, defaults, metric vocabulary
 ├── api.py               # aiohttp REST client (private HTTP API)
-├── stream.py            # aiohttp WS client, reconnect/backoff, seq handling
+├── stream.py            # HTTP polling transport (v1 has no WS; see §5.2)
 ├── coordinator.py       # AquilaCoordinator(DataUpdateCoordinator)
 ├── config_flow.py       # config + options + reauth
 ├── binary_sensor.py     # presence, occupancy, connectivity, self-test
@@ -159,7 +159,7 @@ custom_components/aquila/
   "documentation": "https://github.com/belikh/aquila",
   "issue_tracker": "https://github.com/belikh/aquila/issues",
   "integration_type": "hub",
-  "iot_class": "local_push",
+  "iot_class": "local_polling",
   "version": "0.1.0",
   "dependencies": ["frontend", "http"],
   "requirements": [],
@@ -172,8 +172,10 @@ custom_components/aquila/
 - `requirements` is empty: the WS and REST clients use `aiohttp`, which HA
   already ships; no third-party dependency is pulled into HA Core. This is a
   deliberate constraint — a hub integration must not drag in its own HTTP stack.
-- `iot_class: local_push`: state arrives over the WS stream; the coordinator's
-  HTTP poll is a slow reconciliation/health probe, not the primary source.
+- `iot_class: local_polling`: v1 has no WebSocket stream (`core-api.md` §10), so
+  the coordinator polls `GET /api/v1/state` (and the node/firmware resources) on
+  its interval. This is the primary source in v1; when the stream lands it
+  becomes push with the poll demoted to reconciliation.
 - `integration_type: hub`: one config entry represents one Aquila core
   instance, to which many node/zone devices belong.
 
@@ -245,7 +247,8 @@ at `belikh/aquila`:
   a structured snapshot: zone tree, per-node drift/calibration state, model
   bundle versions, ledger/measurement status. Flattening that into retained
   topics loses types and makes schema evolution dangerous. A versioned JSON
-  snapshot plus a sequenced event stream is safer and easier to migrate.
+  snapshot (plus, when the stream lands, a sequenced event stream) is safer and
+  easier to migrate.
 - **MQTT discovery would fight the entity model.** Aquila entities carry
   zone-scoped unique_ids, config subentries and diagnostics; building them from
   MQTT discovery payloads is fragile compared with a direct, typed snapshot.
@@ -261,42 +264,51 @@ MQTT is not forbidden forever; it is simply the wrong seam for v1. If a future
 multi-host topology appears, MQTT or the private API can be reconsidered behind
 the same component.
 
-### 5.2 HTTP + WS API (the actual contract)
+### 5.2 HTTP API (the actual contract)
 
-Private, local, JSON, versioned. The core advertises its contract version; the
-component refuses or degrades on mismatch (§9).
+Private, local, JSON, versioned. **The endpoint contract is `core-api.md` §6**;
+this section names only the read-only subset the component consumes. There are
+no aliases and no second route table (`sister-issues-specs.md` D13). The core
+advertises its contract version; the component refuses or degrades on mismatch
+(§9).
 
-REST (all `GET` unless noted), base `http://aquila-core:8099`:
+Polls (all `GET`), base `http://aquila-core:8099`:
 
 | Path | Purpose |
 | --- | --- |
 | `/api/v1/health` | `instance_id`, `api_version`, `min_component_version`, uptime, node counts, calibration state |
 | `/api/v1/schema` | zone tree (home → floor → room), metric vocabulary, units |
 | `/api/v1/state` | full current snapshot: every zone's presence/vitals + system health (coordinator poll + initial load) |
-| `/api/v1/nodes` | per-node identity, MAC, floor/room, online state, clock-drift estimate |
-| `/api/v1/firmware` | firmware image store manifest (versions, sha256, target chip) — see `firmware-ota.md` §7 |
+| `/api/v1/nodes` | per-node identity, MAC, floor/room, online state, firmware version |
+| `/api/v1/firmware` | firmware image store manifest (versions, sha256, target chip) — `firmware-ota.md` §7 |
 | `/api/v1/nodes/{node}/firmware` | installed version, boot partition, pending state, last OTA result |
-| `/api/v1/nodes/{node}/firmware/install` (`POST`) | begin a firmware OTA for a node |
+| `/api/v1/nodes/{node}/firmware/install` (`POST`) | begin a firmware OTA for a node (typed `503 ota_unavailable` until OTA lands) |
 | `/api/v1/nodes/{node}/firmware/job` | OTA job progress/state |
 | `/api/v1/nodes/{node}/firmware/abort` (`POST`) | abort an in-progress OTA |
+| `/api/v1/metrics/snapshot` | commit-keyed metric snapshot (`core-api.md` §13) |
 
-WS: `ws://aquila-core:8099/api/v1/stream`
+#### Transport: polling, not WebSocket (v1)
 
-- Server → client events, each carrying a monotonic `seq` and a `ts`:
-  `{"type":"state","seq":123,"ts":...,"zone_id":"living_room",
-    "measurements":{"presence":true,"breathing_rate":13.2,"heart_rate":62}}`
-  and `{"type":"health","seq":124,"ts":...,"core_connected":true,"nodes_online":9}`.
-- A `firmware` event carries per-node OTA progress for the `update` entity:
-  `{"type":"firmware","seq":125,"ts":...,"node":"aa:bb:...","state":"downloading","progress":0.42}`
-  (see `firmware-ota.md` §7).
-- The component ignores any event whose `seq` is not greater than the last
-  applied `seq`; timestamps are informational only (software time sync is the
-  core's concern, not HA's).
-- **Auth:** since 8099 is not published to the LAN, the default is trusted
-  local access with **no token**. If a deployment ever exposes the API beyond
-  the `hassio` network, a `X-Aquila-Token` bearer is required and is set in the
-  config flow. Default-off auth is honest about the trust boundary rather than
-  pretending a token adds security on an unpublished port.
+v1 serves **no WebSocket**: `GET /api/v1/stream` returns a typed `501`
+(`core-api.md` §10). The component therefore polls the resources above on its
+coordinator interval (default 60 s) and MUST NOT open a socket or
+reconnect-loop. Each `/api/v1/state` response is the same zone/health snapshot
+the stream would have pushed; a failed poll marks the core unreachable and
+entities unavailable until the next successful poll (`manifest.json` is
+`iot_class: local_polling`).
+
+- Poll responses are plain resources with no `seq`; staleness is judged from the
+  component's own successful-poll time.
+- A failed poll backs off (base 1 s, factor 2, cap 30 s, with jitter) and flips
+  `core_connected`; there is no gap/resync concept because there is no sequence.
+- **Auth (the loopback/ingress trust boundary).** The core authenticates every
+  request by exactly one of three modes (`core-api.md` §3): a **loopback peer**,
+  the add-on **ingress identity header**, or a **local bearer token**. Because
+  8099 is not LAN-published and the component and core share the add-on's
+  private network, the default needs no token; a bearer token
+  (`Authorization: Bearer …`) may be configured for other placements. A token in
+  a **query string is always rejected** (`401`); the component never puts a
+  credential in the URL.
 
 ## 6. Entity model
 
@@ -369,36 +381,27 @@ Rules:
 - `diagnostics.py` dumps the coordinator snapshot and config entry with node MACs
   and any token redacted.
 
-### 6.2 Coordinator and streaming
+### 6.2 Coordinator and polling
 
 ```python
 class AquilaCoordinator(DataUpdateCoordinator[dict]):
-    """Caches the latest core snapshot; WS push is primary, HTTP poll reconciles."""
+    """Caches the latest core snapshot; the HTTP poll is the v1 source."""
 
-    def __init__(self, hass, client, stream, update_interval):
+    def __init__(self, hass, client, update_interval):
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=update_interval)
         self._client = client
-        self._stream = stream
-        self._seq = 0
 
     async def _async_update_data(self) -> dict:
-        # slow reconciliation / health probe; also the initial load
-        return await self._client.async_get_state()
-
-    def apply_event(self, event: dict) -> None:
-        if event["seq"] <= self._seq:      # stale, ignore
-            return
-        self._seq = event["seq"]
-        self.data = merge(self.data, event)  # partial merge, keep untouched zones
-        self.async_set_updated_data(self.data)
+        # primary source and health probe; also the initial load
+        return await collect_snapshot(self._client)
 ```
 
-- `_async_update_data` performs `GET /api/v1/state`; the interval is slow
-  (default 60 s, configurable). This is the reconciliation and health path.
-- A separate `AquilaStreamClient` owns the WS connection with reconnect and
-  exponential backoff; on each message it calls `coordinator.apply_event`. A WS
-  drop sets `core_connected = false` via the health snapshot and flips
-  `coordinator.last_update_success`, which marks entities unavailable.
+- `_async_update_data` performs `GET /api/v1/state` and, best-effort, `GET
+  /api/v1/nodes` and `GET /api/v1/firmware`; the interval defaults to 60 s and
+  is configurable. This is both the initial load and the ongoing source in v1.
+- There is no `AquilaStreamClient` in v1 (no WebSocket). A failed poll flips
+  `coordinator.last_update_success`, which marks entities unavailable and writes
+  `core_connected = false`; the next successful poll restores both.
 - Entities are `CoordinatorEntity` subclasses with `_attr_should_poll = False`;
   they read from `coordinator.data` and never hold their own transport.
 - On setup failure to reach the core, the config entry raises
@@ -503,6 +506,8 @@ navigation entry and the connection health shown to HA users.
   if broadcast discovery is added.
 - **Per-floor person count** and **per-zone presence confidence entities**:
   deferred until cross-floor fusion meets the accuracy bars.
-- **Token auth**: default-off because 8099 is unpublished; revisit only if a
-  non-`hassio` deployment is ever supported.
+- **Token auth**: the loopback/ingress trust boundary is the default credential
+  (`core-api.md` §3); a bearer token is optional and used only for placements
+  outside the add-on's private network. A token is never placed in a query
+  string.
 - **armv7/armhf**: unsupported by decision; no build, no claim.

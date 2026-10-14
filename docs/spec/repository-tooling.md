@@ -55,6 +55,7 @@ aquila/
 ├── .aquila/                 # runtime state: the commit-keyed ledger (see §1.3)
 ├── tools/
 │   ├── dag.toml             # dependency-DAG allow-list (the guardrail's data)
+│   ├── coverage-floor.txt   # whole-workspace line-coverage floor (coverage-floor)
 │   ├── no-agent-scaffolding.txt
 │   └── versions.env         # pinned external tool versions used by CI
 ├── docs/
@@ -62,7 +63,8 @@ aquila/
 │   ├── adr/
 │   ├── research/
 │   └── agents/              # human-authored process docs (issue tracker, etc.)
-├── xtask/                   # repo tooling crate (DAG check, scaffolding check, eval)
+├── xtask/                   # repo tooling crate (dag-check, check-scaffolding,
+│                            #   coverage-floor, claims-verify)
 └── .github/
     └── workflows/
 ```
@@ -837,7 +839,8 @@ jobs:
             ledger-diff.md
       - name: PR comment
         if: github.event_name == 'pull_request'
-        run: cargo xtask ledger-comment --report ledger-diff.md
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file ledger-diff.md
 
   # On main only: append the ledger and commit it (non-squashed history kept).
   append:

@@ -1,8 +1,8 @@
 """Coordinator, shared entity base and snapshot helpers for Aquila.
 
-``AquilaCoordinator`` caches the latest core snapshot. The WS push is the
-primary source; the HTTP poll is a slow reconciliation and health probe
-(home-assistant.md §6.2).
+``AquilaCoordinator`` caches the latest core snapshot. v1 has no WebSocket stream
+(``core-api.md`` §10), so the HTTP poll is the primary source and the health
+probe (home-assistant.md §6.2).
 
 The shared ``AquilaEntity`` base and the device-info builders live here rather
 than in a separate module so the component file set matches
@@ -27,38 +27,11 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .api import AquilaApiClient, AquilaAuthError, AquilaError
-from .const import (
-    DOMAIN,
-    EVENT_TYPE_FIRMWARE,
-    EVENT_TYPE_HEALTH,
-    EVENT_TYPE_STATE,
-    HEALTH_CALIBRATION_STATE,
-    HEALTH_CLOCK_DRIFT_MS,
-    HEALTH_CORE_CONNECTED,
-    HEALTH_LAST_PACKET_TS,
-    HEALTH_NODES_ONLINE,
-    HEALTH_NODES_TOTAL,
-    HEALTH_SELF_TEST_OK,
-    MANUFACTURER,
-    ZONE_KIND_HOME,
-)
+from .const import DOMAIN, MANUFACTURER, ZONE_KIND_HOME
+from .stream import async_collect_snapshot
+
 
 _LOGGER = logging.getLogger(__name__)
-
-# Health fields carried by a ``health`` stream event and folded into the
-# snapshot (home-assistant.md §5.2/§6).
-_HEALTH_FIELDS = (
-    HEALTH_CORE_CONNECTED,
-    HEALTH_NODES_ONLINE,
-    HEALTH_NODES_TOTAL,
-    HEALTH_CALIBRATION_STATE,
-    HEALTH_CLOCK_DRIFT_MS,
-    HEALTH_LAST_PACKET_TS,
-    HEALTH_SELF_TEST_OK,
-)
-
-# Firmware fields carried by a ``firmware`` stream event (firmware-ota.md §7).
-_FIRMWARE_EVENT_FIELDS = ("state", "progress")
 
 
 @dataclass
@@ -73,11 +46,10 @@ class AquilaRuntimeData:
     update_interval: int
     expose_floors: bool
     expose_room_vitals: bool
-    stream: Any = None
 
 
 class AquilaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Cache the latest core snapshot; WS push is primary, HTTP poll reconciles."""
+    """Cache the latest core snapshot; the HTTP poll is the v1 source."""
 
     def __init__(
         self,
@@ -96,111 +68,21 @@ class AquilaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._client = client
         self._entry = entry
         self.instance_id = instance_id
-        self._seq = 0
-        #: Whether the WS stream currently has a live connection.
-        self.stream_connected = False
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Reconcile via ``GET /api/v1/state``; also the initial load.
+        """Poll the canonical snapshot endpoints (home-assistant.md §6.2).
 
-        Node identity and the firmware manifest are fetched best-effort and
-        merged under ``nodes``/``firmware`` so the ``update`` platform has data
-        (firmware-ota.md §7). Their absence never fails the reconciliation.
+        ``GET /api/v1/state`` is required; nodes and the firmware manifest are
+        fetched best-effort by :func:`async_collect_snapshot`. A failure raises
+        ``UpdateFailed`` so HA marks entities unavailable until the next poll.
         """
         try:
-            state = await self._client.async_get_state()
+            return await async_collect_snapshot(self._client)
         except AquilaAuthError as err:
             self._trigger_reauth()
             raise UpdateFailed("Authentication with the Aquila core failed") from err
         except AquilaError as err:
             raise UpdateFailed(str(err)) from err
-
-        snapshot: dict[str, Any] = dict(state) if isinstance(state, dict) else {}
-        snapshot.setdefault("zones", {})
-        snapshot.setdefault("health", {})
-
-        try:
-            nodes = await self._client.async_get_nodes()
-        except AquilaError as err:
-            _LOGGER.debug("Node reconciliation failed: %s", err)
-        else:
-            snapshot["nodes"] = _normalise_nodes(nodes)
-
-        try:
-            snapshot["firmware_manifest"] = await self._client.async_get_firmware_manifest()
-        except AquilaError as err:
-            _LOGGER.debug("Firmware manifest reconciliation failed: %s", err)
-
-        # Preserve stream-derived fields across a poll: a poll must not claim
-        # the core is connected when the WS is down.
-        snapshot["health"].setdefault(
-            HEALTH_CORE_CONNECTED, self.stream_connected
-        )
-        return snapshot
-
-    def apply_event(self, event: dict[str, Any]) -> None:
-        """Apply one stream event to the cached snapshot (home-assistant.md §6.2)."""
-        seq = event.get("seq")
-        if isinstance(seq, int):
-            if seq <= self._seq:
-                return  # stale, ignore
-            self._seq = seq
-
-        if self.data is None:
-            self.data = {"zones": {}, "health": {}}
-
-        event_type = event.get("type")
-        if event_type == EVENT_TYPE_STATE:
-            self._apply_state_event(event)
-        elif event_type == EVENT_TYPE_HEALTH:
-            self._apply_health_event(event)
-        elif event_type == EVENT_TYPE_FIRMWARE:
-            self._apply_firmware_event(event)
-        else:
-            return
-
-        self.async_set_updated_data(self.data)
-
-    def _apply_state_event(self, event: dict[str, Any]) -> None:
-        zone_id = event.get("zone_id")
-        if not zone_id:
-            return
-        measurements = event.get("measurements")
-        if not isinstance(measurements, dict):
-            return
-        zones = self.data.setdefault("zones", {})
-        zone = zones.setdefault(zone_id, {})
-        zone.update(measurements)  # partial merge; untouched zones are kept
-
-    def _apply_health_event(self, event: dict[str, Any]) -> None:
-        health = self.data.setdefault("health", {})
-        for field in _HEALTH_FIELDS:
-            if field in event:
-                health[field] = event[field]
-
-    def _apply_firmware_event(self, event: dict[str, Any]) -> None:
-        node = event.get("node")
-        if not node:
-            return
-        nodes = self.data.setdefault("nodes", {})
-        node_state = nodes.setdefault(node, {"mac": node})
-        firmware = node_state.setdefault("firmware", {})
-        state = event.get("state")
-        if state is not None:
-            firmware["state"] = state
-            firmware["in_progress"] = state not in ("idle", "none", "complete", "failed")
-        progress = event.get("progress")
-        if isinstance(progress, (int, float)):
-            firmware["update_percentage"] = float(progress) * 100.0
-
-    def reset_seq(self) -> None:
-        """Reset the applied sequence on a new WS connection.
-
-        ``seq`` is per-connection (core-api.md §10.2); without this reset the
-        first frames of a reconnected stream would be dropped as stale and a gap
-        would be misread.
-        """
-        self._seq = 0
 
     def _trigger_reauth(self) -> None:
         """Start the reauth flow when the core rejects the token (home-assistant.md §7)."""
@@ -211,49 +93,12 @@ class AquilaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         with suppress(Exception):
             self.hass.async_create_task(self._entry.async_start_reauth(self.hass))
 
-    def set_stream_connected(self, connected: bool) -> None:
-        """Record stream availability and reflect it in the snapshot.
-
-        A WS drop writes ``core_connected = false`` and flips
-        ``last_update_success`` so entities become unavailable; reconnect
-        restores both (home-assistant.md §6.2).
-        """
-        self.stream_connected = connected
-        if self.data is not None:
-            self.data.setdefault("health", {})[HEALTH_CORE_CONNECTED] = connected
-            self.async_update_listeners()
-        self.last_update_success = connected
-
     def home_zone_id(self) -> str | None:
         """Return the zone id of the home-level zone, if present."""
         for zone_id, zone in (self.data or {}).get("zones", {}).items():
             if zone.get("kind") == ZONE_KIND_HOME:
                 return zone_id
         return None
-
-
-def _normalise_nodes(payload: Any) -> dict[str, Any]:
-    """Normalise the ``/api/v1/nodes`` payload into a MAC-keyed mapping."""
-    if isinstance(payload, dict):
-        items = payload.get("items")
-        if isinstance(items, list):
-            raw_nodes = items
-        else:
-            # Already MAC-keyed.
-            return {str(k): v for k, v in payload.items() if isinstance(v, dict)}
-    elif isinstance(payload, list):
-        raw_nodes = payload
-    else:
-        return {}
-
-    nodes: dict[str, Any] = {}
-    for node in raw_nodes:
-        if not isinstance(node, dict):
-            continue
-        mac = node.get("mac") or node.get("id")
-        if mac:
-            nodes[str(mac)] = node
-    return nodes
 
 
 class AquilaEntity(CoordinatorEntity[AquilaCoordinator]):
@@ -277,8 +122,8 @@ class AquilaEntity(CoordinatorEntity[AquilaCoordinator]):
 
     @property
     def available(self) -> bool:
-        """Available only while the poll succeeds and the stream is connected."""
-        return self.coordinator.last_update_success and self.coordinator.stream_connected
+        """Available only while the last poll succeeded."""
+        return self.coordinator.last_update_success
 
     @property
     def health(self) -> dict[str, Any]:

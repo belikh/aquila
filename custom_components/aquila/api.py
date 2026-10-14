@@ -133,14 +133,16 @@ class AquilaApiClient:
         return self._token
 
     def auth_headers(self) -> dict[str, str]:
-        """Headers carrying the optional token.
+        """Headers carrying the optional bearer token.
 
-        home-assistant.md §5.2 specifies ``X-Aquila-Token``; the default has no
-        token because port 8099 is not published to the LAN. A token is only
-        required when the API is exposed beyond the ``hassio`` network.
+        core-api.md §3.3 specifies ``Authorization: Bearer <token>``. The
+        loopback/ingress trust boundary is the default credential, so no token
+        is sent unless one is configured; a token is only needed when the API is
+        reached outside the add-on's private network. A token is never placed in
+        a query string (the core rejects that with ``401``).
         """
         if self._token:
-            return {"X-Aquila-Token": self._token}
+            return {"Authorization": f"Bearer {self._token}"}
         return {}
 
     async def _request(

@@ -1,0 +1,4 @@
+# Whole-workspace line-coverage floor for `cargo xtask coverage-floor`
+# (testing.md §6 sets the per-module floors; this is the conservative floor the
+# whole workspace must clear). One number; blank lines and `#` comments ignored.
+70

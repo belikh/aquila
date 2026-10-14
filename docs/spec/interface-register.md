@@ -52,7 +52,7 @@ These types are declared exactly once. A second declaration anywhere is a defect
 | `aquila-addon` | binary | Composition root: wires adapters, serves dashboard + ingress; no domain logic. | any module crate | `architecture.md` §9, `home-assistant.md` §3 |
 | `aquila-capture` | binary (dev) | `record`/`synth`/`verify`/`provision` a Session; regenerates `node_wire.h`. | `aquila-types`, `aquila-session`, `aquila-sources`, `aquila-simulator`, `aquila-wire` | `capture-and-firmware.md` §8.3, §9.4 |
 | `aquila-testkit` | lib (dev-only) | Fakes, in-memory adapters, a deterministic generator, a virtual live node, fixtures. | any module crate, via `[dev-dependencies]` only | `testing.md` §3 |
-| `xtask` | binary (tooling) | `dag-check`, `check-scaffolding`, coverage/claims/ledger helpers. | any crate; never a product dependency | `repository-tooling.md` §5 |
+| `xtask` | binary (tooling) | `dag-check`, `check-scaffolding`, `coverage-floor`, `claims-verify`. | any crate; never a product dependency | `repository-tooling.md` §5 |
 
 ## Seams and their adapters
 

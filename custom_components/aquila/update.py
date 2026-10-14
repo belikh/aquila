@@ -100,12 +100,13 @@ class AquilaFirmwareUpdateEntity(AquilaEntity, UpdateEntity):
 
     @property
     def latest_version(self) -> str | None:
+        # The core owns the latest version per node (firmware-ota.md §7); the
+        # component presents it and does not rank images itself
+        # (sister-issues-firmware-ha.md F13).
         value = self._firmware.get("latest_version")
         if value is not None:
             return str(value)
-        # Fall back to the newest manifest version if the per-node endpoint has
-        # not reported one yet (firmware-ota.md §7).
-        return self._manifest_latest() or self.installed_version
+        return self.installed_version
 
     @property
     def in_progress(self) -> bool:
@@ -137,17 +138,3 @@ class AquilaFirmwareUpdateEntity(AquilaEntity, UpdateEntity):
         """Abort an in-progress OTA."""
         await self._runtime.client.async_abort_firmware(self._mac)
         await self.coordinator.async_request_refresh()
-
-    def _manifest_latest(self) -> str | None:
-        manifest = (self.coordinator.data or {}).get("firmware_manifest") or {}
-        items = manifest.get("items") if isinstance(manifest, dict) else None
-        if not isinstance(items, list) or not items:
-            return None
-        versions = [
-            entry.get("version")
-            for entry in items
-            if isinstance(entry, dict) and entry.get("version") is not None
-        ]
-        if not versions:
-            return None
-        return str(versions[-1])
