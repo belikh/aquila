@@ -237,8 +237,8 @@ fn install_hash_listener(route: RwSignal<Route>) {
         focus_main();
     });
     if let Some(window) = web_sys::window() {
-        let _ = window
-            .add_event_listener_with_callback("hashchange", closure.as_ref().unchecked_ref());
+        let _ =
+            window.add_event_listener_with_callback("hashchange", closure.as_ref().unchecked_ref());
     }
     // The listener lives for the whole page session; forgetting the closure is
     // deliberate and leaks nothing that matters for a single-page app.

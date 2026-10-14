@@ -10,9 +10,7 @@
 //!
 //! Australian English throughout (normalise, serialisation, behaviour).
 
-use crate::contract::{
-    Health, NewRoom, Node, NodePair, Room, Schema, Snapshot,
-};
+use crate::contract::{Health, NewRoom, Node, NodePair, Room, Schema, Snapshot};
 
 /// A floor with its rooms, ordered for display.
 #[derive(Debug, Clone, PartialEq)]

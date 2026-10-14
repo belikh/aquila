@@ -146,13 +146,7 @@ impl Biquad {
 pub fn bandpass(x: &[f32], coeffs: &BiquadCoeffs) -> Vec<f32> {
     let mut buffer = x.to_vec();
     for section in &coeffs.sections {
-        let (b0, b1, b2, a1, a2) = (
-            section.b0,
-            section.b1,
-            section.b2,
-            section.a1,
-            section.a2,
-        );
+        let (b0, b1, b2, a1, a2) = (section.b0, section.b1, section.b2, section.a1, section.a2);
         let mut x1 = 0.0_f32;
         let mut x2 = 0.0_f32;
         let mut y1 = 0.0_f32;

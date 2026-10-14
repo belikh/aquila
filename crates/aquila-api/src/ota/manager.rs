@@ -362,4 +362,3 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
-

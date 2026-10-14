@@ -3,6 +3,10 @@
 Everything an implementation agent needs is under `docs/`. Read `CONTEXT.md` first, then the
 spec index, then the ADRs relevant to what you are touching.
 
+To install and operate Aquila, see [`INSTALL.md`](INSTALL.md). For the honest
+state of v1 (what is verifiably done and what remains hardware-gated), see the
+"v1 status" section of the top-level [`README.md`](../README.md).
+
 ## Layout
 
 | Path | What lives there | Authority |
@@ -58,7 +62,12 @@ row is `target`.
 - Research: paired datasets, plugin architectures, ESP32-as-SDR, ESP32-C5 dual-band, node backhaul.
 - Plan: v1 wayfinder map (#1) and tickets published at https://github.com/belikh/aquila/issues;
   `docs/plan/` mirrors them (`docs/plan/issues.md` maps plan numbers to issue numbers).
-- Firmware OTA is **specified but not implemented in v1**, and ticketed: #13 (control channel +
-  core image store), #14 (ESP32-S3 OTA agent), #15 (Home Assistant `update` entity). The firmware
-  has no OTA handler and the `0x0E`–`0x14` opcodes are absent from `node_wire.h`; the core's OTA
-  endpoints fail closed with `503 ota_unavailable`.
+- Firmware OTA is **implemented and unit-tested but not hardware-verified**: #13 (core OTA control
+  channel + signed image store), #14 (ESP32-S3 A/B OTA agent with Ed25519 and rollback) and #15
+  (Home Assistant `update` entity) have landed. The Rust/control paths and the Python entity are
+  tested; the firmware compiles but has never been flashed or run an OTA on a device.
+- Packaging and release automation for a reproducible add-on image and a HACS `aquila.zip` asset are
+  prepared (`.github/workflows/`, `aquila_core/Dockerfile`, `tools/package-hacs.sh`). The image is
+  inspection-validated only in this environment (no container engine); no `v1.0.0` tag or release
+  has been created, because the v1 accuracy bars remain hardware-gated. See the top-level
+  [`README.md`](../README.md) "v1 status".

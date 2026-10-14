@@ -329,10 +329,7 @@ impl CoreApi for FakeCoreApi {
             }
             ("POST", p) if p.ends_with("/commit") => {
                 let mut state = self.lock();
-                let mut session = state
-                    .calibration
-                    .clone()
-                    .ok_or_else(ApiError::not_found)?;
+                let mut session = state.calibration.clone().ok_or_else(ApiError::not_found)?;
                 session.status = "committed".to_string();
                 session.revision += 1;
                 state.calibration = Some(session.clone());
@@ -341,10 +338,7 @@ impl CoreApi for FakeCoreApi {
             }
             ("POST", p) if p.ends_with("/abort") => {
                 let mut state = self.lock();
-                let mut session = state
-                    .calibration
-                    .clone()
-                    .ok_or_else(ApiError::not_found)?;
+                let mut session = state.calibration.clone().ok_or_else(ApiError::not_found)?;
                 session.status = "aborted".to_string();
                 session.revision += 1;
                 state.calibration = Some(session.clone());
@@ -353,19 +347,12 @@ impl CoreApi for FakeCoreApi {
             }
             ("POST", p) if p.ends_with("/complete") || p.ends_with("/skip") => {
                 let state = self.lock();
-                let session = state
-                    .calibration
-                    .clone()
-                    .ok_or_else(ApiError::not_found)?;
+                let session = state.calibration.clone().ok_or_else(ApiError::not_found)?;
                 Ok(serde_json::to_value(session)
                     .map_err(|error| ApiError::Decode(error.to_string()))?)
             }
             ("POST", p) if p.contains("/rooms") => {
-                let floor_id = p
-                    .split('/')
-                    .nth(2)
-                    .unwrap_or_default()
-                    .to_string();
+                let floor_id = p.split('/').nth(2).unwrap_or_default().to_string();
                 let name = body_field(&body, "name").unwrap_or_else(|| "Room".to_string());
                 let label = body_field(&body, "label").unwrap_or_else(|| "other".to_string());
                 let id = self.mint("rom");

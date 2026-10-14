@@ -124,7 +124,11 @@ fn first_word_invalid_rides_the_flags_byte() {
     frame.first_word_invalid = false;
     let bytes = encode_datagram(&frame);
     assert_eq!(bytes[15], 0);
-    assert!(!decode_datagram(&bytes).expect("decode clean").first_word_invalid);
+    assert!(
+        !decode_datagram(&bytes)
+            .expect("decode clean")
+            .first_word_invalid
+    );
 }
 
 // ---------------------------------------------------------------------------

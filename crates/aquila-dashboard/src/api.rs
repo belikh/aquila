@@ -165,7 +165,10 @@ pub trait CoreApi: Clone + 'static {
     /// `PATCH /home` with `If-Match`.
     async fn patch_home(&self, patch: &HomePatch, revision: i64) -> Result<Home, ApiError> {
         let body = to_value(patch)?;
-        decode(self.send_json("PATCH", "/home", Some(body), Some(revision)).await?)
+        decode(
+            self.send_json("PATCH", "/home", Some(body), Some(revision))
+                .await?,
+        )
     }
 
     /// `POST /floors` (idempotent by key, `core-api.md` §5).
@@ -185,13 +188,17 @@ pub trait CoreApi: Clone + 'static {
     /// `PATCH /rooms/{roomId}`.
     async fn patch_room(&self, id: &str, patch: Value, revision: i64) -> Result<Room, ApiError> {
         let path = format!("/rooms/{id}");
-        decode(self.send_json("PATCH", &path, Some(patch), Some(revision)).await?)
+        decode(
+            self.send_json("PATCH", &path, Some(patch), Some(revision))
+                .await?,
+        )
     }
 
     /// `DELETE /rooms/{roomId}`.
     async fn delete_room(&self, id: &str, revision: i64) -> Result<(), ApiError> {
         let path = format!("/rooms/{id}");
-        self.send_json("DELETE", &path, None, Some(revision)).await?;
+        self.send_json("DELETE", &path, None, Some(revision))
+            .await?;
         Ok(())
     }
 
@@ -204,32 +211,42 @@ pub trait CoreApi: Clone + 'static {
     /// `PATCH /nodes/{nodeId}`.
     async fn patch_node(&self, id: &str, patch: Value, revision: i64) -> Result<Node, ApiError> {
         let path = format!("/nodes/{id}");
-        decode(self.send_json("PATCH", &path, Some(patch), Some(revision)).await?)
+        decode(
+            self.send_json("PATCH", &path, Some(patch), Some(revision))
+                .await?,
+        )
     }
 
     /// `DELETE /nodes/{nodeId}`.
     async fn delete_node(&self, id: &str, revision: i64) -> Result<(), ApiError> {
         let path = format!("/nodes/{id}");
-        self.send_json("DELETE", &path, None, Some(revision)).await?;
+        self.send_json("DELETE", &path, None, Some(revision))
+            .await?;
         Ok(())
     }
 
     /// `POST /node-pairs`.
     async fn create_pair(&self, pair: &NewPair) -> Result<NodePair, ApiError> {
         let body = to_value(pair)?;
-        decode(self.send_json("POST", "/node-pairs", Some(body), None).await?)
+        decode(
+            self.send_json("POST", "/node-pairs", Some(body), None)
+                .await?,
+        )
     }
 
     /// `DELETE /node-pairs/{pairId}`.
     async fn delete_pair(&self, id: &str, revision: i64) -> Result<(), ApiError> {
         let path = format!("/node-pairs/{id}");
-        self.send_json("DELETE", &path, None, Some(revision)).await?;
+        self.send_json("DELETE", &path, None, Some(revision))
+            .await?;
         Ok(())
     }
 
     /// `POST /node-pairs/derive` — suggest pairs from calibration data.
     async fn derive_pairs(&self) -> Result<Vec<NodePair>, ApiError> {
-        let value = self.send_json("POST", "/node-pairs/derive", None, None).await?;
+        let value = self
+            .send_json("POST", "/node-pairs/derive", None, None)
+            .await?;
         let list: List<NodePair> = decode(value)?;
         Ok(list.items)
     }
@@ -237,7 +254,10 @@ pub trait CoreApi: Clone + 'static {
     /// `POST /calibration` — start a global session (`core-api.md` §8).
     async fn start_calibration(&self) -> Result<CalibrationSession, ApiError> {
         let body = to_value(&serde_json::json!({ "scope": "global" }))?;
-        decode(self.send_json("POST", "/calibration", Some(body), None).await?)
+        decode(
+            self.send_json("POST", "/calibration", Some(body), None)
+                .await?,
+        )
     }
 
     /// `POST /calibration/{id}/steps/{stepId}/complete`.

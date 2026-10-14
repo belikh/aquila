@@ -77,8 +77,7 @@ impl HttpCoreApi {
         }
         init.set_headers(&headers);
 
-        let request =
-            Request::new_with_str_and_init(&self.url(path), &init).map_err(js_error)?;
+        let request = Request::new_with_str_and_init(&self.url(path), &init).map_err(js_error)?;
         let response_value = JsFuture::from(window.fetch_with_request(&request))
             .await
             .map_err(js_error)?;

@@ -14,12 +14,12 @@ use aquila_types::{
 use proptest::prelude::*;
 
 use crate::error::{DType, Dim, ModelError, ModelHealth};
-use aquila_types::FeatureVector;
 use crate::model::{
     check_tensor_dims, DatasetRecord, ModelCard, ModelId, ModelTask, SeedWeights, TensorSpec,
     WeightsTrained,
 };
 use crate::seam::{PoseModel, PoseOutcome, PoseRequest, VitalsModel, VitalsRequest};
+use aquila_types::FeatureVector;
 
 // --- fixtures -------------------------------------------------------------
 
@@ -556,11 +556,7 @@ fn sample_card(weights: WeightsTrained, witness: Witness, contract: ContractVers
 
 #[test]
 fn imported_seed_may_only_carry_claimed() {
-    let claimed = sample_card(
-        WeightsTrained::Imported,
-        Witness::Claimed,
-        CONTRACT_VERSION,
-    );
+    let claimed = sample_card(WeightsTrained::Imported, Witness::Claimed, CONTRACT_VERSION);
     assert!(claimed.validate().is_ok());
     assert!(!claimed.is_servable());
 

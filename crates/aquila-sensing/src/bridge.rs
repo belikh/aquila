@@ -33,5 +33,8 @@ pub fn to_signal_frame(frame: &aquila_types::CsiFrame) -> Result<ComplexFrame, D
 ///
 /// Returns [`DecodeError`] on the first malformed contract frame.
 pub fn to_signal_chunk(frames: &[CsiEnvelope]) -> Result<Vec<ComplexFrame>, DecodeError> {
-    frames.iter().map(|env| to_signal_frame(&env.frame)).collect()
+    frames
+        .iter()
+        .map(|env| to_signal_frame(&env.frame))
+        .collect()
 }

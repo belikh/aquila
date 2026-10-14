@@ -14,9 +14,7 @@ use aquila_types::{
     sha256, DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Floor, Home,
     MacAddr, Node, NodeId, Room, RoomKind, Slug, Witness, CONTRACT_VERSION,
 };
-use aquila_wire::{
-    ControlBody, ControlMessage, OtaAck, OtaAckStatus, OtaOutcome, OtaResult,
-};
+use aquila_wire::{ControlBody, ControlMessage, OtaAck, OtaAckStatus, OtaOutcome, OtaResult};
 use ed25519_dalek::{Signer, SigningKey};
 
 use crate::{

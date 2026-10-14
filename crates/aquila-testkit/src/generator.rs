@@ -9,8 +9,8 @@
 use aquila_simulator::{synthesise_session, SceneScript, SimConfig, SimError, SimulatorSource};
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
-    CsiEnvelope, DeviceType, FirmwareRef, Floor, GroundTruthRecord, Home, MacAddr, Node, Pose, Room,
-    RoomId, RoomKind, Slug, Topology, CONTRACT_VERSION,
+    CsiEnvelope, DeviceType, FirmwareRef, Floor, GroundTruthRecord, Home, MacAddr, Node, Pose,
+    Room, RoomId, RoomKind, Slug, Topology, CONTRACT_VERSION,
 };
 
 /// A seeded, reproducible CSI synthesiser for one scene.

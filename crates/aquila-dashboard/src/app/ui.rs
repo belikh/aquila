@@ -62,10 +62,7 @@ pub fn status_icon(state: &str) -> AnyView {
 
 /// A status pill: icon + text + colour, always all three (`dashboard.md` §7).
 #[component]
-pub fn StatusBadge(
-    #[prop(into)] state: String,
-    #[prop(into)] label: String,
-) -> impl IntoView {
+pub fn StatusBadge(#[prop(into)] state: String, #[prop(into)] label: String) -> impl IntoView {
     let class = format!("status-pill {}", state_class(&state));
     let icon = status_icon(&state);
     view! {
@@ -79,10 +76,7 @@ pub fn StatusBadge(
 /// An explicit empty state with the next action, never a blank panel
 /// (`dashboard.md` §6).
 #[component]
-pub fn EmptyState(
-    #[prop(into)] title: String,
-    #[prop(into)] hint: String,
-) -> impl IntoView {
+pub fn EmptyState(#[prop(into)] title: String, #[prop(into)] hint: String) -> impl IntoView {
     view! {
         <div class="card">
             <h3>{title}</h3>

@@ -1,0 +1,94 @@
+# Continuous integration for Aquila (repository-tooling.md §10).
+#
+# Every job runs inside the repository's own nix dev shells, so CI uses exactly
+# the toolchains a developer uses (`AGENTS.md`): the default shell for Rust +
+# Trunk, `.#esp` for ESP-IDF firmware, `.#ha` for the Python component. No global
+# toolchain is assumed.
+#
+# Third-party actions are pinned to a full commit SHA with the tag in a trailing
+# comment (repository-tooling.md §10); Dependabot updates them. Default
+# permissions are read-only.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: "ci-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  rust:
+    name: rust (fmt, clippy, test, dag-check, claims)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Format
+        run: nix develop --command cargo fmt --all -- --check
+      - name: Lints (deny warnings)
+        run: nix develop --command cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Tests (workspace, locked)
+        run: nix develop --command cargo test --workspace --locked
+      - name: Dependency DAG guardrail
+        run: nix develop --command cargo run -q -p xtask -- dag-check
+      - name: Honest-claims bijection
+        run: nix develop --command cargo run -q -p xtask -- claims-verify
+
+  dashboard:
+    name: dashboard (trunk wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Build dashboard (Rust -> WASM)
+        run: nix develop --command bash -c 'cd crates/aquila-dashboard && trunk build --release'
+
+  firmware:
+    name: firmware (ESP-IDF, ESP32-S3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Compile firmware
+        run: nix develop .#esp --command bash -c 'cd firmware/esp32-s3-csi-node && idf.py set-target esp32s3 && idf.py build'
+
+  ha:
+    name: home-assistant component (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Run component tests
+        run: nix develop .#ha --command python -m pytest custom_components/aquila/tests

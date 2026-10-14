@@ -156,18 +156,13 @@ impl Handle {
         if let Some(object) = value.as_object_mut() {
             object.insert(
                 "latest_version".to_string(),
-                self.ota
-                    .latest_version()
-                    .map_or(Value::Null, Value::String),
+                self.ota.latest_version().map_or(Value::Null, Value::String),
             );
             let job = self.ota.job(node);
             object.insert(
                 "pending".to_string(),
                 job.as_ref().map_or(Value::Bool(false), |job| {
-                    Value::Bool(matches!(
-                        job.state,
-                        crate::ota::FirmwareJobState::Running
-                    ))
+                    Value::Bool(matches!(job.state, crate::ota::FirmwareJobState::Running))
                 }),
             );
             object.insert(

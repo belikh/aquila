@@ -77,9 +77,7 @@ pub type MetricId = Slug;
 /// Provisioned via the node control channel at commissioning and mirrored in
 /// the topology. Values `1..=65535` are provisioned; `0` is reserved for
 /// "unprovisioned" ([`NodeId::UNPROVISIONED`]).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId(pub u16);
 
@@ -139,9 +137,7 @@ impl MacAddr {
 ///
 /// Stable only within a session. It is not person identity, and is never
 /// persisted across sessions as identity.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SubjectId(pub u32);
 

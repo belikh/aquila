@@ -1,0 +1,22 @@
+# Build context for aquila_core/Dockerfile. Keep it small and free of local
+# state so the image is reproducible and the transfer is fast.
+#
+# The Dockerfile needs only: Cargo.toml, Cargo.lock and crates/. Everything
+# below is either rebuilt in a stage or irrelevant to the image.
+
+.git
+.github
+docs
+firmware
+custom_components
+tools
+.aquila
+target
+**/target
+crates/aquila-dashboard/dist
+crates/aquila-dashboard/pkg
+firmware/**/build
+**/__pycache__
+**/.pytest_cache
+*.zip
+*.log

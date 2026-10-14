@@ -105,7 +105,9 @@ impl DitherSearch {
             return Vec::new();
         }
         let count = ((self.hi_hz - self.lo_hz) / self.step_hz).floor() as usize;
-        (0..=count).map(|i| self.lo_hz + i as f64 * self.step_hz).collect()
+        (0..=count)
+            .map(|i| self.lo_hz + i as f64 * self.step_hz)
+            .collect()
     }
 
     /// Whether the search is structurally valid.
@@ -234,7 +236,10 @@ pub fn extract_torso_ranges(
     spectrum.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.total_cmp(&b.0)));
     let mut peaks: Vec<f64> = Vec::new();
     for &(f, _) in &spectrum {
-        if peaks.iter().all(|&p| (p - f).abs() >= search.min_separation_hz) {
+        if peaks
+            .iter()
+            .all(|&p| (p - f).abs() >= search.min_separation_hz)
+        {
             peaks.push(f);
             if peaks.len() == TORSO_SCATTERER_COUNT {
                 break;
@@ -498,7 +503,10 @@ impl PoseModel for DspPoseModel {
         if requests.is_empty() {
             return Err(ModelError::EmptyBatch);
         }
-        Ok(requests.iter().map(|request| self.infer_one(request)).collect())
+        Ok(requests
+            .iter()
+            .map(|request| self.infer_one(request))
+            .collect())
     }
 }
 

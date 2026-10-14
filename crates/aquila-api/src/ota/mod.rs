@@ -325,8 +325,7 @@ impl Ota {
             .transfer(&stored.image, &manifest, transport.as_mut());
 
         // Return the transport to the registry so a later retry can resume.
-        lock(&self.transports)
-            .insert(node.to_ascii_lowercase(), transport);
+        lock(&self.transports).insert(node.to_ascii_lowercase(), transport);
 
         let job = match outcome {
             Ok(stats) => {
@@ -356,8 +355,7 @@ impl Ota {
                 }
             }
         };
-        lock(&self.jobs)
-            .insert(node.to_ascii_lowercase(), job.clone());
+        lock(&self.jobs).insert(node.to_ascii_lowercase(), job.clone());
         Ok(job)
     }
 
@@ -395,8 +393,7 @@ fn ota_result_row(success: bool) -> Measurement {
 /// The `firmware.version.installed` ledger row.
 fn installed_version_row(manifest: &FirmwareManifest) -> Measurement {
     Measurement {
-        name: MetricName::new("firmware.version.installed".to_string())
-            .expect("valid metric name"),
+        name: MetricName::new("firmware.version.installed".to_string()).expect("valid metric name"),
         version: 1,
         value: MeasurementValue::Digest(manifest.sha256.clone()),
         unit: Unit::new("sha256").expect("valid unit"),

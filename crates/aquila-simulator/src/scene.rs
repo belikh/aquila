@@ -190,7 +190,8 @@ impl Body {
             *slot = base + sub * (0.2 + 0.6 * u);
         }
         let amplitude = self.dither_amplitude_m
-            * (0.75 + 0.5 * crate::rng::unit4(seed, actor_index as u64, 0, 0, TAG_DITHER_AMPLITUDE));
+            * (0.75
+                + 0.5 * crate::rng::unit4(seed, actor_index as u64, 0, 0, TAG_DITHER_AMPLITUDE));
         Self {
             dither_hz,
             dither_amplitude_m: amplitude,
@@ -217,7 +218,6 @@ impl Body {
         }
         out
     }
-
 
     /// The four torso scatterer keypoint positions, in room-local metres, for a
     /// body whose pelvis is at `base_m`.

@@ -80,7 +80,8 @@ impl Harness {
                         occupied: estimate, ..
                     },
                     EventPayload::Presence {
-                        occupied: reference, ..
+                        occupied: reference,
+                        ..
                     },
                 ) => {
                     paired += 1;

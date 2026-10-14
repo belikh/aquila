@@ -65,7 +65,10 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "#define AQ_CSI_MAX_DATAGRAM_LEN {MAX_DATAGRAM_LEN}u");
     let _ = writeln!(s, "#define AQ_CONTROL_HEADER_LEN {}", control_offset::BODY);
     let _ = writeln!(s, "#define AQ_CONTROL_AUTH_LEN {CONTROL_AUTH_LEN}u");
-    let _ = writeln!(s, "#define AQ_OTA_DEFAULT_CHUNK_SIZE {OTA_DEFAULT_CHUNK_SIZE}u");
+    let _ = writeln!(
+        s,
+        "#define AQ_OTA_DEFAULT_CHUNK_SIZE {OTA_DEFAULT_CHUNK_SIZE}u"
+    );
     let _ = writeln!(s, "#define AQ_OTA_DEFAULT_WINDOW {OTA_DEFAULT_WINDOW}u");
     let _ = writeln!(s, "#define AQ_OTA_MAX_CHUNK_SIZE {OTA_MAX_CHUNK_SIZE}u");
     let _ = writeln!(s);

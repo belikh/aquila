@@ -23,7 +23,6 @@ use crate::error::DecodeError;
 /// test.
 const MAX_RECORD_BYTES: usize = 1428;
 
-
 /// Channel width; determines the expected subcarrier count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Bandwidth {

@@ -323,7 +323,10 @@ mod tests {
             .transfer(&bytes, &manifest, &mut transport)
             .expect("transfer");
         assert_eq!(stats.outcome, OtaOutcome::Activated);
-        assert!(stats.retransmissions >= 1, "the dropped chunk must be resent");
+        assert!(
+            stats.retransmissions >= 1,
+            "the dropped chunk must be resent"
+        );
         assert!(lock(&node).is_complete());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -340,9 +343,10 @@ mod tests {
         lock(&node).interrupt_after(512);
 
         // First attempt: the link drops, so the transfer stalls.
-        ota.register_transport("aa:bb:cc:dd:ee:ff", Box::new(FakeOtaTransport::new(
-            Arc::clone(&node),
-        )));
+        ota.register_transport(
+            "aa:bb:cc:dd:ee:ff",
+            Box::new(FakeOtaTransport::new(Arc::clone(&node))),
+        );
         let failed = ota
             .install("aa:bb:cc:dd:ee:ff", "esp32s3", &id, false)
             .expect("job");
@@ -392,7 +396,10 @@ mod tests {
             },
         );
         assert!(matches!(result, Err(aquila_api::StoreError::BadSignature)));
-        assert!(store.list().is_empty(), "a rejected image must never be offered");
+        assert!(
+            store.list().is_empty(),
+            "a rejected image must never be offered"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -429,10 +436,7 @@ mod tests {
         let ota = Ota::with_store(store);
         ota.set_metric_sink(Box::new(recorder.clone()));
         let node = Arc::new(Mutex::new(FakeOtaNode::new(sha256(&bytes))));
-        ota.register_transport(
-            "aa:bb:cc:dd:ee:ff",
-            Box::new(FakeOtaTransport::new(node)),
-        );
+        ota.register_transport("aa:bb:cc:dd:ee:ff", Box::new(FakeOtaTransport::new(node)));
         let job = ota
             .install("aa:bb:cc:dd:ee:ff", "esp32s3", manifest.id(), false)
             .expect("job");
@@ -452,5 +456,4 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 }

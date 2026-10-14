@@ -76,7 +76,11 @@ pub(crate) fn atan2_approx(y: f32, x: f32) -> f32 {
     }
     let ax = x.abs();
     let ay = y.abs();
-    let (a, swapped) = if ay > ax { (ax / ay, true) } else { (ay / ax, false) };
+    let (a, swapped) = if ay > ax {
+        (ax / ay, true)
+    } else {
+        (ay / ax, false)
+    };
     let s = a * a;
     let mut r = ((-0.046_496_474_9 * s + 0.159_314_22) * s - 0.327_622_764) * s * a + a;
     if swapped {
@@ -100,7 +104,11 @@ pub(crate) fn atan2_approx(y: f32, x: f32) -> f32 {
 #[must_use]
 pub(crate) fn ln_approx(x: f32) -> f32 {
     if x <= 0.0 {
-        return if x == 0.0 { f32::NEG_INFINITY } else { f32::NAN };
+        return if x == 0.0 {
+            f32::NEG_INFINITY
+        } else {
+            f32::NAN
+        };
     }
     let bits = x.to_bits();
     let mut e = ((bits >> 23) & 0xff) as i32 - 127;

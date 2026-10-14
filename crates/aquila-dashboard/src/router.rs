@@ -174,9 +174,12 @@ mod tests {
     #[test]
     fn an_unknown_fragment_is_not_found() {
         assert_eq!(Route::parse("#/nope"), Route::NotFound);
-        assert_eq!(Route::parse("#/rooms/a/b/c"), Route::Room {
-            id: "a".to_string()
-        });
+        assert_eq!(
+            Route::parse("#/rooms/a/b/c"),
+            Route::Room {
+                id: "a".to_string()
+            }
+        );
     }
 
     #[test]

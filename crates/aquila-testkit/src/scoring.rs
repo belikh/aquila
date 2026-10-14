@@ -13,7 +13,8 @@ use std::collections::BTreeMap;
 
 use aquila_sensing::{FloorWindow, HomeWindow};
 use aquila_types::{
-    Event, EventKind, EventPayload, EventScope, FloorId, GroundTruthRecord, KeypointId, Pose, RoomId,
+    Event, EventKind, EventPayload, EventScope, FloorId, GroundTruthRecord, KeypointId, Pose,
+    RoomId,
 };
 
 /// A binary-classification confusion matrix and its derived scores.
@@ -243,10 +244,7 @@ fn floor_count_truth(
 }
 
 /// Group floor presence-change events by window, in deterministic event order.
-fn floor_presence_changes(
-    events: &[Event],
-    hop_ms: i64,
-) -> BTreeMap<i64, Vec<(FloorId, bool)>> {
+fn floor_presence_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(FloorId, bool)>> {
     let mut sorted: Vec<&Event> = events
         .iter()
         .filter(|e| e.kind == EventKind::PresenceChanged)
@@ -726,10 +724,7 @@ fn nearest_reference<'a>(
 
 /// The per-window whole-home presence truth: the home is occupied when any room
 /// is.
-fn home_presence_truth(
-    ground_truth: &[GroundTruthRecord],
-    hop_ms: i64,
-) -> BTreeMap<i64, bool> {
+fn home_presence_truth(ground_truth: &[GroundTruthRecord], hop_ms: i64) -> BTreeMap<i64, bool> {
     room_presence_truth(ground_truth, hop_ms)
         .into_iter()
         .map(|(window, rooms)| (window, rooms.values().any(|occupied| *occupied)))
@@ -879,7 +874,10 @@ pub fn home_floor_attribution_accuracy(
         };
         let mut occupied_floors: Vec<&FloorId> = floor_rooms
             .iter()
-            .filter(|(_, ids)| ids.iter().any(|room| rooms.get(room).copied().unwrap_or(false)))
+            .filter(|(_, ids)| {
+                ids.iter()
+                    .any(|room| rooms.get(room).copied().unwrap_or(false))
+            })
             .map(|(floor, _)| floor)
             .collect();
         if occupied_floors.len() != 1 {

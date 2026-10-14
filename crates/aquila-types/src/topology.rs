@@ -340,12 +340,7 @@ impl Topology {
     #[must_use]
     pub fn derive_scope(&self, tx: NodeId, rx: NodeId) -> PairScope {
         let room_of = |node: NodeId| self.nodes.iter().find(|n| n.id == node).map(|n| &n.room);
-        let floor_of = |room: &RoomId| {
-            self.rooms
-                .iter()
-                .find(|r| &r.id == room)
-                .map(|r| &r.floor)
-        };
+        let floor_of = |room: &RoomId| self.rooms.iter().find(|r| &r.id == room).map(|r| &r.floor);
         match (room_of(tx), room_of(rx)) {
             (Some(tx_room), Some(rx_room)) if tx_room == rx_room => PairScope::Room,
             (Some(tx_room), Some(rx_room)) => match (floor_of(tx_room), floor_of(rx_room)) {

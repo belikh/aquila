@@ -161,19 +161,17 @@ pub fn Structure() -> impl IntoView {
 
     let submit = {
         let ctx = ctx.clone();
-        move |_| {
-            match validate_new_room(&floor.get(), &name.get(), &label.get()) {
-                Err(list) => errors.set(list),
-                Ok(room) => {
-                    errors.set(Vec::new());
-                    let client = ctx.client.clone();
-                    let floor_id = floor.get();
-                    spawn_local(async move {
-                        if let Err(error) = client.create_room(&floor_id, &room).await {
-                            ctx.error.set(Some(error.operator_message()));
-                        }
-                    });
-                }
+        move |_| match validate_new_room(&floor.get(), &name.get(), &label.get()) {
+            Err(list) => errors.set(list),
+            Ok(room) => {
+                errors.set(Vec::new());
+                let client = ctx.client.clone();
+                let floor_id = floor.get();
+                spawn_local(async move {
+                    if let Err(error) = client.create_room(&floor_id, &room).await {
+                        ctx.error.set(Some(error.operator_message()));
+                    }
+                });
             }
         }
     };

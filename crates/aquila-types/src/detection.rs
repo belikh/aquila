@@ -115,7 +115,11 @@ impl Detection {
                     })
                 }
             }
-            (DetectionKind::Occupancy, DetectionValue::Occupancy(by_zone), DetectionScope::Home(_)) => {
+            (
+                DetectionKind::Occupancy,
+                DetectionValue::Occupancy(by_zone),
+                DetectionScope::Home(_),
+            ) => {
                 for (room, count) in by_zone {
                     room.validate()?;
                     if *count > MAX_COUNT_V1 {
@@ -261,7 +265,11 @@ impl EventPayload {
                 }
                 Ok(())
             }
-            EventPayload::Vitals { metric, value, unit } => {
+            EventPayload::Vitals {
+                metric,
+                value,
+                unit,
+            } => {
                 require_non_empty("EventPayload::Vitals.metric", metric)?;
                 require_non_empty("EventPayload::Vitals.unit", unit)?;
                 require_finite_f32("EventPayload::Vitals.value", *value)
