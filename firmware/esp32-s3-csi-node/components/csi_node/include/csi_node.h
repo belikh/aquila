@@ -50,6 +50,9 @@ void csi_node_apply_config(const csi_node_config_t *config);
 /* Enable or disable CSI streaming (`SET_CSI`). */
 void csi_node_set_streaming(bool enable);
 
+/* Whether CSI streaming is currently enabled, for the OTA health window. */
+bool csi_node_is_streaming(void);
+
 /* The assignable (raw int8) CSI length cap for the current bandwidth. */
 uint16_t csi_node_phy_cap(void);
 

@@ -10,6 +10,7 @@
 #ifndef AQUILA_NODE_CONTROL_H
 #define AQUILA_NODE_CONTROL_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "csi_node.h"
@@ -34,6 +35,23 @@ int node_control_start(const node_control_config_t *config);
 
 /* The active config version, for the heartbeat and replies. */
 uint32_t node_control_config_version(void);
+
+/*
+ * Frame and send one control message to the pinned core endpoint.
+ *
+ * This is the OTA agent's reply path (it owns no socket of its own); the node
+ * control channel is the one authenticated channel OTA rides on
+ * (firmware-ota.md §2).
+ */
+void node_control_send_reply(uint8_t opcode, uint32_t request_id,
+                             const uint8_t *body, uint16_t body_len);
+
+/*
+ * Whether the control channel has processed an admissible message since boot.
+ * This is the "control responsive" input to the OTA pending-verify health
+ * window (firmware-ota.md §6).
+ */
+bool node_control_is_responsive(void);
 
 #ifdef __cplusplus
 }

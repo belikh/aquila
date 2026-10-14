@@ -32,6 +32,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include "node_ota.h"
 #include "node_wire.h"
 #include "node_wire_util.h"
 
@@ -50,6 +51,7 @@ static int s_sock = -1;
 static struct sockaddr_in s_core;
 static uint8_t s_mac[6];
 static atomic_bool s_paired;
+static atomic_bool s_responsive;
 static atomic_uint s_config_version;
 static uint32_t s_heartbeat_ms;
 static uint8_t s_token[32];
@@ -67,9 +69,23 @@ static uint32_t s_seen_ids[REPLAY_WINDOW];
 static size_t s_seen_count;
 static size_t s_seen_next;
 
+static void send_message(uint8_t opcode, uint32_t request_id,
+                         const uint8_t *body, uint16_t body_len);
+
 uint32_t node_control_config_version(void)
 {
     return atomic_load(&s_config_version);
+}
+
+void node_control_send_reply(uint8_t opcode, uint32_t request_id,
+                             const uint8_t *body, uint16_t body_len)
+{
+    send_message(opcode, request_id, body, body_len);
+}
+
+bool node_control_is_responsive(void)
+{
+    return atomic_load(&s_responsive);
 }
 
 /* ------------------------------------------------------------------ */
@@ -451,6 +467,14 @@ static void handle_message(const uint8_t *datagram, int length)
         nvs_flash_erase();
         esp_restart();
         break;
+    case AQ_OP_OTA_BEGIN:
+    case AQ_OP_OTA_CHUNK:
+    case AQ_OP_OTA_END:
+    case AQ_OP_OTA_ABORT:
+        /* The firmware OTA agent writes the inactive partition and replies via
+         * OTA_ACK/OTA_STATUS/OTA_RESULT (firmware-ota.md §5). */
+        node_ota_handle(opcode, request_id, body, body_len);
+        break;
     default:
         break;
     }
@@ -490,6 +514,7 @@ static void receive_message(const uint8_t *datagram, int length,
         /* Pairing is the bootstrap: the token is delivered here, so this one
          * message is accepted before the node is paired. */
         if (!atomic_load(&s_paired) && from_core(from)) {
+            atomic_store(&s_responsive, true);
             handle_message(datagram, length);
         }
         return;
@@ -512,6 +537,7 @@ static void receive_message(const uint8_t *datagram, int length,
         ESP_LOGD(TAG, "dropped duplicate control request %u", (unsigned)request_id);
         return;
     }
+    atomic_store(&s_responsive, true);
     handle_message(datagram, length);
 }
 
@@ -542,6 +568,9 @@ static void control_task(void *arg)
             send_join_request();
             last_join_us = now_us;
         }
+        /* Flush any deferred OTA message (for example the post-reboot
+         * `OTA_RESULT activated`). */
+        node_ota_poll();
     }
 }
 
@@ -553,6 +582,7 @@ int node_control_start(const node_control_config_t *config)
     s_config = *config;
     s_heartbeat_ms = config->csi.heartbeat_ms > 0u ? config->csi.heartbeat_ms : 5000u;
     atomic_init(&s_paired, false);
+    atomic_init(&s_responsive, false);
     atomic_init(&s_config_version, 0);
     atomic_init(&s_echo_turnaround_us, 0u);
     s_seen_count = 0;

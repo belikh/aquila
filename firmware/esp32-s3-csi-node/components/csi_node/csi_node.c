@@ -362,6 +362,11 @@ void csi_node_set_streaming(bool enable)
     atomic_store(&s_streaming, enable);
 }
 
+bool csi_node_is_streaming(void)
+{
+    return atomic_load(&s_streaming);
+}
+
 uint16_t csi_node_phy_cap(void)
 {
     return s_raw_cap;

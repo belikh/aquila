@@ -32,6 +32,7 @@
 
 #include "csi_node.h"
 #include "node_control.h"
+#include "node_ota.h"
 
 static const char *TAG = "aquila_node";
 
@@ -148,6 +149,23 @@ static void wifi_start(const provisioning_t *provisioning)
     ESP_LOGI(TAG, "associated with %s", provisioning->ssid);
 }
 
+/*
+ * The OTA pending-verify health probe (firmware-ota.md §6): the new image is
+ * healthy only while the node is associated, streaming CSI and the control
+ * channel is responsive. Composed here because it spans the three subsystems.
+ */
+static bool node_ota_health(void *ctx)
+{
+    (void)ctx;
+    if ((xEventGroupGetBits(s_wifi_events) & WIFI_CONNECTED_BIT) == 0) {
+        return false;
+    }
+    if (!csi_node_is_streaming()) {
+        return false;
+    }
+    return node_control_is_responsive();
+}
+
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -172,6 +190,23 @@ void app_main(void)
 
     if (csi_node_start(&csi, provisioning.core_host, provisioning.data_port) != 0) {
         ESP_LOGE(TAG, "CSI data plane failed to start");
+        return;
+    }
+
+    /*
+     * The firmware OTA agent. Started before the control channel so the
+     * dispatch in node_control can never reach an uninitialised agent; it owns
+     * no socket and replies through the control channel's send path.
+     */
+    node_ota_config_t ota = {
+        .node_id = csi.node_id,
+        .send = node_control_send_reply,
+        .health = node_ota_health,
+        .health_ctx = NULL,
+        .health_window_ms = 0u, /* use CONFIG_AQUILA_OTA_HEALTH_WINDOW_S */
+    };
+    if (node_ota_start(&ota) != 0) {
+        ESP_LOGE(TAG, "OTA agent failed to start");
         return;
     }
 

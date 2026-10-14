@@ -1,18 +1,20 @@
 # Aquila ESP32-S3 CSI node firmware
 
 A reference ESP-IDF (C) firmware for a single fixed **ESP32-S3** node that
-streams raw WiFi CSI to the Aquila core.
+streams raw WiFi CSI to the Aquila core and updates its own firmware over the
+node control channel.
 
 > **Compile status.** This firmware is **compile-verified with ESP-IDF v5.5.2**
 > via the repository dev shell `nix develop .#esp` (see *Build and flash* below).
 > It is **not flashed and not run on hardware in this repository**: it has never
-> been flashed to a board and never observed streaming, so its on-device
-> behaviour is unverified. The Rust side of the wire is tested; the C side is
-> compile-verified only.
+> been flashed to a board, never observed streaming and never executed an OTA, so
+> its on-device behaviour is unverified. The Rust side of the wire is tested; the
+> C side is compile-verified only.
 
 It implements the node end of `docs/spec/capture-and-firmware.md` §5 (CSI data
 plane), §6 (node control channel, including the per-node token authentication
-of §6.3) and §9 (firmware responsibilities and MUST-NOTs), under the wire layout
+of §6.3) and §9 (firmware responsibilities and MUST-NOTs), the node-side firmware
+OTA agent of `docs/spec/firmware-ota.md` §5, §6 and §8, under the wire layout
 of ADR-0004 (magic and framing), ADR-0005 (the raw int8 I/Q payload) and
 ADR-0006 (the imaginary-first byte order), and `ADR-0003` §7/§9.4.
 
@@ -31,11 +33,12 @@ ADR-0006 (the imaginary-first byte order), and `ADR-0003` §7/§9.4.
 ```
 esp32-s3-csi-node/
 ├── CMakeLists.txt                 ESP-IDF project file
-├── sdkconfig.defaults             target + CSI-enabled defaults
+├── partitions.csv                 dual-OTA (A/B) layout: two app slots + otadata
+├── sdkconfig.defaults             target, CSI, 4 MB flash + dual-OTA + rollback
 ├── main/
 │   ├── CMakeLists.txt
 │   ├── Kconfig.projbuild          WiFi, core endpoint, node id, pairing code
-│   └── main.c                     network join + orchestration
+│   └── main.c                     network join + orchestration + OTA health
 └── components/
     ├── node_wire/                 framing: the C half of the one wire layout
     │   ├── CMakeLists.txt
@@ -47,10 +50,18 @@ esp32-s3-csi-node/
     │   ├── CMakeLists.txt
     │   ├── csi_node.c
     │   └── include/csi_node.h
-    └── node_control/              AQCC control channel (§6)
+    ├── node_control/              AQCC control channel (§6)
+    │   ├── CMakeLists.txt
+    │   ├── node_control.c
+    │   └── include/node_control.h
+    └── node_ota/                  firmware OTA agent (firmware-ota.md §5, §6, §8)
         ├── CMakeLists.txt
-        ├── node_control.c
-        └── include/node_control.h
+        ├── Kconfig                health window, security floor, trust anchor
+        ├── node_ota.c
+        ├── ed25519/               vendored Ed25519 verification (public domain)
+        │   ├── ed25519.c
+        │   └── ed25519.h
+        └── include/node_ota.h
 ```
 
 ### One wire layout, two languages
@@ -85,9 +96,16 @@ nix develop .#esp --command bash -c \
 ```
 
 This is the exact path by which the firmware is compile-verified, and it emits
-`build/bootloader/bootloader.bin`, `build/partition_table/partition-table.bin`
-and `build/aquila_esp32s3_csi_node.bin`. Compiling needs no hardware; **flashing
-does**, and flashing is not possible in this repository (there is no board).
+`build/bootloader/bootloader.bin`, `build/partition_table/partition-table.bin`,
+`build/ota_data_initial.bin` and `build/aquila_esp32s3_csi_node.bin`. The image
+is ~750 KB (`0xb7810` bytes) against a ~1.98 MB app slot, so both A/B slots fit
+comfortably in 4 MB. Compiling needs no hardware; **flashing does**, and flashing
+is not possible in this repository (there is no board).
+
+The build uses the custom dual-OTA partition table in `partitions.csv`
+(`ota_0` at `0x20000`, `ota_1` at `0x210000`, `otadata` at `0xf000`), selected
+by `CONFIG_PARTITION_TABLE_CUSTOM` in `sdkconfig.defaults`. `sdkconfig` itself
+is generated and not committed.
 
 ### Or install ESP-IDF v5.x yourself
 
@@ -119,6 +137,16 @@ corresponding key is absent (`capture-and-firmware.md` §8.3, §9.1.8, §9.3).
 | `AQUILA_NODE_ID` | dense node id, provisioned by the operator |
 | `AQUILA_PAIRING_CODE` | the short-lived pairing code, `0` to skip join |
 
+The **Aquila firmware OTA** menu (`components/node_ota/Kconfig`) carries the OTA
+tuning:
+
+| Option | Meaning |
+| --- | --- |
+| `AQUILA_OTA_HEALTH_WINDOW_S` | pending-verify health window before an image confirms itself, default `60` |
+| `AQUILA_FW_SECURITY_VERSION` | compiled-in anti-rollback floor |
+| `AQUILA_FW_ALLOW_DOWNGRADE` | explicit factory-authorised downgrade flag |
+| `AQUILA_FW_PUBKEY_HEX` | compiled-in Ed25519 trust anchor (64 hex chars); NVS `ota`/`fw_pubkey` wins |
+
 The `aquila-capture provision` subcommand writes the provisioning payload
 (SSID, password, core endpoint) as JSON for an operator to flash into NVS under
 the `aquila` namespace (`wifi_ssid`, `wifi_pass`, `core_host`,
@@ -140,6 +168,31 @@ distributed image does not carry the network password (G13).
   `GET_CONFIG`/`SET_CONFIG`/`SET_CSI`, `STATUS` heartbeats, `SYNC_PING` →
   `SYNC_ECHO`, `REBOOT`, `IDENTIFY` and `FACTORY_RESET`, persisting the pairing
   token and config version in NVS.
+- **Firmware OTA** (`node_ota`, `firmware-ota.md` §5–§8). The agent rides the
+  authenticated control channel: `OTA_BEGIN` validates the target/slot and the
+  version, applies the anti-rollback floor and opens the inactive partition with
+  `esp_ota_begin`; `OTA_CHUNK` checks a CRC-32 per chunk, writes it with
+  `esp_ota_write` and emits a cumulative `OTA_ACK`; `OTA_END` finalises the
+  SHA-256 and verifies an **Ed25519** signature over that digest against the
+  provisioned trust anchor, then `esp_ota_set_boot_partition` and reboots;
+  `OTA_ABORT` discards the transfer. Failures are reported as `OTA_RESULT`.
+- **Pending-verify and rollback** (`firmware-ota.md` §6). On the first boot of a
+  new image the node enters a pending-verify state and starts a health task; if
+  the node stays healthy (associated + streaming + control responsive) for the
+  health window (default 60 s) it calls
+  `esp_ota_mark_app_valid_cancel_rollback()`, persists the flag in NVS and moves
+  the security-version floor up; otherwise the bootloader rolls back.
+- **Anti-rollback** (`firmware-ota.md` §4). A monotonic security version is
+  persisted in NVS and only rises after a confirmed update; an image whose
+  version encodes a lower security version is rejected, unless the
+  factory-authorised `CONFIG_AQUILA_FW_ALLOW_DOWNGRADE` flag is set.
+- **Trust anchor** (`firmware-ota.md` §4). The 32-byte Ed25519 public key is
+  read from NVS (`ota`/`fw_pubkey`) or falls back to the compiled-in
+  `CONFIG_AQUILA_FW_PUBKEY_HEX`. With neither set the node has no anchor and
+  fails every verification closed. ESP-IDF's bundled mbedTLS has no Ed25519
+  signature primitive, so the verifier is a small vendored public-domain
+  implementation (`node_ota/ed25519/`); SHA-256 and CRC-32 use mbedTLS and the
+  ESP ROM respectively.
 - **Control authentication** (`capture-and-firmware.md` §6.3, F21). After
   pairing, every inbound command must carry the 32-byte HMAC-SHA256 trailer
   keyed by the pairing token, must come from the pinned core endpoint, and must
@@ -168,6 +221,17 @@ but none of it is exercised on hardware. In particular:
   11n, so VHT and the reserved HE bit never occur on this target, but the
   vocabulary no longer conflates 11ac/11ax with 11n (F10);
 - the NVS provisioning path;
+- the OTA agent end to end: the `esp_ota_*` A/B write, activation and reboot;
+  the pending-verify health window and `esp_ota_mark_app_valid_cancel_rollback`
+  / `esp_ota_mark_app_invalid_rollback_and_reboot` rollback path; and the
+  whether-the-image-fits and partition-selection behaviour against a real
+  4 MB flash. None of this is exercised on hardware here;
+- the vendored Ed25519 verifier (`node_ota/ed25519/`) against a real signed
+  image. It is the published TweetNaCl reference, but only the Rust core signs
+  and verifies images in this repository, so the C verifier has not been
+  round-tripped against a core-produced signature;
+- the anti-rollback floor and trust-anchor provisioning in NVS (a fresh node
+  with no `fw_pubkey` fails every OTA closed by design);
 - the control-channel HMAC-SHA256 verification and replay window
   (`mbedtls_md_hmac`), and the matching core-side trailer;
 - the internal temperature-sensor read used by `STATUS` (the sensor may be
