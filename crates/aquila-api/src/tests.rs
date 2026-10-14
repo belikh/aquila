@@ -1,18 +1,28 @@
 //! `aquila-api` tests: the control plane is exercised over real loopback
 //! sockets.
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aquila_geometry::Topology;
+use aquila_metrics::{Measurement, MetricSink, MetricsError};
 use aquila_sensing::Sink;
 use aquila_types::{
-    DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Floor, Home, MacAddr,
-    Node, NodeId, Room, RoomKind, Slug, Witness, CONTRACT_VERSION,
+    sha256, DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Floor, Home,
+    MacAddr, Node, NodeId, Room, RoomKind, Slug, Witness, CONTRACT_VERSION,
 };
+use aquila_wire::{
+    ControlBody, ControlMessage, OtaAck, OtaAckStatus, OtaOutcome, OtaResult,
+};
+use ed25519_dalek::{Signer, SigningKey};
 
-use crate::{ApiError, Auth, ChannelSink, Server};
+use crate::{
+    ApiError, Auth, ChannelSink, FirmwareCompat, FirmwareStore, ImportRequest, OtaError,
+    OtaTransport, Server, StoreError,
+};
 
 fn slug(value: &str) -> Slug {
     Slug(value.to_string())
@@ -281,4 +291,292 @@ fn the_websocket_upgrade_is_a_typed_fail_closed_stub() {
     assert!(response.contains("websocket_unimplemented"), "{response}");
 
     guard.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Firmware OTA (ticket #13)
+// ---------------------------------------------------------------------------
+
+/// A minimal in-test node OTA agent: it writes chunks sequentially, verifies
+/// their CRC-32 and answers cumulative ACKs and a final result. It is the
+/// `aquila-api` tests' own fake, so the crate keeps no dependency on testkit.
+struct FakeNode {
+    expected: [u8; 32],
+    received: Vec<u8>,
+}
+
+impl FakeNode {
+    fn handle(&mut self, message: &ControlMessage) -> Option<ControlMessage> {
+        let request_id = message.request_id;
+        match &message.body {
+            ControlBody::OtaBegin(_) => Some(ControlMessage {
+                request_id,
+                body: ControlBody::OtaAck(OtaAck {
+                    received_upto: self.received.len() as u32,
+                    status: OtaAckStatus::Ok,
+                }),
+            }),
+            ControlBody::OtaChunk(chunk) => {
+                if chunk.offset as usize == self.received.len()
+                    && crc32fast::hash(&chunk.bytes) == chunk.crc32
+                {
+                    self.received.extend_from_slice(&chunk.bytes);
+                }
+                Some(ControlMessage {
+                    request_id,
+                    body: ControlBody::OtaAck(OtaAck {
+                        received_upto: self.received.len() as u32,
+                        status: OtaAckStatus::Ok,
+                    }),
+                })
+            }
+            ControlBody::OtaEnd(_) => {
+                let complete = sha256(&self.received) == self.expected;
+                Some(ControlMessage {
+                    request_id,
+                    body: ControlBody::OtaResult(OtaResult {
+                        outcome: if complete {
+                            OtaOutcome::Activated
+                        } else {
+                            OtaOutcome::Failed
+                        },
+                        reason: String::new(),
+                    }),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A control transport over a [`FakeNode`].
+struct TestTransport {
+    node: Arc<Mutex<FakeNode>>,
+    queue: VecDeque<ControlMessage>,
+}
+
+impl TestTransport {
+    fn new(node: Arc<Mutex<FakeNode>>) -> Self {
+        Self {
+            node,
+            queue: VecDeque::new(),
+        }
+    }
+}
+
+impl OtaTransport for TestTransport {
+    fn send(&mut self, message: &ControlMessage) -> Result<(), OtaError> {
+        let reply = {
+            let mut node = self.node.lock().expect("node lock");
+            node.handle(message)
+        };
+        if let Some(reply) = reply {
+            self.queue.push_back(reply);
+        }
+        Ok(())
+    }
+
+    fn try_recv(&mut self) -> Result<Option<ControlMessage>, OtaError> {
+        Ok(self.queue.pop_front())
+    }
+}
+
+/// A metric sink whose recorded rows a test can read back.
+#[derive(Clone, Default)]
+struct TestSink(Arc<Mutex<Vec<Measurement>>>);
+
+impl TestSink {
+    fn records(&self) -> Vec<Measurement> {
+        self.0.lock().expect("sink lock").clone()
+    }
+}
+
+impl MetricSink for TestSink {
+    fn record(&mut self, measurement: &Measurement) -> Result<(), MetricsError> {
+        measurement.validate()?;
+        self.0.lock().expect("sink lock").push(measurement.clone());
+        Ok(())
+    }
+}
+
+/// A temp firmware directory unique to `name`.
+fn firmware_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("aquila-api-ota-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// A signed image and its store identity.
+fn signed_store(dir: &std::path::Path, bytes: &[u8]) -> (FirmwareStore, String) {
+    let key = SigningKey::from_bytes(&[21u8; 32]);
+    let store = FirmwareStore::open(dir, key.verifying_key()).expect("open store");
+    let digest = sha256(bytes);
+    let manifest = store
+        .import(
+            FirmwareCompat::encode(1, 0),
+            "esp32s3",
+            ImportRequest {
+                image: bytes.to_vec(),
+                signature: key.sign(&digest).to_bytes(),
+                version: "1.0.0".to_string(),
+                target: "esp32s3".to_string(),
+                compatibility: FirmwareCompat::new(
+                    FirmwareCompat::encode(1, 0),
+                    FirmwareCompat::encode(1, 9),
+                ),
+                notes: String::new(),
+            },
+        )
+        .expect("import");
+    let id = manifest.id().to_string();
+    (store, id)
+}
+
+#[test]
+fn the_firmware_endpoints_begin_and_report_a_job() {
+    let dir = firmware_dir("job");
+    let bytes: Vec<u8> = (0..300u32).map(|i| (i % 251) as u8).collect();
+    let (store, id) = signed_store(&dir, &bytes);
+
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let handle = server.handle();
+    let sink = TestSink::default();
+    handle.ota().configure_store(store);
+    handle.ota().set_metric_sink(Box::new(sink.clone()));
+    let node = Arc::new(Mutex::new(FakeNode {
+        expected: sha256(&bytes),
+        received: Vec::new(),
+    }));
+    handle
+        .ota()
+        .register_transport("00:00:00:00:00:01", Box::new(TestTransport::new(node)));
+
+    let mut guard = server.serve_in_background().expect("serve");
+
+    // The store is served.
+    let firmware = http_get(addr, "/api/v1/firmware");
+    assert!(firmware.starts_with("HTTP/1.1 200 OK"), "{firmware}");
+    assert!(firmware.contains(&id), "{firmware}");
+    assert!(firmware.contains("\"target\":\"esp32s3\""), "{firmware}");
+
+    // Begin the install.
+    let body = format!("{{\"image_id\":\"{id}\"}}");
+    let install = http_request(
+        addr,
+        &format!(
+            "POST /api/v1/nodes/00:00:00:00:00:01/firmware/install HTTP/1.1\r\n\
+             Host: localhost\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(install.starts_with("HTTP/1.1 202 Accepted"), "{install}");
+    assert!(install.contains("\"state\":\"succeeded\""), "{install}");
+    assert!(install.contains("\"jobId\":\"fw-1\""), "{install}");
+
+    // The job reports completion.
+    let job = http_get(addr, "/api/v1/nodes/00:00:00:00:00:01/firmware/job");
+    assert!(job.starts_with("HTTP/1.1 200 OK"), "{job}");
+    assert!(job.contains("\"state\":\"succeeded\""), "{job}");
+    assert!(job.contains("\"receivedBytes\":300"), "{job}");
+
+    // The node firmware view carries the last result.
+    let node_firmware = http_get(addr, "/api/v1/nodes/00:00:00:00:00:01/firmware");
+    assert!(node_firmware.contains("\"last_result\""), "{node_firmware}");
+    assert!(node_firmware.contains("\"succeeded\""), "{node_firmware}");
+
+    // Both ledger rows were recorded (`firmware-ota.md` §9).
+    let rows = sink.records();
+    assert!(rows
+        .iter()
+        .any(|row| row.name.as_str() == "firmware.ota.result"));
+    assert!(rows
+        .iter()
+        .any(|row| row.name.as_str() == "firmware.version.installed"));
+
+    guard.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_install_without_a_transport_is_an_offline_node() {
+    let dir = firmware_dir("offline");
+    let bytes = vec![1u8, 2, 3, 4];
+    let (store, id) = signed_store(&dir, &bytes);
+
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    server.handle().ota().configure_store(store);
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let body = format!("{{\"image_id\":\"{id}\"}}");
+    let response = http_request(
+        addr,
+        &format!(
+            "POST /api/v1/nodes/00:00:00:00:00:01/firmware/install HTTP/1.1\r\n\
+             Host: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(response.starts_with("HTTP/1.1 409 Conflict"), "{response}");
+    assert!(response.contains("node_offline"), "{response}");
+
+    guard.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_unknown_image_is_not_found() {
+    let dir = firmware_dir("unknown");
+    let (store, _id) = signed_store(&dir, &[9u8; 8]);
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    server.handle().ota().configure_store(store);
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let body = "{\"image_id\":\"deadbeefdeadbeef\"}";
+    let response = http_request(
+        addr,
+        &format!(
+            "POST /api/v1/nodes/00:00:00:00:00:01/firmware/install HTTP/1.1\r\n\
+             Host: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+
+    guard.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_store_rejects_a_bad_signature() {
+    let dir = firmware_dir("badsig");
+    let key = SigningKey::from_bytes(&[5u8; 32]);
+    let store = FirmwareStore::open(&dir, key.verifying_key()).expect("open");
+    let bytes = vec![1u8, 2, 3, 4, 5];
+    let mut signature = key.sign(&sha256(b"different")).to_bytes();
+    signature[10] ^= 0xFF;
+    let result = store.import(
+        FirmwareCompat::encode(1, 0),
+        "esp32s3",
+        ImportRequest {
+            image: bytes,
+            signature,
+            version: "1.0.0".to_string(),
+            target: "esp32s3".to_string(),
+            compatibility: FirmwareCompat::new(
+                FirmwareCompat::encode(1, 0),
+                FirmwareCompat::encode(1, 9),
+            ),
+            notes: String::new(),
+        },
+    );
+    assert!(matches!(result, Err(StoreError::BadSignature)));
+    assert!(store.list().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }

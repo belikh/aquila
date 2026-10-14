@@ -16,6 +16,7 @@ use aquila_sensing::{Sink, SinkError};
 use aquila_types::Event;
 use serde_json::{json, Value};
 
+use crate::ota::Ota;
 use crate::projection::Projections;
 
 /// The shared server state: the latest projected entity model, the read-only
@@ -32,11 +33,12 @@ struct State {
 #[derive(Clone)]
 pub struct Handle {
     state: Arc<Mutex<State>>,
+    ota: Arc<Ota>,
 }
 
 impl Handle {
     /// Construct a handle over an initial entity model and its topology
-    /// projections.
+    /// projections, with OTA unconfigured.
     pub(crate) fn new(model: EntityModel, projections: Projections) -> Self {
         Self {
             state: Arc::new(Mutex::new(State {
@@ -46,7 +48,17 @@ impl Handle {
                 revision: 0,
                 subscribers: Vec::new(),
             })),
+            ota: Arc::new(Ota::unconfigured()),
         }
+    }
+
+    /// The OTA runtime shared by this handle (`firmware-ota.md` §3).
+    ///
+    /// The composition root (and the tests) configure the signed image store and
+    /// register per-node transports here.
+    #[must_use]
+    pub fn ota(&self) -> Arc<Ota> {
+        Arc::clone(&self.ota)
     }
 
     /// Publish one event: fold it into the projected model and fan it out to
@@ -120,23 +132,91 @@ impl Handle {
         lock(&self.state).projections.nodes.clone()
     }
 
-    /// The firmware store manifest for `GET /api/v1/firmware`.
+    /// The firmware store manifest for `GET /api/v1/firmware`
+    /// (`firmware-ota.md` §7).
     pub(crate) fn firmware_json(&self) -> Value {
-        lock(&self.state).projections.firmware.clone()
+        self.ota.store_json()
     }
 
     /// Per-node firmware state for `GET /api/v1/nodes/{node}/firmware`.
     ///
     /// Looks the node up by lower-case MAC or by dense id string; `None` when
-    /// the node is not in the topology.
+    /// the node is not in the topology. The read-only topology fields are
+    /// augmented with the store's latest version and the node's last OTA job.
     pub(crate) fn node_firmware_json(&self, node: &str) -> Option<Value> {
+        let mut value = {
+            let state = lock(&self.state);
+            state
+                .projections
+                .node_firmware
+                .get(&node.to_ascii_lowercase())
+                .or_else(|| state.projections.node_firmware.get(node))
+                .cloned()?
+        };
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "latest_version".to_string(),
+                self.ota
+                    .latest_version()
+                    .map_or(Value::Null, Value::String),
+            );
+            let job = self.ota.job(node);
+            object.insert(
+                "pending".to_string(),
+                job.as_ref().map_or(Value::Bool(false), |job| {
+                    Value::Bool(matches!(
+                        job.state,
+                        crate::ota::FirmwareJobState::Running
+                    ))
+                }),
+            );
+            object.insert(
+                "last_result".to_string(),
+                job.as_ref().map_or(Value::Null, |job| {
+                    json!({
+                        "state": job.state.as_str(),
+                        "result": job.result,
+                        "jobId": job.job_id,
+                    })
+                }),
+            );
+        }
+        Some(value)
+    }
+
+    /// The target-chip string for a topology node (`esp32s3`), if known.
+    pub(crate) fn node_target(&self, node: &str) -> Option<String> {
         let state = lock(&self.state);
         state
             .projections
-            .node_firmware
+            .node_target
             .get(&node.to_ascii_lowercase())
-            .or_else(|| state.projections.node_firmware.get(node))
+            .or_else(|| state.projections.node_target.get(node))
             .cloned()
+    }
+
+    /// Per-node OTA job progress for `GET /api/v1/nodes/{node}/firmware/job`.
+    pub(crate) fn node_firmware_job_json(&self, node: &str) -> Option<Value> {
+        // Only an existing topology node owns a job route.
+        let state = lock(&self.state);
+        let known = state
+            .projections
+            .node_firmware
+            .contains_key(&node.to_ascii_lowercase())
+            || state.projections.node_firmware.contains_key(node);
+        drop(state);
+        if !known {
+            return None;
+        }
+        Some(match self.ota.job(node) {
+            Some(job) => job.to_json(),
+            None => json!({
+                "node": node.to_ascii_lowercase(),
+                "state": "idle",
+                "progress": Value::Null,
+                "result": Value::Null,
+            }),
+        })
     }
 
     /// The commit-keyed metric snapshot for `GET /api/v1/metrics/snapshot`

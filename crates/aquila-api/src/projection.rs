@@ -24,10 +24,14 @@ pub(crate) struct Projections {
     pub nodes: Value,
     /// The zone tree, metric vocabulary and units.
     pub schema: Value,
-    /// The firmware store manifest, shaped as `{ "items": [] }` until OTA lands.
-    pub firmware: Value,
     /// Per-node firmware state, keyed by lower-case MAC and by dense id string.
+    ///
+    /// The firmware store manifest (`GET /api/v1/firmware`) is served from the
+    /// OTA runtime, not a static projection, because it changes as images are
+    /// imported (`firmware-ota.md` §7).
     pub node_firmware: BTreeMap<String, Value>,
+    /// The target-chip string per node, keyed by lower-case MAC and dense id.
+    pub node_target: BTreeMap<String, String>,
 }
 
 /// Build every topology-derived document.
@@ -37,11 +41,15 @@ pub(crate) fn build(topology: &Topology, instance_id: &str) -> Projections {
 
     let mut nodes = Vec::new();
     let mut node_firmware = BTreeMap::new();
+    let mut node_target = BTreeMap::new();
     for node in &model.nodes {
         nodes.push(node_json(node));
         let firmware = node_firmware_json(node);
+        let target = hardware_name(node.device).to_string();
         node_firmware.insert(mac_string(node), firmware.clone());
         node_firmware.insert(node.id.0.to_string(), firmware);
+        node_target.insert(mac_string(node), target.clone());
+        node_target.insert(node.id.0.to_string(), target);
     }
 
     let floors: Vec<Value> = model
@@ -81,8 +89,8 @@ pub(crate) fn build(topology: &Topology, instance_id: &str) -> Projections {
     Projections {
         nodes: json!({ "items": nodes }),
         schema,
-        firmware: json!({ "items": [] }),
         node_firmware,
+        node_target,
     }
 }
 
@@ -99,11 +107,12 @@ fn node_json(node: &Node) -> Value {
     })
 }
 
-/// Per-node firmware state (`firmware-ota.md` §7).
+/// The static per-node firmware state (`firmware-ota.md` §7).
 ///
-/// `installed_version` is real (from the topology); OTA is ticketed, so
-/// `latest_version`, `boot_partition`, `pending` and `last_result` are honestly
-/// absent rather than fabricated.
+/// `installed_version` is real (from the topology). The live OTA fields
+/// (`latest_version`, `pending`, `last_result`) are filled in by
+/// [`Handle::node_firmware_json`](crate::Handle) from the OTA runtime; here they
+/// are honestly absent rather than fabricated.
 fn node_firmware_json(node: &Node) -> Value {
     json!({
         "node": mac_string(node),

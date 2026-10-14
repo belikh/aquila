@@ -19,10 +19,12 @@
 //! Served from the shared snapshot and the topology-derived projections:
 //! `GET /api/v1/{live,health,state,schema,capabilities,nodes,firmware}`,
 //! `GET /api/v1/nodes/{node}/firmware`, `GET /api/v1/nodes/{node}/firmware/job`,
-//! and `GET /api/v1/metrics/snapshot`. The OTA mutating routes
-//! (`POST .../firmware/install`, `POST .../firmware/abort`) exist and fail
-//! closed with a typed `503 ota_unavailable` until the OTA manager lands
-//! (ticketed #13–#15).
+//! and `GET /api/v1/metrics/snapshot`. The OTA routes are backed by the
+//! [`Ota`] runtime: `POST .../firmware/install` begins a job and
+//! `POST .../firmware/abort` aborts it. On a core with no signed image store or
+//! node transport wired, the mutating routes fail closed with a typed
+//! `503 ota_unavailable` (ticket #13 implements the core side; the node
+//! firmware agent is #14).
 //!
 //! # Transport decision
 //!
@@ -38,6 +40,7 @@
 mod error;
 mod handle;
 mod http;
+mod ota;
 mod projection;
 mod server;
 
@@ -46,6 +49,11 @@ mod tests;
 
 pub use error::ApiError;
 pub use handle::{ChannelSink, Handle};
+pub use ota::{
+    FirmwareCompat, FirmwareJob, FirmwareJobState, FirmwareManifest, FirmwareStore, ImportRequest,
+    InstallError, Ota, OtaConfig, OtaError, OtaManager, OtaStats, OtaTransport, StoreError,
+    StoredImage, DEFAULT_FIRMWARE_DIR,
+};
 pub use server::{Auth, Server, ServerGuard};
 
 // The outbound half of the core↔node protocol lives in `aquila-sources`; it is

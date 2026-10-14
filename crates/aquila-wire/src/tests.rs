@@ -402,7 +402,166 @@ fn control_fixtures() -> Vec<ControlMessage> {
                 detail: "ring overflow".to_string(),
             }),
         },
+        ControlMessage {
+            request_id: 14,
+            body: ControlBody::OtaBegin(OtaBegin {
+                image_id: 0x0000_00A1,
+                size: 65_536,
+                sha256: [0xAB; 32],
+                signature: [0xCD; 64],
+                version: "1.2.3".to_string(),
+                chunk_size: 1024,
+                window: 8,
+            }),
+        },
+        ControlMessage {
+            request_id: 15,
+            body: ControlBody::OtaChunk(OtaChunk {
+                offset: 2048,
+                len: 3,
+                crc32: 0x1234_5678,
+                bytes: vec![0xDE, 0xAD, 0xBE],
+            }),
+        },
+        ControlMessage {
+            request_id: 16,
+            body: ControlBody::OtaAck(OtaAck {
+                received_upto: 64_512,
+                status: OtaAckStatus::Ok,
+            }),
+        },
+        ControlMessage {
+            request_id: 17,
+            body: ControlBody::OtaStatus(OtaStatus {
+                state: OtaState::Receiving,
+                received_upto: 64_512,
+                size: 65_536,
+            }),
+        },
+        ControlMessage {
+            request_id: 18,
+            body: ControlBody::OtaEnd(OtaEnd {
+                image_id: 0x0000_00A1,
+                sha256: [0xAB; 32],
+            }),
+        },
+        ControlMessage {
+            request_id: 19,
+            body: ControlBody::OtaAbort(OtaAbort {
+                reason: "operator aborted".to_string(),
+            }),
+        },
+        ControlMessage {
+            request_id: 20,
+            body: ControlBody::OtaResult(OtaResult {
+                outcome: OtaOutcome::Activated,
+                reason: String::new(),
+            }),
+        },
     ]
+}
+
+#[test]
+fn ota_opcodes_are_stable() {
+    assert_eq!(Opcode::OtaBegin.to_u8(), 0x0E);
+    assert_eq!(Opcode::OtaChunk.to_u8(), 0x0F);
+    assert_eq!(Opcode::OtaAck.to_u8(), 0x10);
+    assert_eq!(Opcode::OtaStatus.to_u8(), 0x11);
+    assert_eq!(Opcode::OtaEnd.to_u8(), 0x12);
+    assert_eq!(Opcode::OtaAbort.to_u8(), 0x13);
+    assert_eq!(Opcode::OtaResult.to_u8(), 0x14);
+    assert_eq!(Opcode::from_u8(0x0E), Some(Opcode::OtaBegin));
+    assert_eq!(Opcode::from_u8(0x14), Some(Opcode::OtaResult));
+}
+
+/// Golden vectors pin the exact OTA bytes so the C header and the firmware
+/// cannot drift from this codec (`capture-and-firmware.md` §9.4).
+#[test]
+fn ota_golden_vectors_round_trip() {
+    // `OTA_BEGIN`: a fixed, fully specified message.
+    let begin = encode_control(&ControlMessage {
+        request_id: 0x0102_0304,
+        body: ControlBody::OtaBegin(OtaBegin {
+            image_id: 1,
+            size: 3,
+            sha256: [0x11; 32],
+            signature: [0x22; 64],
+            version: "9.9".to_string(),
+            chunk_size: 1024,
+            window: 8,
+        }),
+    })
+    .expect("encode begin");
+    // Header: "AQCC", version 1, opcode 0x0E, body_len = 4+4+32+64+1+3+2+1 = 111.
+    assert_eq!(&begin[..6], b"AQCC\x01\x0e");
+    assert_eq!(u16::from_le_bytes([begin[6], begin[7]]), 111);
+    assert_eq!(
+        decode_control(&begin).expect("decode begin"),
+        ControlMessage {
+            request_id: 0x0102_0304,
+            body: ControlBody::OtaBegin(OtaBegin {
+                image_id: 1,
+                size: 3,
+                sha256: [0x11; 32],
+                signature: [0x22; 64],
+                version: "9.9".to_string(),
+                chunk_size: 1024,
+                window: 8,
+            }),
+        }
+    );
+
+    // `OTA_CHUNK`: offset 0x0000_0800, len 4, crc32 0xDEAD_BEEF, four bytes.
+    let chunk = encode_control(&ControlMessage {
+        request_id: 5,
+        body: ControlBody::OtaChunk(OtaChunk {
+            offset: 0x0000_0800,
+            len: 4,
+            crc32: 0xDEAD_BEEF,
+            bytes: vec![0x01, 0x02, 0x03, 0x04],
+        }),
+    })
+    .expect("encode chunk");
+    assert_eq!(&chunk[..6], b"AQCC\x01\x0f");
+    assert_eq!(u16::from_le_bytes([chunk[6], chunk[7]]), 4 + 2 + 4 + 4);
+    assert_eq!(
+        &chunk[12..12 + 14],
+        &[
+            0x00, 0x08, 0x00, 0x00, // offset LE
+            0x04, 0x00, // len LE
+            0xEF, 0xBE, 0xAD, 0xDE, // crc32 LE
+            0x01, 0x02, 0x03, 0x04, // payload
+        ]
+    );
+
+    // `OTA_ACK`: cumulative offset 0x0000_0800, status Ok.
+    let ack = encode_control(&ControlMessage {
+        request_id: 6,
+        body: ControlBody::OtaAck(OtaAck {
+            received_upto: 0x0000_0800,
+            status: OtaAckStatus::Ok,
+        }),
+    })
+    .expect("encode ack");
+    assert_eq!(&ack[..6], b"AQCC\x01\x10");
+    assert_eq!(&ack[12..17], &[0x00, 0x08, 0x00, 0x00, 0x00]);
+
+    // The authenticated framing is additive and round-trips too.
+    let token = [0x5Au8; 32];
+    for message in control_fixtures() {
+        let bytes = encode_control_authenticated(&message, &token).expect("encode auth");
+        let decoded = decode_control_authenticated(&bytes, &token).expect("decode auth");
+        assert_eq!(decoded, message, "authenticated OTA round trip mismatch");
+    }
+}
+
+#[test]
+fn ota_unknown_enum_bytes_are_preserved() {
+    // An unknown ACK status, OTA state and outcome decode to the sentinel
+    // rather than being reinterpreted.
+    assert_eq!(OtaAckStatus::from_u8(0x42), OtaAckStatus::Unknown);
+    assert_eq!(OtaState::from_u8(0x42), OtaState::Unknown);
+    assert_eq!(OtaOutcome::from_u8(0x42), OtaOutcome::Unknown);
 }
 
 #[test]

@@ -83,14 +83,27 @@ pub const MAX_CONTROL_STRING: usize = u8::MAX as usize;
 /// The maximum number of source MACs in a config allow-list (a one-byte count).
 pub const MAX_SOURCE_MACS: usize = u8::MAX as usize;
 
-/// The control opcodes of `capture-and-firmware.md` §6.2.
+/// The default firmware-OTA chunk payload in bytes (`firmware-ota.md` §5).
+pub const OTA_DEFAULT_CHUNK_SIZE: u16 = 1024;
+
+/// The default firmware-OTA sliding-window depth (`firmware-ota.md` §5).
+pub const OTA_DEFAULT_WINDOW: u8 = 8;
+
+/// The largest firmware-OTA chunk payload the control datagram can carry.
 ///
-/// Each discriminant is the on-wire opcode byte.
+/// The OTA body is `offset(4) + len(2) + crc32(4) + bytes` inside the fixed
+/// 12-byte control header and the 32-byte auth trailer, so a chunk must fit
+/// within [`MAX_DATAGRAM_LEN`].
+pub const OTA_MAX_CHUNK_SIZE: u16 =
+    (MAX_DATAGRAM_LEN - CONTROL_HEADER_LEN - 10 - CONTROL_AUTH_LEN) as u16;
+
+/// The control opcodes of `capture-and-firmware.md` §6.2, including the
+/// firmware-OTA extension `0x0E`–`0x14` of `firmware-ota.md` §5.
 ///
-/// The firmware-OTA extension opcodes `0x0E`–`0x14` are **specified but not
-/// implemented in v1** (`firmware-ota.md`; tickets #13–#15) and are
-/// deliberately absent here: defining them would imply a wire contract the node
-/// and core do not yet honour (`sister-issues-firmware-ha.md` F2/F29/F36/F38).
+/// Each discriminant is the on-wire opcode byte. Ticket #13 adds the OTA
+/// opcodes to the codec; the *firmware* agent that honours them is ticket #14,
+/// so the codec defines the wire contract the core now speaks and a future node
+/// will parse (one layout, two languages).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Opcode {
@@ -120,6 +133,20 @@ pub enum Opcode {
     FactoryReset = 0x0C,
     /// `0x0D` node → core: a noteworthy unsolicited event.
     Event = 0x0D,
+    /// `0x0E` core → node: start a firmware transfer (`firmware-ota.md` §5).
+    OtaBegin = 0x0E,
+    /// `0x0F` core → node: one image chunk.
+    OtaChunk = 0x0F,
+    /// `0x10` node → core: cumulative chunk acknowledgement.
+    OtaAck = 0x10,
+    /// `0x11` node → core: OTA progress/state.
+    OtaStatus = 0x11,
+    /// `0x12` core → node: finalise, verify and activate.
+    OtaEnd = 0x12,
+    /// `0x13` both: discard the transfer.
+    OtaAbort = 0x13,
+    /// `0x14` node → core: OTA outcome.
+    OtaResult = 0x14,
 }
 
 impl Opcode {
@@ -146,6 +173,13 @@ impl Opcode {
             0x0B => Some(Self::Identify),
             0x0C => Some(Self::FactoryReset),
             0x0D => Some(Self::Event),
+            0x0E => Some(Self::OtaBegin),
+            0x0F => Some(Self::OtaChunk),
+            0x10 => Some(Self::OtaAck),
+            0x11 => Some(Self::OtaStatus),
+            0x12 => Some(Self::OtaEnd),
+            0x13 => Some(Self::OtaAbort),
+            0x14 => Some(Self::OtaResult),
             _ => None,
         }
     }

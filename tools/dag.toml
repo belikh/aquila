@@ -51,6 +51,7 @@ rev = 1
 "aquila-evaluation" = ["aquila-types", "aquila-sources", "aquila-sensing",
                        "aquila-metrics", "aquila-simulator"]
 "aquila-ha"         = ["aquila-types", "aquila-geometry", "aquila-sensing"]
-"aquila-api"        = ["aquila-types", "aquila-geometry", "aquila-sensing",
-                       "aquila-sources", "aquila-ha"]
+"aquila-api"        = ["aquila-types", "aquila-wire", "aquila-geometry",
+                       "aquila-metrics", "aquila-sensing", "aquila-sources",
+                       "aquila-ha"]
 "aquila-dashboard"  = ["aquila-types", "aquila-api"]

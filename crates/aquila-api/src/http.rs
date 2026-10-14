@@ -26,6 +26,8 @@ pub(crate) struct Request {
     pub query: String,
     /// Header name/value pairs, names lower-cased and values trimmed.
     pub headers: Vec<(String, String)>,
+    /// The request body, read up to `Content-Length` (empty when absent).
+    pub body: Vec<u8>,
     /// Whether `Upgrade: websocket` was present.
     pub websocket: bool,
 }
@@ -64,24 +66,26 @@ impl Request {
 pub(crate) fn read_request(stream: &mut TcpStream) -> Result<Request, ApiError> {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 2048];
-    loop {
+    let head_end = loop {
         let read = stream.read(&mut chunk)?;
         if read == 0 {
-            break;
+            break find(&buffer, b"\r\n\r\n");
         }
         buffer.extend_from_slice(&chunk[..read]);
-        if find(&buffer, b"\r\n\r\n").is_some() {
-            break;
+        if let Some(index) = find(&buffer, b"\r\n\r\n") {
+            break Some(index + 4);
         }
         if buffer.len() > MAX_REQUEST_BYTES {
             return Err(ApiError::Http("request head too large".to_string()));
         }
-    }
-    if buffer.is_empty() {
-        return Err(ApiError::Http("empty request".to_string()));
-    }
+    };
+    let head_end = match head_end {
+        Some(index) => index,
+        None if buffer.is_empty() => return Err(ApiError::Http("empty request".to_string())),
+        None => return Err(ApiError::Http("malformed request head".to_string())),
+    };
 
-    let head = String::from_utf8_lossy(&buffer);
+    let head = String::from_utf8_lossy(&buffer[..head_end]);
     let mut lines = head.split("\r\n");
     let request_line = lines.next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
@@ -109,11 +113,33 @@ pub(crate) fn read_request(stream: &mut TcpStream) -> Result<Request, ApiError> 
         .iter()
         .any(|(name, value)| name == "upgrade" && value.to_ascii_lowercase().contains("websocket"));
 
+    // Read exactly `Content-Length` body bytes, using any already buffered past
+    // the head and then the stream. A body larger than the head budget is
+    // refused rather than read unbounded.
+    let content_length = headers
+        .iter()
+        .find(|(name, _)| name == "content-length")
+        .and_then(|(_, value)| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    if content_length > MAX_REQUEST_BYTES {
+        return Err(ApiError::Http("request body too large".to_string()));
+    }
+    let mut body = buffer[head_end..].to_vec();
+    while body.len() < content_length {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..read]);
+    }
+    body.truncate(content_length);
+
     Ok(Request {
         method,
         path,
         query,
         headers,
+        body,
         websocket,
     })
 }
@@ -144,9 +170,13 @@ pub(crate) fn write_response(
 fn reason_phrase(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        409 => "Conflict",
+        422 => "Unprocessable Entity",
+        500 => "Internal Server Error",
         501 => "Not Implemented",
         503 => "Service Unavailable",
         _ => "Status",

@@ -81,12 +81,14 @@ pub use constants::{
     Opcode, CONTROL_AUTH_LEN, CONTROL_HEADER_LEN, CONTROL_MAGIC, CONTROL_PORT, CONTROL_VERSION,
     CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN, CSI_MAGIC,
     CSI_MESSAGE_TYPE, MAX_CONTROL_STRING, MAX_DATAGRAM_LEN, MAX_SOURCE_MACS, MAX_SUBCARRIERS,
-    SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
+    OTA_DEFAULT_CHUNK_SIZE, OTA_DEFAULT_WINDOW, OTA_MAX_CHUNK_SIZE, SUBCARRIER_FORMAT_INT8_IQ,
+    WIRE_MAJOR, WIRE_MINOR,
 };
 pub use control::{
     decode_control, decode_control_authenticated, encode_control, encode_control_authenticated,
     message_mac, result_message, Ack, AckStatus, ControlBody, ControlMessage, EventNotice, JoinAck,
-    JoinRequest, SetConfig, SetCsi, Status, SyncEcho, SyncPing,
+    JoinRequest, OtaAbort, OtaAck, OtaAckStatus, OtaBegin, OtaChunk, OtaEnd, OtaOutcome, OtaResult,
+    OtaState, OtaStatus, SetConfig, SetCsi, Status, SyncEcho, SyncPing,
 };
 pub use datagram::{datagram_len, decode_datagram, encode_datagram};
 pub use error::{DecodeError, WireError};

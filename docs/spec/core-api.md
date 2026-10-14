@@ -231,11 +231,15 @@ require `If-Match` where a `revision` exists.
 
 No other routes exist. Unknown paths return `404 not_found`.
 
-**Implementation status.** The firmware routes exist and **fail closed** until
-the OTA manager lands (ticketed #13–#15): `POST .../firmware/install` and
-`POST .../firmware/abort` return a typed `503 ota_unavailable`. The topology
-CRUD and calibration routes are the dashboard's contract (ticket #10); the HACS
-component consumes the read-only subset listed in `home-assistant.md` §5.2.
+**Implementation status.** The core OTA subsystem landed with ticket #13: the
+firmware routes are served from the signed image store and transfer manager.
+`POST .../firmware/install` begins a job (`202`), `GET .../firmware/job` reports
+progress, and `POST .../firmware/abort` aborts it; the mutating routes return a
+typed `503 ota_unavailable` only when the core has no store or node transport
+wired. The node firmware agent (ticket #14) and the HA `update` entity (ticket
+#15) remain. The topology CRUD and calibration routes are the dashboard's
+contract (ticket #10); the HACS component consumes the read-only subset listed
+in `home-assistant.md` §5.2.
 
 ## 7. Resource representations
 

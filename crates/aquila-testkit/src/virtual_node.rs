@@ -443,6 +443,16 @@ impl VirtualNode {
                 let reply = result_message(message.request_id, AckStatus::Active, "accepted");
                 self.send_reply(from, &reply)?;
             }
+            // The firmware OTA agent is ticket #14; this lightweight virtual
+            // node does not carry an image. The dedicated OTA fake node in
+            // `crate::ota` speaks these opcodes for the manager tracer.
+            ControlBody::OtaBegin(_)
+            | ControlBody::OtaChunk(_)
+            | ControlBody::OtaAck(_)
+            | ControlBody::OtaStatus(_)
+            | ControlBody::OtaEnd(_)
+            | ControlBody::OtaAbort(_)
+            | ControlBody::OtaResult(_) => {}
             // Replies and unsolicited messages from the core are not requests;
             // the node has nothing to answer.
             ControlBody::Result(_)

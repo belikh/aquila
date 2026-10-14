@@ -18,6 +18,7 @@ mod fixture;
 mod generator;
 mod metrics;
 mod models;
+mod ota;
 mod scoring;
 mod virtual_node;
 
@@ -29,6 +30,9 @@ pub use fixture::{Fixture, FixtureError};
 pub use generator::{topology_for, topology_for_floors, DeterministicCsiGenerator, FloorPlan};
 pub use metrics::RecordingMetricSink;
 pub use models::{FakePoseModel, FakeVitalsModel};
+pub use ota::{
+    sign_image, signing_key, verify_image, verifying_key, FakeOtaNode, FakeOtaTransport,
+};
 pub use scoring::{
     count_mae, floor_count_mae, floor_presence_f1, home_count_mae, home_floor_attribution_accuracy,
     home_presence_f1, presence_f1, room_attribution_accuracy, torso_pck20, torso_span, vitals_mae,

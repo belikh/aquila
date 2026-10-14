@@ -199,7 +199,7 @@ impl CoreApi for FakeCoreApi {
                 "api": { "major": 1, "minor": 0 },
                 "transports": { "http": true, "websocket": false },
                 "features": { "polling": true, "calibrationWizard": true,
-                              "nodeControl": false, "firmwareOta": false },
+                              "nodeControl": false, "firmwareOta": true },
                 "minComponentVersion": "0.1.0"
             }))
             .map_err(|error| ApiError::Decode(error.to_string())),

@@ -42,7 +42,7 @@ These types are declared exactly once. A second declaration anywhere is a defect
 | `aquila-sensing` | 5 | L3 core | The single stateful core: time, calibration, windows, fusion, escalation. | `Sensing::new/step/calibrate/sink`; owns the `Clock` and `Sink` seams; internal `time`/`calibration`/`window`/`fusion`/`escalation` modules. | `aquila-types`, `aquila-geometry`, `aquila-signal`, `aquila-sources`, `aquila-inference`, `aquila-metrics` | `architecture.md` §4, `geometry-calibration.md`, `fusion-sync.md` |
 | `aquila-evaluation` | 6 | L4 edges | The `GroundTruth` seam, replay/sim harness, and scoring. | `GroundTruth::label/coverage/kind/provenance`; `Harness::run`; `CollectorSink`. | `aquila-types`, `aquila-sources`, `aquila-sensing`, `aquila-metrics`, `aquila-simulator` | `evaluation.md` |
 | `aquila-ha` | 6 | L4 edges | Map observations to Home Assistant entities; transports nothing. | `HaSink: Sink`; `EntityModel`. | `aquila-types`, `aquila-geometry`, `aquila-sensing` | `home-assistant.md` |
-| `aquila-api` | 7 | L4 edges | The private loopback HTTP+WS control plane and node-command relay. | `Server::bind/handle`; `Handle::publish`; `ChannelSink`. | `aquila-types`, `aquila-geometry`, `aquila-sensing`, `aquila-sources`, `aquila-ha` | `core-api.md` |
+| `aquila-api` | 7 | L4 edges | The private loopback HTTP+WS control plane, node-command relay and core OTA manager/signed image store. | `Server::bind/handle`; `Handle::publish`; `ChannelSink`; `FirmwareStore`; `OtaManager`. | `aquila-types`, `aquila-wire`, `aquila-geometry`, `aquila-metrics`, `aquila-sensing`, `aquila-sources`, `aquila-ha` | `core-api.md`, `firmware-ota.md` |
 | `aquila-dashboard` | 8 | L5 end adapters | Rust→WASM management UI served via sidebar ingress. | WASM entry point; Leptos SPA; client of `aquila-api`. | `aquila-types`, `aquila-api` | `dashboard.md` |
 
 ## Composition root and tooling (unlayered, exempt)
@@ -108,8 +108,9 @@ aquila-sensing    -> aquila-types, aquila-geometry, aquila-signal,
 aquila-evaluation -> aquila-types, aquila-sources, aquila-sensing,
                      aquila-metrics, aquila-simulator
 aquila-ha         -> aquila-types, aquila-geometry, aquila-sensing
-aquila-api        -> aquila-types, aquila-geometry, aquila-sensing,
-                     aquila-sources, aquila-ha
+aquila-api        -> aquila-types, aquila-wire, aquila-geometry,
+                     aquila-metrics, aquila-sensing, aquila-sources,
+                     aquila-ha
 aquila-dashboard  -> aquila-types, aquila-api
 ```
 

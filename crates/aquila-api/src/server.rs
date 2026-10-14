@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 use crate::error::ApiError;
 use crate::handle::Handle;
 use crate::http::{read_request, write_response, Request};
+use crate::ota::InstallError;
 use crate::projection;
 
 /// How long the non-blocking accept loop pauses between polls.
@@ -268,34 +269,27 @@ fn route(
             }
         }
         ("GET", ["api", "v1", "nodes", node, "firmware", "job"]) => {
-            if handle.node_firmware_json(node).is_some() {
-                write_json(
-                    stream,
-                    200,
-                    &json!({ "node": node, "state": "idle", "progress": Value::Null,
-                             "result": Value::Null }),
-                )
-            } else {
-                not_found(stream)
+            match handle.node_firmware_job_json(node) {
+                Some(body) => write_json(stream, 200, &body),
+                None => not_found(stream),
             }
         }
-        // OTA is specified (`firmware-ota.md`) but not implemented in v1: the
-        // endpoints exist only to fail closed with a typed 503, and the node
-        // control opcodes 0x0E–0x14 are unimplemented (F2/F28/F29/F36/F38).
-        ("POST", ["api", "v1", "nodes", node, "firmware", "install"])
-        | ("POST", ["api", "v1", "nodes", node, "firmware", "abort"]) => {
-            if handle.node_firmware_json(node).is_some() {
-                problem(
-                    stream,
-                    503,
-                    "ota_unavailable",
-                    "Firmware OTA is not implemented in this build",
-                    true,
-                    "the OTA manager is ticketed (#13–#15); the endpoint exists and fails closed",
-                )
-            } else {
-                not_found(stream)
+        ("POST", ["api", "v1", "nodes", node, "firmware", "install"]) => {
+            install_firmware(stream, request, node, handle)
+        }
+        ("POST", ["api", "v1", "nodes", node, "firmware", "abort"]) => {
+            if handle.node_firmware_json(node).is_none() {
+                return not_found(stream);
             }
+            let aborted = handle.ota().abort(node);
+            write_json(
+                stream,
+                200,
+                &json!({
+                    "node": node.to_ascii_lowercase(),
+                    "state": if aborted { "aborted" } else { "idle" },
+                }),
+            )
         }
         ("GET", ["api", "v1", "stream"]) if request.websocket => problem(
             stream,
@@ -317,6 +311,121 @@ fn route(
     }
 }
 
+/// Begin a firmware OTA (`core-api.md` §6, `firmware-ota.md` §7).
+fn install_firmware(
+    stream: &mut TcpStream,
+    request: &Request,
+    node: &str,
+    handle: &Handle,
+) -> Result<(), ApiError> {
+    let target = match handle.node_target(node) {
+        Some(target) => target,
+        None => return not_found(stream),
+    };
+
+    // Capability first: an unconfigured core cannot run OTA at all, whatever
+    // body arrives, and says so honestly (`core-api.md` §6).
+    if !handle.ota().has_store() {
+        return problem(
+            stream,
+            503,
+            "ota_unavailable",
+            "Firmware OTA is not configured in this build",
+            true,
+            "no signed image store or node transport is wired to the control plane",
+        );
+    }
+
+    let body: Value = if request.body.is_empty() {
+        json!({})
+    } else {
+        match serde_json::from_slice(&request.body) {
+            Ok(value) => value,
+            Err(_) => {
+                return problem(
+                    stream,
+                    422,
+                    "validation_failed",
+                    "Request body is not valid JSON",
+                    false,
+                    "POST .../firmware/install expects { image_id, force? }",
+                )
+            }
+        }
+    };
+    let image_id = body
+        .get("image_id")
+        .or_else(|| body.get("imageId"))
+        .and_then(Value::as_str);
+    let image_id = match image_id {
+        Some(id) if !id.is_empty() => id,
+        _ => {
+            return problem(
+                stream,
+                422,
+                "validation_failed",
+                "image_id is required",
+                false,
+                "POST .../firmware/install expects { image_id, force? }",
+            )
+        }
+    };
+    let force = body.get("force").and_then(Value::as_bool).unwrap_or(false);
+
+    match handle.ota().install(node, &target, image_id, force) {
+        Ok(job) => write_json(
+            stream,
+            202,
+            &json!({
+                "jobId": job.job_id,
+                "node": job.node,
+                "imageId": job.image_id,
+                "state": job.state.as_str(),
+            }),
+        ),
+        Err(InstallError::Unavailable) => problem(
+            stream,
+            503,
+            "ota_unavailable",
+            "Firmware OTA is not configured in this build",
+            true,
+            "no signed image store or node transport is wired to the control plane",
+        ),
+        Err(InstallError::ImageNotFound(id)) => problem(
+            stream,
+            404,
+            "not_found",
+            "Firmware image is not in the store",
+            false,
+            &format!("no stored image with id {id}"),
+        ),
+        Err(InstallError::NodeOffline(node)) => problem(
+            stream,
+            409,
+            "node_offline",
+            "Command cannot reach an offline node",
+            true,
+            &format!("no control transport is registered for node {node}"),
+        ),
+        Err(InstallError::Store(error)) => problem(
+            stream,
+            422,
+            "validation_failed",
+            "Firmware image was rejected",
+            false,
+            &error.to_string(),
+        ),
+        Err(InstallError::Transfer(error)) => problem(
+            stream,
+            503,
+            "degraded",
+            "Firmware transfer did not complete",
+            true,
+            &error.to_string(),
+        ),
+    }
+}
+
 /// The capability document (`core-api.md` §4.2). WebSocket is honestly absent.
 fn capabilities() -> Value {
     json!({
@@ -325,7 +434,7 @@ fn capabilities() -> Value {
         "features": {
             "calibrationWizard": false,
             "nodeControl": false,
-            "firmwareOta": false,
+            "firmwareOta": true,
             "polling": true
         },
         "minComponentVersion": "0.1.0"
@@ -432,6 +541,7 @@ mod tests {
                 .iter()
                 .map(|(name, value)| (name.to_ascii_lowercase(), (*value).to_string()))
                 .collect(),
+            body: Vec::new(),
             websocket: false,
         }
     }

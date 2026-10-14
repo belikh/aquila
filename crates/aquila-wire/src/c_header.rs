@@ -18,8 +18,8 @@ use core::fmt::Write as _;
 use crate::constants::{
     control_offset, csi_body_offset, csi_offset, Opcode, CONTROL_AUTH_LEN, CONTROL_MAGIC,
     CONTROL_PORT, CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN,
-    CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ,
-    WIRE_MAJOR, WIRE_MINOR,
+    CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, OTA_DEFAULT_CHUNK_SIZE,
+    OTA_DEFAULT_WINDOW, OTA_MAX_CHUNK_SIZE, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
 };
 
 /// Render the canonical layout as a C header (`node_wire.h`).
@@ -65,6 +65,9 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "#define AQ_CSI_MAX_DATAGRAM_LEN {MAX_DATAGRAM_LEN}u");
     let _ = writeln!(s, "#define AQ_CONTROL_HEADER_LEN {}", control_offset::BODY);
     let _ = writeln!(s, "#define AQ_CONTROL_AUTH_LEN {CONTROL_AUTH_LEN}u");
+    let _ = writeln!(s, "#define AQ_OTA_DEFAULT_CHUNK_SIZE {OTA_DEFAULT_CHUNK_SIZE}u");
+    let _ = writeln!(s, "#define AQ_OTA_DEFAULT_WINDOW {OTA_DEFAULT_WINDOW}u");
+    let _ = writeln!(s, "#define AQ_OTA_MAX_CHUNK_SIZE {OTA_MAX_CHUNK_SIZE}u");
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* Variable-length CSI payload. */");
@@ -97,6 +100,13 @@ pub fn generate_c_header() -> String {
     emit_opcode(&mut s, "AQ_OP_IDENTIFY", Opcode::Identify);
     emit_opcode(&mut s, "AQ_OP_FACTORY_RESET", Opcode::FactoryReset);
     emit_opcode(&mut s, "AQ_OP_EVENT", Opcode::Event);
+    emit_opcode(&mut s, "AQ_OP_OTA_BEGIN", Opcode::OtaBegin);
+    emit_opcode(&mut s, "AQ_OP_OTA_CHUNK", Opcode::OtaChunk);
+    emit_opcode(&mut s, "AQ_OP_OTA_ACK", Opcode::OtaAck);
+    emit_opcode(&mut s, "AQ_OP_OTA_STATUS", Opcode::OtaStatus);
+    emit_opcode(&mut s, "AQ_OP_OTA_END", Opcode::OtaEnd);
+    emit_opcode(&mut s, "AQ_OP_OTA_ABORT", Opcode::OtaAbort);
+    emit_opcode(&mut s, "AQ_OP_OTA_RESULT", Opcode::OtaResult);
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* CSI header field offsets. */");

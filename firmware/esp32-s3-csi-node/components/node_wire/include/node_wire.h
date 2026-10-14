@@ -29,6 +29,9 @@
 #define AQ_CSI_MAX_DATAGRAM_LEN 1472u
 #define AQ_CONTROL_HEADER_LEN 12
 #define AQ_CONTROL_AUTH_LEN 32u
+#define AQ_OTA_DEFAULT_CHUNK_SIZE 1024u
+#define AQ_OTA_DEFAULT_WINDOW 8u
+#define AQ_OTA_MAX_CHUNK_SIZE 1418u
 
 /* Variable-length CSI payload. */
 /* Interleaved signed int8 I/Q, Q then I (imaginary first) per subcarrier; 2 bytes per subcarrier. */
@@ -51,6 +54,13 @@
 #define AQ_OP_IDENTIFY 0x0Bu
 #define AQ_OP_FACTORY_RESET 0x0Cu
 #define AQ_OP_EVENT 0x0Du
+#define AQ_OP_OTA_BEGIN 0x0Eu
+#define AQ_OP_OTA_CHUNK 0x0Fu
+#define AQ_OP_OTA_ACK 0x10u
+#define AQ_OP_OTA_STATUS 0x11u
+#define AQ_OP_OTA_END 0x12u
+#define AQ_OP_OTA_ABORT 0x13u
+#define AQ_OP_OTA_RESULT 0x14u
 
 /* CSI header field offsets. */
 #define AQ_CSI_OFF_MAGIC 0u

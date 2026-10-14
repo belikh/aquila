@@ -2,12 +2,16 @@
 
 Status: draft for review (v1.1). Prose in Australian English.
 
-> **Not yet implemented — see ticket #14.** This document specifies the OTA
-> design (tickets #13–#15); none of it is shipped in v1. There is no OTA handler
-> in the firmware, no `esp_ota_*` call, no partition table and no
-> key-provisioning path, and the `0x0E`–`0x14` opcodes are absent from
-> `node_wire.h`. The core's OTA endpoints exist only to fail closed with a typed
-> `503 ota_unavailable`. Read every present-tense statement below as a
+> **Status: core side implemented (ticket #13); firmware and HA pending.**
+> `aquila-wire` now encodes/decodes the `0x0E`–`0x14` opcodes and the generated
+> `node_wire.h` carries them; `aquila-api` owns the signed image store
+> (SHA-256 + Ed25519), the sliding-window transfer manager and the real
+> `/api/v1/firmware*` routes. The **node firmware agent** (partition table,
+> `esp_ota_*`, health check and rollback) is still ticket #14, and the HA
+> `update` entity is ticket #15; there is no `esp_ota_*` call or
+> key-provisioning path in the firmware yet. On a core with no store or node
+> transport wired, the `/firmware*` mutating routes still fail closed with a
+> typed `503 ota_unavailable`. Read every present-tense statement below as a
 > requirement, not a fact about the build (F2/F29/F36/F38).
 
 Scope: how an ESP32-S3 node's firmware is updated over the private LAN from the
