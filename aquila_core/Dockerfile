@@ -60,6 +60,7 @@ RUN apt-get update \
     && cargo install wasm-bindgen-cli --version 0.2.129 --locked
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
+COPY xtask/ ./xtask/
 # `trunk build` reads `crates/aquila-dashboard/Trunk.toml` and writes the WASM
 # bundle, JS glue, CSS and `index.html` to `crates/aquila-dashboard/dist`
 # (ticket #10, `dashboard.md` §2). Assets are emitted with relative URLs so they
@@ -73,6 +74,7 @@ FROM rust:1.98.1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
+COPY xtask/ ./xtask/
 # `--locked` fails the build rather than silently resolving a different
 # dependency graph than the committed Cargo.lock.
 RUN cargo build --release --locked -p aquila-addon
