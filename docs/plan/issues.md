@@ -28,10 +28,12 @@ Blocking edges are recorded as native GitHub issue dependencies.
 - Closed (done): **#2–#15** (the whole plan; note #16 was never created).
 - Open: **#1** (the map itself), **#17** (run and verify the HACS integration +
   add-on on a live HA), **#18** (component should discover the core add-on
-  instead of a hand-entered hostname).
+  instead of a hand-entered hostname), **#19** (reconcile `/api/v1/health` with
+  `home-assistant.md` §5.2: `instance_id`, `min_component_version`, status).
 
-#17 and #18 are post-plan operational issues found during live verification, not
-frontier tickets from the map.
+#17–#19 are post-plan operational issues found during live verification, not
+frontier tickets from the map. #19 is fixed in add-on 0.1.4 / component 0.2.1
+(tag `v0.1.4`).
 
 ## Working the plan
 

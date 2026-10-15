@@ -356,3 +356,28 @@ session may have left a stale tree. Stage explicit paths and read
 
 Checks: workspace build + **324 passed, 0 failed**; `dag-check: OK — 18 members,
 59 internal edges, rev 1`.
+
+## R9 — health endpoint did not match the component contract (found live)
+
+**Class:** two specs defined the same endpoint differently, and only one was
+implemented.
+
+`home-assistant.md` §5.2/§7 require `GET /api/v1/health` to carry `instance_id`,
+`api_version`, `min_component_version` and the status fields the component reads
+(`core_connected`, `self_test_ok`). `core-api.md` §4.1 defined health as
+`{status, uptimeMs, api:{major,minor}, subsystems}` — and that is what the core
+implemented, so `instance_id` was never returned. Live symptom: the HACS config
+flow aborted with `unknown` (`api.py::async_validate` raises
+`AquilaError("core health response is missing instance_id")`), after the earlier
+`invalid_auth` was resolved by the add-on 0.1.3 persistence fix.
+
+Fixed (issue #19): `core-api.md` §4.1 is now the one authoritative health schema;
+the core returns `instance_id` (UUID, generated once and persisted under `/data`),
+`min_component_version` (one constant shared with `/capabilities`),
+`core_connected`, `self_test_ok`, `nodes_online`/`nodes_total`,
+`calibration_state`, and honest `null`s for `clock_drift_ms`/`last_packet_ts`.
+The component reads the API major from the canonical `api` object (`api_version`
+kept as a tolerated alias). `home-assistant.md` §5.2 now references §4.1.
+
+Checks: **327 passed, 0 failed** (core); **43 passed** (component); `dag-check`
+OK; clippy clean. Shipped in add-on **0.1.4** / component **0.2.1** (`v0.1.4`).
