@@ -2,6 +2,12 @@
 /target
 **/target
 
+# Build/release artefacts (never committed)
+/aquila.zip
+/aquila-dashboard.zip
+/SHA256SUMS
+crates/aquila-dashboard/dist/
+
 # Nix
 /result
 /result-*
