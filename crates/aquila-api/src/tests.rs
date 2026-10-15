@@ -16,6 +16,7 @@ use aquila_types::{
 };
 use aquila_wire::{ControlBody, ControlMessage, OtaAck, OtaAckStatus, OtaOutcome, OtaResult};
 use ed25519_dalek::{Signer, SigningKey};
+use serde_json::Value;
 
 use crate::{
     ApiError, Auth, ChannelSink, FirmwareCompat, FirmwareStore, ImportRequest, OtaError,
@@ -215,6 +216,60 @@ fn health_and_state_are_served_over_loopback() {
 
     let missing = http_get(addr, "/api/v1/nope");
     assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+
+    guard.shutdown();
+}
+
+/// Parse the JSON body of a raw HTTP response.
+fn json_body(response: &str) -> Value {
+    let (_, body) = response
+        .split_once("\r\n\r\n")
+        .expect("a response has a header/body separator");
+    serde_json::from_str(body).expect("the response body is JSON")
+}
+
+#[test]
+fn health_carries_the_component_contract_fields() {
+    // The HACS component's config flow reads these from `GET /api/v1/health`
+    // (`home-assistant.md` §5.2); this asserts the canonical `core-api.md` §4.1
+    // schema carries them so the flow can complete.
+    let server = Server::bind(
+        "127.0.0.1:0".parse().expect("addr"),
+        &topology(),
+        "instance-abc",
+    )
+    .expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let health = json_body(&http_get(addr, "/api/v1/health"));
+    assert!(
+        health.get("instance_id").and_then(Value::as_str).is_some_and(|id| !id.is_empty()),
+        "instance_id must be present and non-empty: {health}"
+    );
+    assert_eq!(health["instance_id"], "instance-abc");
+    assert!(health.get("api").is_some(), "api object must be present: {health}");
+    assert_eq!(health["api"]["major"], 1);
+    assert_eq!(health["core_connected"], Value::Bool(true));
+    assert!(
+        health["min_component_version"].as_str().is_some_and(|v| !v.is_empty()),
+        "min_component_version must be present: {health}"
+    );
+    assert_eq!(health["self_test_ok"], Value::Bool(true));
+    assert!(health["nodes_total"].as_u64().is_some(), "{health}");
+    assert!(health["nodes_online"].as_u64().is_some(), "{health}");
+    assert!(health.get("calibration_state").is_some(), "{health}");
+    // Honest absences are `null`, never fabricated numbers.
+    assert_eq!(health["clock_drift_ms"], Value::Null);
+    assert_eq!(health["last_packet_ts"], Value::Null);
+
+    // The component contract version cannot drift from the capability document:
+    // both read the one `MIN_COMPONENT_VERSION` constant.
+    let capabilities = json_body(&http_get(addr, "/api/v1/capabilities"));
+    assert_eq!(
+        health["min_component_version"],
+        capabilities["minComponentVersion"]
+    );
 
     guard.shutdown();
 }

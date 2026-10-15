@@ -186,6 +186,7 @@ impl Server {
         let instance_id = instance_id.into();
         let projections = projection::build(topology, &instance_id);
         let handle = Handle::new(
+            instance_id.clone(),
             EntityModel::from_topology(topology, instance_id),
             projections,
         );
@@ -541,7 +542,7 @@ fn capabilities() -> Value {
             "firmwareOta": true,
             "polling": true
         },
-        "minComponentVersion": "0.1.0"
+        "minComponentVersion": crate::handle::MIN_COMPONENT_VERSION
     })
 }
 

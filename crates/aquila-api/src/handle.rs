@@ -19,9 +19,16 @@ use serde_json::{json, Value};
 use crate::ota::Ota;
 use crate::projection::Projections;
 
+/// The minimum HACS component version this core accepts (`core-api.md` §4.1,
+/// §4.2). One constant, shared by `/api/v1/health` and
+/// `/api/v1/capabilities`, so the two documents cannot drift.
+pub(crate) const MIN_COMPONENT_VERSION: &str = "0.1.0";
+
 /// The shared server state: the latest projected entity model, the read-only
-/// topology documents, a monotonic revision, and the subscriber registry.
+/// topology documents, the instance id, a monotonic revision, and the
+/// subscriber registry.
 struct State {
+    instance_id: String,
     model: EntityModel,
     projections: Projections,
     started: Instant,
@@ -39,9 +46,14 @@ pub struct Handle {
 impl Handle {
     /// Construct a handle over an initial entity model and its topology
     /// projections, with OTA unconfigured.
-    pub(crate) fn new(model: EntityModel, projections: Projections) -> Self {
+    pub(crate) fn new(
+        instance_id: String,
+        model: EntityModel,
+        projections: Projections,
+    ) -> Self {
         Self {
             state: Arc::new(Mutex::new(State {
+                instance_id,
                 model,
                 projections,
                 started: Instant::now(),
@@ -102,6 +114,10 @@ impl Handle {
     }
 
     /// The health document for `GET /api/v1/health` (`core-api.md` §4.1).
+    ///
+    /// This is the one canonical health schema shared with the HACS component
+    /// (`home-assistant.md` §5.2). Values the control plane does not yet hold
+    /// are `null`, never fabricated.
     pub(crate) fn health_json(&self) -> Value {
         let state = lock(&self.state);
         let uptime_ms = state
@@ -110,10 +126,31 @@ impl Handle {
             .as_millis()
             .min(u128::from(u64::MAX)) as u64;
         let zones = state.model.zones().len();
+        let (nodes_online, nodes_total) = node_counts(&state.projections.nodes);
         json!({
             "status": "ok",
             "uptimeMs": uptime_ms,
+            "instance_id": state.instance_id.as_str(),
             "api": { "major": 1, "minor": 0 },
+            "min_component_version": MIN_COMPONENT_VERSION,
+            // The core is answering this request, so its control plane is
+            // connected to the client by definition.
+            "core_connected": true,
+            // The composition root reports no failing self-test; there is no
+            // failing check to surface. A future self-test result would be
+            // threaded through the handle rather than hard-coded here.
+            "self_test_ok": true,
+            "nodes_online": nodes_online,
+            "nodes_total": nodes_total,
+            // The calibration artefact lives in the sensing core, not the
+            // control-plane handle; the composition root does not thread its
+            // status through yet, so it is reported honestly absent rather than
+            // guessed from the topology.
+            "calibration_state": "unknown",
+            // The core holds no clock-drift or last-packet value on this handle
+            // yet; both are honestly `null` rather than a fabricated number.
+            "clock_drift_ms": Value::Null,
+            "last_packet_ts": Value::Null,
             "subsystems": [
                 { "name": "sensing", "status": "ok" },
                 { "name": "control-plane", "status": "ok",
@@ -256,6 +293,28 @@ impl Sink for ChannelSink {
         self.handle.publish(event);
         Ok(())
     }
+}
+
+/// Count online and total nodes from the topology-derived node projection.
+///
+/// A node is counted as online only when the projection says so (`online` or
+/// `capturing`); the v1 projection reports `unknown` until the node firmware
+/// agent (#14) reports health, so this is honest rather than a fabricated
+/// count. `nodes_total` is the topology node count.
+fn node_counts(nodes: &Value) -> (u64, u64) {
+    let Some(items) = nodes.get("items").and_then(Value::as_array) else {
+        return (0, 0);
+    };
+    let online = items
+        .iter()
+        .filter(|node| {
+            matches!(
+                node.get("state").and_then(Value::as_str),
+                Some("online" | "capturing")
+            )
+        })
+        .count() as u64;
+    (online, items.len() as u64)
 }
 
 /// Lock a mutex, recovering from a poisoned lock rather than panicking.

@@ -20,6 +20,7 @@ import aiohttp
 from .const import (
     API_MAJOR,
     COMPONENT_VERSION,
+    HEALTH_API,
     HEALTH_API_VERSION,
     HEALTH_INSTANCE_ID,
     HEALTH_MIN_COMPONENT_VERSION,
@@ -76,17 +77,54 @@ def parse_version(value: Any) -> tuple[int, ...]:
 _parse_version = parse_version
 
 
+def _api_object(health: dict[str, Any]) -> dict[str, Any] | None:
+    """The canonical ``api`` object from health, when present and shaped right.
+
+    ``core-api.md`` §4.1 defines the version as ``api: {major, minor}``.
+    """
+    raw = health.get(HEALTH_API)
+    return raw if isinstance(raw, dict) else None
+
+
 def _api_major(health: dict[str, Any]) -> int | None:
-    """Extract the API major from either a scalar or ``{major, minor}`` shape."""
-    raw = health.get(HEALTH_API_VERSION)
-    if isinstance(raw, dict):
+    """Extract the API major from the canonical ``api`` object.
+
+    The canonical shape is ``health["api"]["major"]`` (core-api.md §4.1). The
+    flat ``api_version`` key — scalar or ``{major, minor}`` — is a tolerated
+    legacy alias (home-assistant.md §5.2), so a core that still sends it keeps
+    working.
+    """
+    raw = _api_object(health)
+    if raw is not None:
         raw = raw.get("major")
+    else:
+        raw = health.get(HEALTH_API_VERSION)
+        if isinstance(raw, dict):
+            raw = raw.get("major")
     if raw is None:
         return None
     try:
         return int(raw)
     except (TypeError, ValueError):
         return _parse_version(raw)[0]
+
+
+def api_version_string(health: dict[str, Any]) -> str:
+    """The core's API version as a dotted string, from ``api`` or the alias.
+
+    Used for the HA device ``sw_version``; returns ``""`` when the core reports
+    no version at all rather than fabricating one.
+    """
+    for raw in (_api_object(health), health.get(HEALTH_API_VERSION)):
+        if isinstance(raw, dict):
+            major, minor = raw.get("major"), raw.get("minor")
+            if major is not None and minor is not None:
+                return f"{major}.{minor}"
+            if major is not None:
+                return str(major)
+        elif raw is not None:
+            return str(raw)
+    return ""
 
 
 def check_version(health: dict[str, Any]) -> None:

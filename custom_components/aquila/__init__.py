@@ -30,6 +30,7 @@ from .api import (
     AquilaConnectionError,
     AquilaError,
     AquilaVersionError,
+    api_version_string,
 )
 from .config_flow import async_migrate_entry
 from .const import (
@@ -43,7 +44,6 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     FIRMWARE_IMAGE_ID,
-    HEALTH_API_VERSION,
     HEALTH_INSTANCE_ID,
     HEALTH_MIN_COMPONENT_VERSION,
     IMAGE_ID,
@@ -121,7 +121,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         client=client,
         coordinator=coordinator,
         instance_id=instance_id,
-        api_version=str(health.get(HEALTH_API_VERSION) or ""),
+        api_version=api_version_string(health),
         min_component_version=health.get(HEALTH_MIN_COMPONENT_VERSION),
         update_interval=update_interval,
         expose_floors=expose_floors,

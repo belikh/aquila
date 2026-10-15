@@ -142,11 +142,25 @@ records the acting identity on every mutation for the audit log.
 
 ### 4.1 `GET /api/v1/health`
 
+This is the **one authoritative health schema**, shared with the HACS component
+(`home-assistant.md` §5.2). The API version lives in the canonical `api` object,
+`{ "major", "minor" }` — there is no separate `api_version` field. Values the
+core does not hold yet are `null`, never a fabricated number.
+
 ```json
 {
   "status": "ok",
   "uptimeMs": 813000,
+  "instance_id": "0f3e4b6a-2c1d-4f7e-9a8b-0c1d2e3f4a5b",
   "api": { "major": 1, "minor": 0 },
+  "min_component_version": "0.1.0",
+  "core_connected": true,
+  "self_test_ok": true,
+  "nodes_online": 7,
+  "nodes_total": 9,
+  "calibration_state": "calibrated",
+  "clock_drift_ms": null,
+  "last_packet_ts": null,
   "subsystems": [
     { "name": "sensing", "status": "ok" },
     { "name": "sources", "status": "degraded", "detail": "2 of 9 nodes offline" },
@@ -158,7 +172,19 @@ records the acting identity on every mutation for the audit log.
 }
 ```
 
-`status` is the worst of `subsystems`: `ok` < `degraded` < `down`.
+`status` is the worst of `subsystems`: `ok` < `degraded` < `down`. The
+component-facing fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `instance_id` | The core's stable instance id: a UUID generated once and persisted under `/data` (`home-assistant.md` §4, §9). The component keys its devices and entities to it. |
+| `api` | The API version as `{ "major", "minor" }`. A client MUST refuse to operate if `api.major` differs from its own. |
+| `min_component_version` | The minimum HACS component version this core accepts; the same value as `/capabilities` `minComponentVersion`. |
+| `core_connected` | `true` while the core is serving; a client's failed poll is the connectivity signal. |
+| `self_test_ok` | `true` when the core's self-test passes. |
+| `nodes_online` / `nodes_total` | Online and total node counts from the projected node state. |
+| `calibration_state` | The core's calibration status; `uncalibrated`/`calibrating`/`calibrated`/`degraded`, or `unknown` when not threaded through. |
+| `clock_drift_ms` / `last_packet_ts` | The clock drift and last-packet timestamp, or `null` when the core holds no such value. |
 
 ### 4.2 `GET /api/v1/capabilities`
 

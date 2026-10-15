@@ -16,7 +16,7 @@ MANUFACTURER: Final = "Aquila"
 
 #: Component version; must match ``manifest.json`` ``version`` and is the value
 #: compared against the core's ``min_component_version`` (home-assistant.md §9).
-COMPONENT_VERSION: Final = "0.2.0"
+COMPONENT_VERSION: Final = "0.2.1"
 
 #: The API major the component speaks; the core's ``api_version`` major must match.
 API_MAJOR: Final = 1
@@ -115,8 +115,11 @@ HEALTH_CLOCK_DRIFT_MS: Final = "clock_drift_ms"
 HEALTH_LAST_PACKET_TS: Final = "last_packet_ts"
 HEALTH_SELF_TEST_OK: Final = "self_test_ok"
 
-# ``GET /api/v1/health`` contract fields (home-assistant.md §5.2).
+# ``GET /api/v1/health`` contract fields (core-api.md §4.1, home-assistant.md
+# §5.2). The version lives in the canonical ``api`` object (``{major, minor}``);
+# ``api_version`` is a tolerated legacy alias for a core that still sends it.
 HEALTH_INSTANCE_ID: Final = "instance_id"
+HEALTH_API: Final = "api"
 HEALTH_API_VERSION: Final = "api_version"
 HEALTH_MIN_COMPONENT_VERSION: Final = "min_component_version"
 

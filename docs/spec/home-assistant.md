@@ -283,7 +283,7 @@ Polls (all `GET`), base `http://aquila-core:8099`:
 
 | Path | Purpose |
 | --- | --- |
-| `/api/v1/health` | `instance_id`, `api_version`, `min_component_version`, uptime, node counts, calibration state |
+| `/api/v1/health` | core health. The schema is `core-api.md` §4.1 (authoritative). The component reads: `instance_id`, the version as `api` (an object, `{major, minor}` — there is no separate `api_version`), `min_component_version`, `core_connected`, `self_test_ok`, node counts and calibration state |
 | `/api/v1/schema` | zone tree (home → floor → room), metric vocabulary, units |
 | `/api/v1/state` | full current snapshot: every zone's presence/vitals + system health (coordinator poll + initial load) |
 | `/api/v1/nodes` | per-node identity, MAC, floor/room, online state, firmware version |
@@ -485,7 +485,8 @@ panel above.
   `update.aquila_<node>_firmware` entity per node — no internet, no cloud. The
   full design is in `firmware-ota.md`.
 - **Contract compatibility:** the component compares its own
-  `min_component_version`/`api_version` against `/api/v1/health`. A core that is
+  `min_component_version` against `/api/v1/health`, and its API major against the
+  canonical `api.major` object (`core-api.md` §4.1). A core that is
   too new or too old is reported clearly (repair/`ConfigEntryError`) rather than
   silently mismatched. Add-on and component version independently — they share
   the versioned API, not a version number.

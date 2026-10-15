@@ -26,7 +26,10 @@
 //!   component can read; and
 //! - installs a safe SIGTERM/SIGINT handler (via `sigwait` in a dedicated
 //!   thread, no `unsafe`) so Home Assistant's `SIGTERM` is a clean shutdown:
-//!   flush the sinks, stop the listener, exit zero.
+//!   flush the sinks, stop the listener, exit zero; and
+//! - resolves a stable `instance_id` (env → persisted `<data>/instance_id` →
+//!   generated once and persisted) so the HACS component's devices and entities
+//!   keep their identity across restarts (`home-assistant.md` §4, §9).
 //!
 //! A production build swaps the simulator for `UdpLiveSource` and supplies real
 //! models; the wiring shape is identical.
@@ -65,6 +68,20 @@ const DEFAULT_HOST: IpAddr = IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
 
 /// The environment variable naming the baked dashboard bundle directory.
 const DASHBOARD_DIR_ENV: &str = aquila_api::DASHBOARD_DIR_ENV;
+
+/// When set, names the core instance directly and takes precedence over the
+/// persisted file (`home-assistant.md` §9).
+const INSTANCE_ID_ENV: &str = "AQUILA_INSTANCE_ID";
+
+/// The directory the core persists state in. The Home Assistant add-on mounts
+/// `/data`; a local run can point this elsewhere (`home-assistant.md` §9).
+const DATA_DIR_ENV: &str = "AQUILA_DATA_DIR";
+
+/// The Home Assistant add-on's persistent data directory.
+const DEFAULT_DATA_DIR: &str = "/data";
+
+/// The file name the generated instance id is persisted in.
+const INSTANCE_ID_FILE: &str = "instance_id";
 
 /// When set, the composition root pulls live CSI from this UDP address instead
 /// of repeating the deterministic simulator scene.
@@ -174,11 +191,15 @@ fn run(options: &Options) -> Result<(), String> {
     let shutdown = install_signal_handling()?;
 
     let addr = SocketAddr::new(options.host, options.port);
+    // A stable instance id is what the HACS component keys its devices and
+    // entities to (`home-assistant.md` §4, §9), so resolve it once and persist
+    // the generated value under `/data`.
+    let (instance_id, instance_source) = resolve_instance_id();
     let assets = StaticAssets::from_env();
     let server = Server::bind_with_config(
         addr,
         &topology,
-        "aquila-addon",
+        instance_id.clone(),
         ServerConfig::new()
             .with_auth(Auth::open())
             .with_assets(assets.clone())
@@ -195,6 +216,7 @@ fn run(options: &Options) -> Result<(), String> {
 
     println!("aquila-addon: control plane on http://{bound}/api/v1/health");
     println!("aquila-addon: health  http://{bound}/api/v1/health");
+    println!("aquila-addon: instance_id {instance_id} (source: {instance_source})");
     match assets.as_ref() {
         Some(assets) => println!(
             "aquila-addon: dashboard  http://{bound}/  (from {})",
@@ -258,6 +280,106 @@ fn run(options: &Options) -> Result<(), String> {
         sensing.windows_processed()
     );
     Ok(())
+}
+
+/// Resolve the core instance id, deterministically and stably.
+///
+/// Precedence (`home-assistant.md` §9, §4):
+/// 1. `AQUILA_INSTANCE_ID`, when set and non-empty;
+/// 2. `<AQUILA_DATA_DIR or /data>/instance_id`, when present and non-empty;
+/// 3. a freshly generated RFC 4122 version-4 UUID, persisted to that file so
+///    the same id is used on the next start.
+///
+/// The returned string is the source label (`env`, `file`, `generated` or
+/// `in-memory`) for the startup banner. If the data directory is not writable
+/// the generated id is used in memory for this run and a warning is logged, so
+/// the core still starts.
+fn resolve_instance_id() -> (String, &'static str) {
+    if let Ok(value) = std::env::var(INSTANCE_ID_ENV) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return (trimmed.to_string(), "env");
+        }
+    }
+
+    let data_dir = std::env::var(DATA_DIR_ENV).unwrap_or_else(|_| DEFAULT_DATA_DIR.to_string());
+    let path = std::path::Path::new(&data_dir).join(INSTANCE_ID_FILE);
+    if let Some(existing) = read_instance_id(&path) {
+        return (existing, "file");
+    }
+
+    let generated = random_uuid_v4();
+    match persist_instance_id(&path, &generated) {
+        Ok(()) => (generated, "generated"),
+        Err(error) => {
+            eprintln!(
+                "aquila-addon: cannot persist instance id to {}: {error}; \
+                 using an in-memory id for this run",
+                path.display()
+            );
+            (generated, "in-memory")
+        }
+    }
+}
+
+/// Read a non-empty instance id from `path`, if the file exists.
+fn read_instance_id(path: &std::path::Path) -> Option<String> {
+    let value = std::fs::read_to_string(path).ok()?;
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Write `id` to `path`, creating the parent directory if needed.
+fn persist_instance_id(path: &std::path::Path, id: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, format!("{id}\n"))
+}
+
+/// Generate an RFC 4122 version-4 UUID without a new dependency or `unsafe`.
+///
+/// Sixteen bytes are read from `/dev/urandom`; the version and variant bits are
+/// then set. If `/dev/urandom` is unavailable (a non-Unix or restricted
+/// sandbox), a time- and pid-seeded value is used so the core still starts with
+/// a unique-enough id rather than failing.
+fn random_uuid_v4() -> String {
+    let mut bytes = [0u8; 16];
+    if read_random(&mut bytes).is_err() {
+        seed_bytes(&mut bytes);
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4.
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant 10xx.
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32],
+    )
+}
+
+/// Fill `bytes` from `/dev/urandom`.
+fn read_random(bytes: &mut [u8]) -> std::io::Result<()> {
+    use std::io::Read;
+    std::fs::File::open("/dev/urandom")?.read_exact(bytes)
+}
+
+/// Fill `bytes` from a time- and pid-seeded xorshift, for the rare host with no
+/// `/dev/urandom`.
+fn seed_bytes(bytes: &mut [u8]) {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos() as u64);
+    let mut state = nanos ^ (u64::from(std::process::id()) << 32) ^ 0x9e37_79b9_7f4a_7c15;
+    for byte in bytes.iter_mut() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        *byte = (state & 0xff) as u8;
+    }
 }
 
 /// Calibrate the core from a synthetic empty-home baseline and walk-through
@@ -675,6 +797,8 @@ fn print_help() {
     println!("    -h, --help      print this message\n");
     println!("ENVIRONMENT:");
     println!("    AQUILA_COMMIT         required 40-hex build commit (required)");
+    println!("    {INSTANCE_ID_ENV}    override the resolved core instance id");
+    println!("    {DATA_DIR_ENV}        persistent data directory (default {DEFAULT_DATA_DIR})");
     println!("    {DASHBOARD_DIR_ENV}  baked dashboard bundle to serve");
     println!(
         "    {LIVE_ADDR_ENV}       live CSI UDP bind address (default: repeat the demo scene)"
@@ -752,5 +876,41 @@ mod tests {
             emitted > 0 && *events.lock().expect("lock") == emitted,
             "the calibrated demo must emit events through the sink (emitted {emitted})"
         );
+    }
+
+    #[test]
+    fn a_generated_instance_id_is_a_version_4_uuid() {
+        let id = random_uuid_v4();
+        assert_eq!(id.len(), 36, "{id}");
+        let groups: Vec<usize> = id.split('-').map(str::len).collect();
+        assert_eq!(groups, vec![8, 4, 4, 4, 12], "{id}");
+        assert!(
+            id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
+            "{id}"
+        );
+        assert_eq!(&id[14..15], "4", "version nibble: {id}");
+        assert!(
+            matches!(&id[19..20], "8" | "9" | "a" | "b"),
+            "RFC 4122 variant nibble: {id}"
+        );
+    }
+
+    #[test]
+    fn the_instance_id_file_round_trips() {
+        let dir = std::env::temp_dir().join(format!(
+            "aquila-addon-instance-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let path = dir.join(INSTANCE_ID_FILE);
+
+        // Absent file → no id.
+        assert_eq!(read_instance_id(&path), None);
+
+        let value = "11111111-2222-4333-8444-555555555555";
+        persist_instance_id(&path, value).expect("persist");
+        assert_eq!(read_instance_id(&path).as_deref(), Some(value));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
