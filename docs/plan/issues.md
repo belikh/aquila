@@ -25,8 +25,13 @@ Blocking edges are recorded as native GitHub issue dependencies.
 
 ## Status (verify with `gh issue list --state all`)
 
-- Closed (done): **#2 #3 #4 #5 #6 #7 #8 #12**.
-- Open: **#9 #10 #11 #13 #14 #15**.
+- Closed (done): **#2–#15** (the whole plan; note #16 was never created).
+- Open: **#1** (the map itself), **#17** (run and verify the HACS integration +
+  add-on on a live HA), **#18** (component should discover the core add-on
+  instead of a hand-entered hostname).
+
+#17 and #18 are post-plan operational issues found during live verification, not
+frontier tickets from the map.
 
 ## Working the plan
 
