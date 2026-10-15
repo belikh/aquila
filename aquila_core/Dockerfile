@@ -100,11 +100,11 @@ EXPOSE 9100/udp
 EXPOSE 9101/udp
 
 # `AQUILA_COMMIT` is required: the composition root refuses to key its ledger to
-# an unknown commit. `AQUILA_DASHBOARD_DIR` names the bundle baked in above,
-# which the composition root now serves on the same listener as `/api/v1`,
-# injecting the Home Assistant ingress prefix (`X-Ingress-Path`) as the document
-# `<base href>` (`dashboard.md` §4). The core binds `0.0.0.0:8099` by default so
-# the ingress proxy can reach it, and `/data` is the HA persistent volume.
+# an unknown commit. `RUST_LOG` and `AQUILA_DASHBOARD_DIR` are the intended
+# runtime contract (the dashboard bundle is baked in here); the current
+# composition root does not read them yet, and `/data` is the HA persistent
+# volume it will use. Set as documentation of that contract, not as working
+# configuration at this commit.
 ENV AQUILA_COMMIT=${AQUILA_COMMIT} \
     AQUILA_DASHBOARD_DIR=/usr/share/aquila/dashboard \
     RUST_LOG=info

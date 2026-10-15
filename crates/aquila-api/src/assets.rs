@@ -224,10 +224,7 @@ mod tests {
     #[test]
     fn a_matching_prefix_is_stripped() {
         assert_eq!(
-            strip_ingress_prefix(
-                "/api/hassio_ingress/tok/api/v1/state",
-                Some("/api/hassio_ingress/tok")
-            ),
+            strip_ingress_prefix("/api/hassio_ingress/tok/api/v1/state", Some("/api/hassio_ingress/tok")),
             "/api/v1/state"
         );
         assert_eq!(
@@ -248,8 +245,7 @@ mod tests {
     #[test]
     fn the_base_href_is_injected_after_head() {
         let html = b"<!DOCTYPE html><html><head><title>x</title></head><body></body></html>";
-        let out =
-            String::from_utf8(inject_base_href(html, Some("/api/hassio_ingress/tok"))).unwrap();
+        let out = String::from_utf8(inject_base_href(html, Some("/api/hassio_ingress/tok"))).unwrap();
         assert!(out.contains("<head>\n    <base href=\"/api/hassio_ingress/tok/\" />"));
         // No prefix: unchanged.
         assert_eq!(inject_base_href(html, None), html);

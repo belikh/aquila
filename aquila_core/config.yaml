@@ -1,5 +1,5 @@
 name: Aquila Core
-version: 0.1.1
+version: 0.1.0
 slug: aquila_core
 description: WiFi CSI sensing core for Aquila — DSP, inference, fusion, calibration
 url: https://github.com/belikh/aquila

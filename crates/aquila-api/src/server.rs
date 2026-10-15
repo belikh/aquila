@@ -218,8 +218,7 @@ impl Server {
         for incoming in self.listener.incoming() {
             match incoming {
                 Ok(mut stream) => {
-                    let _ =
-                        handle_client(&mut stream, &self.handle, &self.auth, self.assets.as_ref());
+                    let _ = handle_client(&mut stream, &self.handle, &self.auth, self.assets.as_ref());
                 }
                 Err(error) => return Err(ApiError::Io(error)),
             }
@@ -310,7 +309,9 @@ fn handle_client(
 ) -> Result<(), ApiError> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request(stream)?;
-    let ingress_prefix = request.header("x-ingress-path").map(str::to_string);
+    let ingress_prefix = request
+        .header("x-ingress-path")
+        .map(str::to_string);
     let path = strip_ingress_prefix(&request.path, ingress_prefix.as_deref());
     let segments = segments(&path);
     let is_api = segments.first() == Some(&"api");
@@ -323,7 +324,7 @@ fn handle_client(
     if !is_api {
         // The dashboard bundle is public static content; the sensitive surface
         // (`/api/v1`) remains behind the trust boundary below.
-        if request.method == "GET" {
+        if matches!(request.method.as_str(), "GET" | "HEAD") {
             if let Some(assets) = assets {
                 return assets.serve(stream, &path, ingress_prefix.as_deref());
             }
