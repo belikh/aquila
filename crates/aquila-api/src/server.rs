@@ -1,7 +1,10 @@
-//! The loopback HTTP server and its background guard.
+//! The HTTP server and its background guard.
 //!
-//! [`Server::bind`] refuses any non-loopback address (`core-api.md` §2, §15)
-//! and serves the canonical v1 routes (`core-api.md` §6). Every request is
+//! [`Server::bind`] refuses any non-loopback address (`core-api.md` §2, §15);
+//! [`Server::bind_with_config`] with [`ServerConfig::any_interface`] is the
+//! add-on path for a container address behind Home Assistant ingress. It serves
+//! the canonical v1 routes (`core-api.md` §6) and, when configured, the static
+//! dashboard bundle. Every request is
 //! authenticated by the loopback/ingress trust boundary (§3): a loopback peer,
 //! the add-on ingress identity header, or a valid bearer token; a token in a
 //! query string is always rejected. The WebSocket stream is not implemented in
@@ -22,6 +25,7 @@ use aquila_geometry::Topology;
 use aquila_ha::EntityModel;
 use serde_json::{json, Value};
 
+use crate::assets::{strip_ingress_prefix, StaticAssets};
 use crate::error::ApiError;
 use crate::handle::Handle;
 use crate::http::{read_request, write_response, Request};
@@ -64,11 +68,59 @@ impl Auth {
     }
 }
 
-/// The private loopback HTTP control plane (`core-api.md`).
+/// How a [`Server`] is bound and what it serves beyond `/api/v1`.
+///
+/// The default is a loopback-only control plane with no static assets, so
+/// [`Server::bind`] keeps the v1 posture (`core-api.md` §2). The add-on builds a
+/// config with [`any_interface`](ServerConfig::any_interface) and
+/// [`assets`](ServerConfig::assets) so it is reachable through Home Assistant
+/// ingress and also serves the dashboard bundle.
+#[derive(Clone, Default)]
+pub struct ServerConfig {
+    /// The trust policy (`core-api.md` §3).
+    pub auth: Auth,
+    /// The optional dashboard bundle to serve from the same listener.
+    pub assets: Option<StaticAssets>,
+    /// Whether a non-loopback bind is permitted. `false` (the default) preserves
+    /// the loopback-only posture.
+    pub any_interface: bool,
+}
+
+impl ServerConfig {
+    /// The default loopback-only config with no static assets.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the trust policy.
+    #[must_use]
+    pub fn with_auth(mut self, auth: Auth) -> Self {
+        self.auth = auth;
+        self
+    }
+
+    /// Set the optional static dashboard bundle.
+    #[must_use]
+    pub fn with_assets(mut self, assets: Option<StaticAssets>) -> Self {
+        self.assets = assets;
+        self
+    }
+
+    /// Permit binding a non-loopback address (the container address).
+    #[must_use]
+    pub fn any_interface(mut self) -> Self {
+        self.any_interface = true;
+        self
+    }
+}
+
+/// The private HTTP control plane (`core-api.md`).
 pub struct Server {
     listener: TcpListener,
     handle: Handle,
     auth: Auth,
+    assets: Option<StaticAssets>,
 }
 
 impl Server {
@@ -99,7 +151,32 @@ impl Server {
         instance_id: impl Into<String>,
         auth: Auth,
     ) -> Result<Self, ApiError> {
-        if !addr.ip().is_loopback() {
+        Self::bind_with_config(
+            addr,
+            topology,
+            instance_id,
+            ServerConfig::new().with_auth(auth),
+        )
+    }
+
+    /// Bind a server with a full [`ServerConfig`].
+    ///
+    /// Unlike [`bind`](Server::bind), this permits a non-loopback address when
+    /// [`ServerConfig::any_interface`] is set, which is how the add-on serves the
+    /// container address behind Home Assistant ingress.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::NonLoopback`] if `addr` is not loopback and the config
+    /// does not permit any interface, or [`ApiError::Io`] if the socket cannot be
+    /// bound.
+    pub fn bind_with_config(
+        addr: SocketAddr,
+        topology: &Topology,
+        instance_id: impl Into<String>,
+        config: ServerConfig,
+    ) -> Result<Self, ApiError> {
+        if !config.any_interface && !addr.ip().is_loopback() {
             return Err(ApiError::NonLoopback(addr));
         }
         let listener = TcpListener::bind(addr)?;
@@ -112,7 +189,8 @@ impl Server {
         Ok(Self {
             listener,
             handle,
-            auth,
+            auth: config.auth,
+            assets: config.assets,
         })
     }
 
@@ -140,7 +218,8 @@ impl Server {
         for incoming in self.listener.incoming() {
             match incoming {
                 Ok(mut stream) => {
-                    let _ = handle_client(&mut stream, &self.handle, &self.auth);
+                    let _ =
+                        handle_client(&mut stream, &self.handle, &self.auth, self.assets.as_ref());
                 }
                 Err(error) => return Err(ApiError::Io(error)),
             }
@@ -159,6 +238,7 @@ impl Server {
             listener,
             handle,
             auth,
+            assets,
         } = self;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -168,7 +248,7 @@ impl Server {
             while !stop_thread.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let _ = handle_client(&mut stream, &handle, &auth);
+                        let _ = handle_client(&mut stream, &handle, &auth, assets.as_ref());
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(ACCEPT_POLL);
@@ -216,21 +296,45 @@ impl Drop for ServerGuard {
 }
 
 /// Serve one request on an accepted connection.
-fn handle_client(stream: &mut TcpStream, handle: &Handle, auth: &Auth) -> Result<(), ApiError> {
+///
+/// The request path has any Home Assistant ingress prefix (`X-Ingress-Path`)
+/// stripped before routing, so the canonical `/api/v1/...` routes and the
+/// dashboard bundle both resolve under the per-session ingress token
+/// (`dashboard.md` §4). Static assets are served for any non-`/api` GET;
+/// `/api` routes keep the [`Auth`] trust boundary.
+fn handle_client(
+    stream: &mut TcpStream,
+    handle: &Handle,
+    auth: &Auth,
+    assets: Option<&StaticAssets>,
+) -> Result<(), ApiError> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request(stream)?;
-    let peer_loopback = stream
-        .peer_addr()
-        .map(|addr| addr.ip().is_loopback())
-        .unwrap_or(false);
-    let path = request.path.clone();
+    let ingress_prefix = request.header("x-ingress-path").map(str::to_string);
+    let path = strip_ingress_prefix(&request.path, ingress_prefix.as_deref());
     let segments = segments(&path);
+    let is_api = segments.first() == Some(&"api");
 
     // The liveness probe is the one anonymous route (`core-api.md` §4).
     if request.method == "GET" && segments == ["api", "v1", "live"] {
         return write_json(stream, 200, &json!({ "status": "ok" }));
     }
 
+    if !is_api {
+        // The dashboard bundle is public static content; the sensitive surface
+        // (`/api/v1`) remains behind the trust boundary below.
+        if request.method == "GET" {
+            if let Some(assets) = assets {
+                return assets.serve(stream, &path, ingress_prefix.as_deref());
+            }
+        }
+        return not_found(stream);
+    }
+
+    let peer_loopback = stream
+        .peer_addr()
+        .map(|addr| addr.ip().is_loopback())
+        .unwrap_or(false);
     if !authorised(&request, peer_loopback, auth) {
         return problem(
             stream,
@@ -458,7 +562,13 @@ fn authorised(request: &Request, peer_loopback: bool, auth: &Auth) -> bool {
             _ => false,
         };
     }
-    if request.header("x-aquila-ingress").is_some() || request.header("x-remote-user-id").is_some()
+    if request.header("x-aquila-ingress").is_some()
+        || request.header("x-remote-user-id").is_some()
+        // Home Assistant ingress sets `X-Ingress-Path` on every proxied request;
+        // its presence identifies the supervisor's ingress gateway, so the
+        // dashboard's same-origin `/api/v1` calls are trusted without a bearer
+        // token (`home-assistant.md` §5.2).
+        || request.header("x-ingress-path").is_some()
     {
         return true;
     }

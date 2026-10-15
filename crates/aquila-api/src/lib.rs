@@ -30,13 +30,21 @@
 //!
 //! v1 is **HTTP polling only**. `GET /api/v1/stream` returns a typed
 //! `501 websocket_unimplemented`; the HACS component polls `GET /api/v1/state`
-//! (`core-api.md` §10, `home-assistant.md` §5.2). The listener binds loopback
-//! only.
+//! (`core-api.md` §10, `home-assistant.md` §5.2). [`Server::bind`] refuses a
+//! non-loopback address; [`Server::bind_with_config`] with
+//! [`ServerConfig::any_interface`] is the add-on path, where the container
+//! address must be reachable through Home Assistant ingress.
+//!
+//! [`ServerConfig::assets`] additionally serves the WASM dashboard bundle from
+//! `AQUILA_DASHBOARD_DIR` on the same listener, stripping the ingress path
+//! prefix (`X-Ingress-Path`) and injecting it as the document `<base href>`
+//! (`dashboard.md` §2, §4).
 //!
 //! # Prose
 //!
 //! Australian English throughout (serialisation, behaviour, normalise).
 
+mod assets;
 mod error;
 mod handle;
 mod http;
@@ -47,6 +55,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
+pub use assets::{StaticAssets, DASHBOARD_DIR_ENV};
 pub use error::ApiError;
 pub use handle::{ChannelSink, Handle};
 pub use ota::{
@@ -54,7 +63,7 @@ pub use ota::{
     InstallError, Ota, OtaConfig, OtaError, OtaManager, OtaStats, OtaTransport, StoreError,
     StoredImage, DEFAULT_FIRMWARE_DIR,
 };
-pub use server::{Auth, Server, ServerGuard};
+pub use server::{Auth, Server, ServerConfig, ServerGuard};
 
 // The outbound half of the core↔node protocol lives in `aquila-sources`; it is
 // re-exported here so the composition root can reach it through the control

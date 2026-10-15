@@ -19,7 +19,7 @@ use ed25519_dalek::{Signer, SigningKey};
 
 use crate::{
     ApiError, Auth, ChannelSink, FirmwareCompat, FirmwareStore, ImportRequest, OtaError,
-    OtaTransport, Server, StoreError,
+    OtaTransport, Server, ServerConfig, StaticAssets, StoreError,
 };
 
 fn slug(value: &str) -> Slug {
@@ -116,6 +116,80 @@ fn binding_a_non_loopback_address_is_refused() {
         Err(error) => error,
     };
     assert!(matches!(error, ApiError::NonLoopback(_)));
+}
+
+#[test]
+fn a_non_loopback_bind_is_permitted_when_configured() {
+    let any: SocketAddr = "0.0.0.0:0".parse().expect("addr");
+    let server = Server::bind_with_config(
+        any,
+        &topology(),
+        "test",
+        ServerConfig::new().any_interface(),
+    )
+    .expect("an any-interface config permits a non-loopback bind");
+    assert!(!server.local_addr().expect("addr").ip().is_loopback());
+}
+
+#[test]
+fn the_dashboard_bundle_is_served_with_an_ingress_base() {
+    let dir = unique_temp_dir();
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::fs::write(
+        dir.join("index.html"),
+        "<!DOCTYPE html><html><head><title>Aquila</title></head><body></body></html>",
+    )
+    .expect("index");
+    std::fs::write(dir.join("app.js"), "console.log('aquila');").expect("asset");
+
+    let server = Server::bind_with_config(
+        "127.0.0.1:0".parse().expect("addr"),
+        &topology(),
+        "test",
+        ServerConfig::new().with_assets(Some(StaticAssets::new(&dir))),
+    )
+    .expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    // The document is served at the origin root, without auth, and carries the
+    // injected `<base href>` for the ingress prefix.
+    let index = http_request(
+        addr,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nX-Ingress-Path: /api/hassio_ingress/tok\r\n\r\n",
+    );
+    assert!(index.starts_with("HTTP/1.1 200 OK"), "{index}");
+    assert!(index.contains("text/html"), "{index}");
+    assert!(
+        index.contains("<base href=\"/api/hassio_ingress/tok/\" />"),
+        "the ingress base must be injected: {index}"
+    );
+
+    // An asset resolves under the same ingress prefix, stripped before routing,
+    // with a JS content type.
+    let asset = http_request(
+        addr,
+        "GET /api/hassio_ingress/tok/app.js HTTP/1.1\r\n\
+         Host: localhost\r\nX-Ingress-Path: /api/hassio_ingress/tok\r\n\r\n",
+    );
+    assert!(asset.starts_with("HTTP/1.1 200 OK"), "{asset}");
+    assert!(asset.contains("text/javascript"), "{asset}");
+    assert!(asset.contains("console.log"), "{asset}");
+
+    // A missing asset is a typed 404, not the API's auth 401.
+    let missing = http_get(addr, "/nope.js");
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+
+    guard.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A process-unique temporary directory.
+fn unique_temp_dir() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("aquila-api-{}-{n}", std::process::id()))
 }
 
 #[test]

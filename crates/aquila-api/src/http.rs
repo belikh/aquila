@@ -151,15 +151,34 @@ pub(crate) fn write_response(
     content_type: &str,
     body: &[u8],
 ) -> Result<(), ApiError> {
+    write_response_with_headers(stream, status, content_type, &[], body)
+}
+
+/// Write a complete HTTP/1.1 response with extra headers, and close the
+/// connection.
+///
+/// Extra headers are emitted verbatim between the content type and the fixed
+/// `Content-Length`/`Connection` pair, so a caller (the static-asset server)
+/// can add `Cache-Control` without a second response writer.
+pub(crate) fn write_response_with_headers(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> Result<(), ApiError> {
     let reason = reason_phrase(status);
-    let head = format!(
-        "HTTP/1.1 {status} {reason}\r\n\
-         Content-Type: {content_type}\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\
-         \r\n",
+    let mut head = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n");
+    for (name, value) in headers {
+        head.push_str(name);
+        head.push_str(": ");
+        head.push_str(value);
+        head.push_str("\r\n");
+    }
+    head.push_str(&format!(
+        "Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
-    );
+    ));
     stream.write_all(head.as_bytes())?;
     stream.write_all(body)?;
     stream.flush()?;
