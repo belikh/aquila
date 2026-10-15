@@ -328,3 +328,31 @@ hardware, a canonical algorithm or a test-harness decision rather than an edit.
 
 No test assertion was weakened. `#[forbid(unsafe_code)]` holds (no `unsafe`
 added).
+
+## R8 — accidental revert of the persistent add-on core (found live)
+
+**Class:** `git add -A` sweeping stale working-tree files into an unrelated commit.
+
+`4a6cd6e` ("attach the HACS zip without waiting on the multi-arch image") was
+meant to change one line of `release.yml`, but `git add -A` also staged stale
+pre-`1a39eb3` copies of `crates/aquila-addon/src/main.rs`, `aquila_core/Dockerfile`,
+`aquila_core/config.yaml`, `crates/aquila-api/src/{assets,server}.rs`, and the
+build artefact `aquila.zip`. Net effect: the persistent composition root added in
+`1a39eb3` was reverted to the one-shot simulator run (bound `127.0.0.1`, no
+dashboard, no calibration), so the released add-on image 0.1.2 exited immediately
+— observed live as `aquila-addon: run complete — 0 events published`. That in
+turn surfaced as `invalid_auth` in the HACS config flow, because the core the
+component was validating against had already stopped.
+
+Restored: `crates/aquila-addon/src/main.rs` and the `aquila_core/Dockerfile`
+comment from `1a39eb3`. Retained: the `aquila-api` private-network auth change
+(`peer_is_trusted`) and the `GET|HEAD` static-asset handling — both are present in
+the current tree. Untracked and ignored: `aquila.zip`, `aquila-dashboard.zip`,
+`SHA256SUMS`, `crates/aquila-dashboard/dist/`.
+
+**Preventive rule:** never run `git add -A` where a subagent or an interrupted
+session may have left a stale tree. Stage explicit paths and read
+`git diff --staged` before committing.
+
+Checks: workspace build + **324 passed, 0 failed**; `dag-check: OK — 18 members,
+59 internal edges, rev 1`.
