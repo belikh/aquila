@@ -87,10 +87,10 @@ jobs:
             BUILD_FROM=${{ matrix.build_from }}
             AQUILA_VERSION=${{ github.ref_name }}
             AQUILA_COMMIT=${{ github.sha }}
+          # Supervisor pulls the image tag equal to the add-on `version`
+          # (aquila_core/config.yaml); keep :0.1.0 in sync with that value.
           tags: |
             ghcr.io/belikh/aquila-core-${{ matrix.arch }}:${{ github.ref_name }}
-            # Supervisor pulls the image tag equal to the add-on `version`
-            # (aquila_core/config.yaml). Keep this in sync with that value.
             ghcr.io/belikh/aquila-core-${{ matrix.arch }}:0.1.0
             ghcr.io/belikh/aquila-core-${{ matrix.arch }}:latest
           cache-from: type=gha,scope=addon-${{ matrix.arch }}
