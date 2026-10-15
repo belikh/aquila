@@ -12,7 +12,7 @@ state and streams their output.
 
 ## 1. Scope and non-goals
 
-The API is a **private, versioned, localhost-only** HTTP + WebSocket surface.
+The API is a **private, versioned, non-public** HTTP + WebSocket surface.
 
 Explicit non-goals (all out of scope for v1, by decision):
 
@@ -34,36 +34,60 @@ custom component's concern. This API does not model HA; it models Aquila.
 
 | Property | Requirement |
 | --- | --- |
-| Transports | HTTP/1.1 (and HTTP/2 where the proxy offers it) over TLS-less loopback; WebSocket over the same connection, RFC 6455. |
-| Core listener | Binds `127.0.0.1` and `::1` **only**. Binding any other address MUST fail at startup. |
+| Transports | HTTP/1.1 (and HTTP/2 where the proxy offers it) over TLS-less loopback or the add-on's private Docker network; WebSocket over the same connection, RFC 6455. |
+| Core listener | Binds `127.0.0.1`/`::1` in the default library posture; the add-on binds its container interface so the HA core container can reach it over the `hassio` Docker network. It MUST NOT bind a host LAN interface, and the port MUST NOT be published to the host (ADR-0003 §7; `home-assistant.md` §2). |
 | Port | Fixed, add-on-owned, non-privileged (default `8099`), overridable by add-on config. |
 | Media types | `application/json; charset=utf-8`; errors `application/problem+json`; stream frames are JSON text frames. |
 | Compression | `gzip` / `br` permitted on JSON responses when negotiated; never required. |
 | Keep-alive | HTTP keep-alive on; idle HTTP connection timeout 65 s. |
-| TLS | Not used. Loopback is the confidentiality boundary; see §3 and §15. |
+| TLS | Not used. Network placement — a private or loopback peer on an unpublished port — is the trust boundary, not encryption; see §3 and §15. |
 
-**Deployment seam.** The core listener is loopback-only. The only
-network-facing piece in the add-on is a minimal ingress proxy (owned by the
-add-on, specified elsewhere) that terminates Home Assistant ingress, authenticates
-the HA user, stamps a signed identity header, and reverse-proxies to the loopback
-core. The core therefore never observes a non-loopback peer. The exact HA network
-topology is recorded in a separate ADR; if it changes, only this seam changes, and
-this section is the invariant that must hold.
+**Deployment seam.** The control-plane port (`8099`) is **not** published to the
+host or the LAN. Exactly two paths reach the core:
+
+- the **HACS component in the HA core container** calls the core directly at
+  `http://aquila-core:8099` over the `hassio` Docker network, so the core
+  observes a private (RFC 1918) peer (`home-assistant.md` §2, §5.2);
+- the **dashboard** is reached through Home Assistant ingress: a minimal ingress
+  proxy (owned by the add-on, specified elsewhere) terminates ingress,
+  authenticates the HA user, stamps a signed identity header, and
+  reverse-proxies to the core.
+
+A peer outside the private network cannot reach the port at all; if the port were
+ever published by mistake, such a peer would still fail the trust check in §3.
+The exact HA network topology is recorded in ADR-0003; if it changes, only this
+seam changes, and this section is the invariant that must hold.
 
 ## 3. Authentication and trust
 
 Every request MUST be authenticated, and there is no anonymous mode except the
-liveness probe in §4. Authentication is the **loopback/ingress trust boundary**:
-the control plane binds loopback only (§2) and the only network-facing piece is
-the add-on ingress proxy, so a request is authenticated by exactly one of three
-mutually exclusive modes.
+liveness probe in §4. Authentication is the **private-network/ingress trust
+boundary**: the core port is unpublished (§2), so the only peers that can reach
+it are the add-on's own process and the HA core container on the add-on's private
+Docker network. A request is authenticated by exactly one of three mutually
+exclusive modes.
 
-### 3.1 Loopback peer
+### 3.1 Trusted peer
 
-A connection whose peer address is loopback (`127.0.0.1` or `::1`) is trusted.
-This covers the add-on's own process, its CLI, its probes, and any tooling
-co-located in the core's network namespace. The loopback connection **is** the
+A connection whose peer address is **loopback or private** is trusted:
+
+- loopback — `127.0.0.0/8`, `::1`;
+- RFC 1918 private — `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`;
+- link-local — `169.254.0.0/16`, `fe80::/10`;
+- IPv6 unique-local — `fc00::/7`.
+
+This covers the add-on's own process, its CLI and probes, and the HA core
+container, which reaches the add-on at `http://aquila-core:8099` over the
+`hassio` Docker network (`home-assistant.md` §5.2) on a Docker-bridge address
+such as `172.17.0.0/16`, which is RFC 1918 private. The trusted peer **is** the
 credential; no header is required.
+
+This is a **network-placement** trust decision, not a confidentiality claim: the
+private network is **not** encrypted, so anything able to place traffic on it is
+trusted by address. A bearer token (§3.3) is the only mode that authenticates
+independently of network placement. A peer outside the loopback/private ranges
+is **not** trusted and MUST present the ingress identity header (§3.2) or a
+valid bearer token (§3.3), or it is rejected with `401`.
 
 ### 3.2 Ingress identity
 
@@ -521,12 +545,18 @@ above on its interval.
 
 ## 15. Security notes
 
-- **Loopback is the boundary.** No LAN bind, no TLS termination, no certificate
-  management, no cloud relay. A component that must reach the core does so through
-  the add-on ingress seam (§2), never by widening the bind.
-- **Three trust modes, one role.** A loopback peer, the ingress identity header,
-  and the local bearer token are independently verifiable and mutually exclusive
-  per request; none grants a different authorisation.
+- **The unpublished port and the private network are the boundary.** The add-on
+  binds its container interface but publishes no host or LAN port, so only the
+  add-on's own process and the HA core container on the private Docker network
+  can reach it; a public peer is rejected. There is no TLS termination, no
+  certificate management and no cloud relay — and no encryption either: the
+  private network is trusted for *placement*, not confidentiality. A component
+  that must reach the core does so either directly over that private network or
+  through the add-on ingress seam (§2), never by widening the bind.
+- **Three trust modes, one role.** A trusted (loopback or private) peer, the
+  ingress identity header, and the local bearer token are independently
+  verifiable and mutually exclusive per request; none grants a different
+  authorisation.
 - **Constant-time comparison** for both the HMAC and the token; failures are
   indistinguishable to the caller.
 - **No secrets in logs, errors or query strings.** Request bodies are not logged;

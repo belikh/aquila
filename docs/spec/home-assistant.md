@@ -308,14 +308,18 @@ entities unavailable until the next successful poll (`manifest.json` is
   component's own successful-poll time.
 - A failed poll backs off (base 1 s, factor 2, cap 30 s, with jitter) and flips
   `core_connected`; there is no gap/resync concept because there is no sequence.
-- **Auth (the loopback/ingress trust boundary).** The core authenticates every
-  request by exactly one of three modes (`core-api.md` §3): a **loopback peer**,
-  the add-on **ingress identity header**, or a **local bearer token**. Because
-  8099 is not LAN-published and the component and core share the add-on's
-  private network, the default needs no token; a bearer token
-  (`Authorization: Bearer …`) may be configured for other placements. A token in
-  a **query string is always rejected** (`401`); the component never puts a
-  credential in the URL.
+- **Auth (the private-network/ingress trust boundary).** The core authenticates
+  every request by exactly one of three modes (`core-api.md` §3): a **trusted
+  private peer** (loopback, RFC 1918, link-local or IPv6 ULA), the add-on
+  **ingress identity header**, or a **local bearer token**. The component runs in
+  the HA core container and reaches `http://aquila-core:8099` over the `hassio`
+  Docker network, so its peer address is private and the default needs no token;
+  a bearer token (`Authorization: Bearer …`) may be configured for other
+  placements. A token in a **query string is always rejected** (`401`); the
+  component never puts a credential in the URL. The private network is trusted
+  for *placement*, not encrypted, and the add-on publishes no host or LAN port —
+  so the trust boundary is the unpublished port plus the private network, not
+  the loopback interface alone.
 
 ## 6. Entity model
 
@@ -499,8 +503,8 @@ panel above.
   if broadcast discovery is added.
 - **Per-floor person count** and **per-zone presence confidence entities**:
   deferred until cross-floor fusion meets the accuracy bars.
-- **Token auth**: the loopback/ingress trust boundary is the default credential
-  (`core-api.md` §3); a bearer token is optional and used only for placements
-  outside the add-on's private network. A token is never placed in a query
-  string.
+- **Token auth**: the private-network/ingress trust boundary is the default
+  credential (`core-api.md` §3); a bearer token is optional and used only for
+  placements outside the add-on's private network. A token is never placed in a
+  query string.
 - **armv7/armhf**: unsupported by decision; no build, no claim.

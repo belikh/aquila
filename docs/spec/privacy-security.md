@@ -53,8 +53,8 @@ is asserted.
 | G1 | No telemetry and no phone-home. |
 | G2 | No outbound connection outside the LAN; no name resolution. |
 | G3 | Raw CSI is confined to the air and the core host; never re-emitted. |
-| G4 | Management HTTP+WS is loopback/ingress only, never `0.0.0.0`, never host-published. |
-| G5 | Management requires a valid HA ingress session; no separate login. |
+| G4 | Management HTTP+WS is reachable only on the add-on's private network and/or through ingress; never host- or LAN-published. |
+| G5 | Management requires a trusted private/loopback peer, a valid HA ingress session, or a bearer; no separate login. |
 | G6 | Only enrolled nodes enter the pipeline; everything else is dropped. |
 | G7 | Control commands are authenticated per node and replay-resistant; CSI ingest authentication is deferred in v1 (see §5). |
 | G8 | No public API, SDK, or MCP surface exists in v1. |
@@ -119,33 +119,44 @@ personal network this still keeps subcarriers out of reach of an off-network
 observer, but a device sharing the same PSK (or an open network) could recover
 them. Per-node sealing is deferred; see G7 and §5.
 
-### G4 — Management HTTP+WS is loopback/ingress only
+### G4 — Management HTTP+WS is private-network/ingress only
 
-**Statement.** The private HTTP+WS server used by the dashboard binds only to the
-loopback interface and/or the Supervisor-provided ingress socket. It never binds
-to `0.0.0.0`, never to a LAN interface, and its port is not published to the host.
+**Statement.** The private HTTP+WS server used by the dashboard and the HACS
+component binds only to the loopback interface, the add-on's private container
+interface, and/or the Supervisor-provided ingress socket. It never binds a host
+LAN interface, and its port is not published to the host.
 
 **Enforcement.** Add-on configuration enables ingress and publishes no `ports`
-mapping; the core binds the ingress/loopback address explicitly.
+mapping; where the core binds a non-loopback address it is the add-on's private
+container interface, reachable only on the `hassio` Docker network
+(`home-assistant.md` §2).
 
-**Test.** Start the add-on; enumerate listening sockets and assert every HTTP+WS
-listener is loopback or the ingress socket, and that no listener is bound to a
-non-loopback address. Deterministic.
+**Test.** Start the add-on; enumerate listening sockets and assert every
+HTTP+WS listener is loopback, a private (RFC 1918 / link-local / IPv6 ULA)
+address, or the ingress socket, and that no listener is bound to a public
+address and no host `ports` mapping is published. Deterministic.
 
-### G5 — Management requires a valid HA ingress session
+### G5 — Management requires a valid identity
 
-**Statement.** The dashboard and management API are reachable only through HA
-Ingress, which authenticates the HA user. Aquila implements no second credential
-set, no password store, and no bypass. Requests that lack the Supervisor ingress
-identity headers, or that arrive off the ingress path, are refused.
+**Statement.** The dashboard is reachable only through HA Ingress, which
+authenticates the HA user. The management API deliberately also accepts a
+**trusted private/loopback peer** — the HACS component in the HA core container
+reaches it directly over the private Docker network (`core-api.md` §3.1,
+`home-assistant.md` §5.2) — and a configured **bearer token** for other
+placements. Aquila implements no second password store and no login of its own.
+Requests that lack all three (no trusted peer, no Supervisor ingress identity
+headers, no bearer) are refused.
 
 **Enforcement.** Validate `X-Remote-User-Id` (and related ingress headers) on
-every request; reject when absent. WebSocket upgrades are same-origin and checked.
-No wildcard CORS; the `Host` header is never trusted for routing.
+every request; otherwise require a loopback/private peer or a constant-time
+bearer check; reject when none is present. WebSocket upgrades are same-origin and
+checked. No wildcard CORS; the `Host` header is never trusted for routing.
 
-**Test.** (a) Request the management endpoint with no ingress headers → refused.
-(b) Request from a peer on the container network but off the ingress path →
-refused. (c) Assert the add-on ships no password/user database. Deterministic.
+**Test.** (a) Request the management endpoint with no ingress headers from a
+**public** peer → refused. (b) Request from a private peer on the container
+network but off the ingress path → accepted as a trusted peer (the component
+path), while the same request from a public peer → refused. (c) Assert the
+add-on ships no password/user database. Deterministic.
 
 ### G6 — Only enrolled nodes enter the pipeline
 
@@ -199,10 +210,11 @@ mechanism must land with its own negative tests (§5). Deterministic.
 ### G8 — No public API, SDK, or MCP surface
 
 **Statement.** v1 exposes no public REST/WS/MCP endpoint and no plugin/SDK
-surface. The only data consumers are in-tree modules and the ingress dashboard.
+surface. The only data consumers are in-tree modules, the bundled HACS
+component, and the ingress dashboard.
 
 **Enforcement.** The API-facing crate does not depend on the server crate (DAG);
-the only listener is the ingress server of G4/G5.
+the only listener is the private management server of G4/G5.
 
 **Test.** DAG test asserts no public API crate depends on internals and no
 externally advertised API module exists. Deterministic.
@@ -315,7 +327,7 @@ procedural; the measurable parts are deterministic.)
 suite, producing deterministic per-commit results in the measurement ledger.
 
 **Test.** The suite runs the G1–G15 checks as named, deterministic cases (e.g.
-`privacy.no_outbound_sockets`, `privacy.loopback_only`,
+`privacy.no_outbound_sockets`, `privacy.management_not_host_published`,
 `security.enrolment_required`, `security.no_dns`, `supplychain.licence_gate`) and
 the ledger records each as pass/fail keyed by commit.
 
@@ -328,7 +340,9 @@ threats and mitigations. v1 has exactly **three network surfaces**:
 
 1. **Node ingest** — nodes → core, raw CSI over Wi-Fi UDP on the LAN.
 2. **Node control** — core → nodes, direct control channel on the LAN.
-3. **Management** — HA user → dashboard/HTTP+WS, via HA Ingress only.
+3. **Management** — the HACS component in HA Core → HTTP+WS, directly over the
+   add-on's private Docker network; and HA user → dashboard/HTTP+WS, via HA
+   Ingress only.
 
 Everything else is in-process or on-disk on the host.
 
@@ -357,8 +371,11 @@ Everything else is in-process or on-disk on the host.
 - **Unenrolled sender** — any device emitting CSI-shaped UDP to the ingest port.
 - **Curious or malicious household member or guest** — legitimate LAN/host access
   plus physical presence; the multi-occupant consent problem (see §4).
-- **Another add-on on the Supervisor network** — could reach the ingress port
-  unless it is ingress-header-gated.
+- **Another add-on on the Supervisor network** — shares the private Docker
+  network, so it is trusted by peer address (`core-api.md` §3.1) and can reach
+  management unless the port were published and unauthenticated; this is the
+  stated v1 limitation of address-based peer trust, contained by the unpublished
+  port rather than by a per-add-on credential.
 - **Supply-chain attacker** — upstream crate, vendored weights, HACS release.
 - **Vendor/distributor** — designed out: no phone-home, no remote control (G1).
 
@@ -392,8 +409,9 @@ access to management or to other nodes' keys.
 Threats: unauthenticated access; direct LAN access; another add-on reaching the
 port; CSRF; WebSocket cross-origin hijack; DNS rebinding; Host-header abuse.
 
-Mitigations: **G4** loopback/ingress-only binding with no host-published port;
-**G5** ingress identity-header validation and refusal off the ingress path;
+Mitigations: **G4** private-network/ingress-only binding with no host-published
+port; **G5** ingress identity-header validation plus a trusted private/loopback
+peer or bearer, and refusal otherwise;
 same-origin WS with Origin checks; no wildcard CORS; `Host` never trusted;
 CSRF token on state-changing calls; strict CSP (**G12**).
 
@@ -413,9 +431,13 @@ Supervisor; secret theft; noisy-neighbour abuse of the Supervisor network.
 
 Mitigations: **G11** least-privilege, non-root, read-only rootfs, no Docker
 socket, no `host_pid`/`privileged`; **G13** secrets in Supervisor options;
-egress restricted by **G2**; ingress gated by **G5** so another add-on cannot use
-management. Node UDP requires host-network reachability; this is the single
-justified network capability and is documented and minimised.
+egress restricted by **G2**; management gated by **G4/G5** with no host-published
+port. Note the honest v1 limitation: because a private-network peer is trusted by
+address (`core-api.md` §3.1), another container on the same `hassio` Docker
+network is trusted too — the containment is the *unpublished port and private
+network*, not a per-add-on credential. Node UDP requires host-network
+reachability; this is the single justified network capability and is documented
+and minimised.
 
 ### 3.8 Supply chain
 
@@ -503,6 +525,6 @@ must say so.
   oversized input (G7).
 - **Ledger.** Results are recorded as deterministic metrics in the commit-keyed
   measurement ledger (G16), e.g. `privacy.no_outbound_sockets`,
-  `privacy.loopback_only`, `privacy.no_imposed_retention`,
+  `privacy.management_not_host_published`, `privacy.no_imposed_retention`,
   `security.enrolment_required`, `security.replay_rejected`,
   `security.no_dns`, `dashboard.csp_strict`, `supplychain.licence_gate`.

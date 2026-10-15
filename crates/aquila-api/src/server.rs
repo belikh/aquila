@@ -5,17 +5,18 @@
 //! add-on path for a container address behind Home Assistant ingress. It serves
 //! the canonical v1 routes (`core-api.md` §6) and, when configured, the static
 //! dashboard bundle. Every request is
-//! authenticated by the loopback/ingress trust boundary (§3): a loopback peer,
-//! the add-on ingress identity header, or a valid bearer token; a token in a
-//! query string is always rejected. The WebSocket stream is not implemented in
-//! v1: `GET /api/v1/stream` returns a typed `501`, so clients poll
+//! authenticated by the private-network/ingress trust boundary (§3): a
+//! loopback or private (RFC 1918 / link-local / IPv6 ULA) peer, the add-on
+//! ingress identity header, or a valid bearer token; a token in a query string
+//! is always rejected. The WebSocket stream is not implemented in v1:
+//! `GET /api/v1/stream` returns a typed `501`, so clients poll
 //! (`core-api.md` §10).
 //!
 //! [`Server::serve_in_background`] runs the accept loop on a thread and returns
 //! a [`ServerGuard`] that stops it on drop, so a composition root can start the
 //! control plane, wire it to the sensing core, and shut it down cleanly.
 
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -37,11 +38,13 @@ const ACCEPT_POLL: Duration = Duration::from_millis(2);
 
 /// The control plane's authentication policy (`core-api.md` §3).
 ///
-/// The trust boundary is the loopback/ingress seam. A request is accepted when
-/// a loopback peer connects, when the add-on ingress identity header is
-/// present, or when a valid bearer token is presented. There is no anonymous
-/// mode on a non-loopback connection except the `/live` probe, and a token in a
-/// query string is always rejected.
+/// The trust boundary is the add-on's private network seam: the port is not
+/// published to the LAN, so only the HA core container (which shares the
+/// `hassio` Docker network) and co-located processes can reach it. A request is
+/// accepted when a loopback or private-network peer connects, when the add-on
+/// ingress identity header is present, or when a valid bearer token is
+/// presented. There is no anonymous mode on any other connection except the
+/// `/live` probe, and a token in a query string is always rejected.
 #[derive(Debug, Clone, Default)]
 pub struct Auth {
     token: Option<String>,
@@ -218,7 +221,8 @@ impl Server {
         for incoming in self.listener.incoming() {
             match incoming {
                 Ok(mut stream) => {
-                    let _ = handle_client(&mut stream, &self.handle, &self.auth, self.assets.as_ref());
+                    let _ =
+                        handle_client(&mut stream, &self.handle, &self.auth, self.assets.as_ref());
                 }
                 Err(error) => return Err(ApiError::Io(error)),
             }
@@ -309,9 +313,7 @@ fn handle_client(
 ) -> Result<(), ApiError> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_request(stream)?;
-    let ingress_prefix = request
-        .header("x-ingress-path")
-        .map(str::to_string);
+    let ingress_prefix = request.header("x-ingress-path").map(str::to_string);
     let path = strip_ingress_prefix(&request.path, ingress_prefix.as_deref());
     let segments = segments(&path);
     let is_api = segments.first() == Some(&"api");
@@ -332,18 +334,15 @@ fn handle_client(
         return not_found(stream);
     }
 
-    let peer_loopback = stream
-        .peer_addr()
-        .map(|addr| addr.ip().is_loopback())
-        .unwrap_or(false);
-    if !authorised(&request, peer_loopback, auth) {
+    let peer = stream.peer_addr().ok().map(|addr| addr.ip());
+    if !authorised(&request, peer, auth) {
         return problem(
             stream,
             401,
             "unauthenticated",
             "Missing or invalid credentials",
             false,
-            "the control plane requires a loopback peer, an ingress identity header or a bearer token",
+            "the control plane requires a trusted (loopback or private) peer, an ingress identity header or a bearer token",
         );
     }
 
@@ -550,7 +549,7 @@ fn capabilities() -> Value {
 ///
 /// Order matters: a credential-shaped query parameter is rejected before any
 /// other mode so it can never be smuggled in alongside one.
-fn authorised(request: &Request, peer_loopback: bool, auth: &Auth) -> bool {
+fn authorised(request: &Request, peer: Option<IpAddr>, auth: &Auth) -> bool {
     if request.query_has_credential() {
         return false;
     }
@@ -573,7 +572,30 @@ fn authorised(request: &Request, peer_loopback: bool, auth: &Auth) -> bool {
     {
         return true;
     }
-    peer_loopback
+    peer.map(peer_is_trusted).unwrap_or(false)
+}
+
+/// Whether a peer address lies inside the control plane's trust boundary
+/// (`core-api.md` §3.1).
+///
+/// The boundary is the add-on's **private network plus the unpublished port**,
+/// not loopback alone: the Home Assistant core container reaches `8099` over the
+/// `hassio` Docker network, whose addresses are RFC 1918 private, and neither it
+/// nor any other process can arrive from the LAN because the port is not
+/// published. A peer is therefore trusted when it is loopback, RFC 1918 private
+/// (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local
+/// (`169.254.0.0/16`), IPv6 unique-local (`fc00::/7`) or IPv6 link-local
+/// (`fe80::/10`). A public peer is not trusted and must present the ingress
+/// identity header or a bearer token.
+///
+/// This is a plain classification of the peer address, not a confidentiality
+/// claim: the private network is not encrypted, and the bearer token is the only
+/// mode that authenticates past the network placement itself.
+fn peer_is_trusted(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+    }
 }
 
 /// Compare two secrets without an early exit on the first differing byte.
@@ -660,34 +682,118 @@ mod tests {
     #[test]
     fn a_loopback_peer_needs_no_header() {
         let req = request("GET", "", &[]);
-        assert!(authorised(&req, true, &Auth::open()));
-        assert!(!authorised(&req, false, &Auth::open()));
+        assert!(authorised(
+            &req,
+            Some("127.0.0.1".parse().unwrap()),
+            &Auth::open()
+        ));
+        assert!(authorised(
+            &req,
+            Some("::1".parse().unwrap()),
+            &Auth::open()
+        ));
+    }
+
+    #[test]
+    fn a_private_network_peer_needs_no_header() {
+        // The Home Assistant core container reaches the add-on at
+        // `http://aquila-core:8099` over the `hassio` Docker network, so its peer
+        // address is private, not loopback.
+        let req = request("GET", "", &[]);
+        for ip in ["10.0.0.5", "172.17.0.2", "192.168.1.20", "169.254.10.10"] {
+            let peer: IpAddr = ip.parse().unwrap();
+            assert!(authorised(&req, Some(peer), &Auth::open()), "{ip}");
+        }
+    }
+
+    #[test]
+    fn a_public_peer_without_a_credential_is_rejected() {
+        let req = request("GET", "", &[]);
+        for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            let peer: IpAddr = ip.parse().unwrap();
+            assert!(!authorised(&req, Some(peer), &Auth::open()), "{ip}");
+        }
+        // No peer address at all (a failed `peer_addr`) is not trusted.
+        assert!(!authorised(&req, None, &Auth::open()));
+    }
+
+    #[test]
+    fn peer_trust_covers_every_private_and_loopback_range() {
+        let trusted = [
+            // Loopback.
+            "127.0.0.1",
+            "127.8.8.8",
+            "::1",
+            // RFC 1918.
+            "10.0.0.1",
+            "10.255.255.254",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.0.1",
+            "192.168.255.254",
+            // Link-local (IPv4 and IPv6).
+            "169.254.10.10",
+            "fe80::1",
+            // IPv6 unique-local.
+            "fc00::1",
+            "fd12:3456:789a::1",
+        ];
+        for ip in trusted {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(peer_is_trusted(ip), "{ip} must be trusted");
+        }
+
+        let rejected = [
+            // Public IPv4.
+            "8.8.8.8",
+            "1.1.1.1",
+            "203.0.113.1",
+            // Just outside each private range.
+            "172.15.0.1",
+            "172.32.0.1",
+            "192.169.0.1",
+            "169.255.0.1",
+            // Carrier-grade NAT is not RFC 1918.
+            "100.64.0.1",
+            // Public IPv6 (documentation prefix and a global anycast address).
+            "2001:db8::1",
+            "2606:4700:4700::1111",
+            // Just below the IPv6 link-local prefix.
+            "fe00::1",
+        ];
+        for ip in rejected {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(!peer_is_trusted(ip), "{ip} must not be trusted");
+        }
     }
 
     #[test]
     fn an_ingress_identity_header_is_accepted_off_loopback() {
+        let public: IpAddr = "8.8.8.8".parse().unwrap();
         let req = request("GET", "", &[("X-Aquila-Ingress", "hmac")]);
-        assert!(authorised(&req, false, &Auth::open()));
+        assert!(authorised(&req, Some(public), &Auth::open()));
         let req = request("GET", "", &[("X-Remote-User-Id", "user")]);
-        assert!(authorised(&req, false, &Auth::open()));
+        assert!(authorised(&req, Some(public), &Auth::open()));
     }
 
     #[test]
     fn a_query_string_token_is_always_rejected() {
+        let peer: IpAddr = "127.0.0.1".parse().unwrap();
         let req = request("GET", "token=leaked", &[]);
-        assert!(!authorised(&req, true, &Auth::open()));
+        assert!(!authorised(&req, Some(peer), &Auth::open()));
         let req = request("GET", "access_token=leaked", &[]);
-        assert!(!authorised(&req, true, &Auth::open()));
+        assert!(!authorised(&req, Some(peer), &Auth::open()));
     }
 
     #[test]
     fn a_bearer_token_is_checked_against_the_configured_secret() {
         let auth = Auth::new(Some("secret".to_string()));
+        let public: IpAddr = "8.8.8.8".parse().unwrap();
         let valid = request("GET", "", &[("Authorization", "Bearer secret")]);
-        assert!(authorised(&valid, false, &auth));
+        assert!(authorised(&valid, Some(public), &auth));
         let invalid = request("GET", "", &[("Authorization", "Bearer nope")]);
-        assert!(!authorised(&invalid, false, &auth));
+        assert!(!authorised(&invalid, Some(public), &auth));
         // No token configured: a presented bearer is refused rather than trusted.
-        assert!(!authorised(&valid, false, &Auth::open()));
+        assert!(!authorised(&valid, Some(public), &Auth::open()));
     }
 }
