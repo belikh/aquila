@@ -2,17 +2,22 @@
 
 Status: draft for review (v1.1). Prose in Australian English.
 
-> **Status: core side implemented (ticket #13); firmware and HA pending.**
-> `aquila-wire` now encodes/decodes the `0x0E`–`0x14` opcodes and the generated
+> **Status: specified and compile-verified; hardware-gated end to end.**
+> `aquila-wire` encodes/decodes the `0x0E`–`0x14` opcodes and the generated
 > `node_wire.h` carries them; `aquila-api` owns the signed image store
 > (SHA-256 + Ed25519), the sliding-window transfer manager and the real
-> `/api/v1/firmware*` routes. The **node firmware agent** (partition table,
-> `esp_ota_*`, health check and rollback) is still ticket #14, and the HA
-> `update` entity is ticket #15; there is no `esp_ota_*` call or
-> key-provisioning path in the firmware yet. On a core with no store or node
-> transport wired, the `/firmware*` mutating routes still fail closed with a
-> typed `503 ota_unavailable`. Read every present-tense statement below as a
-> requirement, not a fact about the build (F2/F29/F36/F38).
+> `/api/v1/firmware*` routes (ticket #13); the add-on wires the store and a
+> per-node `OtaTransport` once a node pairs. The ESP32-S3 node firmware agent
+> (`node_ota`, ticket #14) handles `OTA_BEGIN`/`OTA_CHUNK`/`OTA_END`/
+> `OTA_ABORT`, writes chunks to the inactive A/B partition with `esp_ota_*`,
+> checks CRC-32 per chunk and SHA-256 + Ed25519 over the whole image, activates
+> and reboots, then runs the pending-verify health window with automatic
+> rollback. The HA `update` entity is ticket #15.
+> Everything is compile-verified but **not flashed or run on hardware**: the
+> node's trust anchor (`AQUILA_FW_PUBKEY_HEX` or NVS `ota`/`fw_pubkey`) must
+> be provisioned or OTA fails closed, and the add-on only offers OTA once the
+> store and a paired-node transport are wired. Read every present-tense
+> statement below as a requirement, not a fact about the build.
 
 Scope: how an ESP32-S3 node's firmware is updated over the private LAN from the
 Aquila core, triggered and observed from Home Assistant, with no cloud. Subordinate

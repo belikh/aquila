@@ -448,9 +448,15 @@ and replays scripted replies. Only `send`/`shutdown` are exposed; retransmission
 
 `0x0E`–`0x14` are the firmware-OTA extension of this table; their bodies and
 rules are specified in `docs/spec/firmware-ota.md` §5 and summarised in §9.5.
-**Not yet implemented — see ticket #14:** the firmware defines no OTA handler
-and `node_wire.h` stops at `0x0D`; these rows are a specification, not shipped
-behaviour (F2/F29/F36/F38).
+`aquila-wire` encodes/decodes them and the generated `node_wire.h` carries them
+(`firmware/esp32-s3-csi-node/components/node_wire/include/node_wire.h`); the
+node firmware agent (`node_ota`, ticket #14) handles `OTA_BEGIN`/`OTA_CHUNK`/
+`OTA_END`/`OTA_ABORT` on the device. Everything is compile-verified with
+ESP-IDF v5.5.2 but **not flashed or run on hardware**: the node's Ed25519 trust
+anchor must be provisioned or OTA fails closed, and end-to-end OTA also needs
+the core's signed image store and a paired-node transport wired (ticket #13,
+P3). These rows are specification plus compile-verified code, not hardware
+evidence (F2/F29/F36/F38).
 
 `SET_CONFIG` carries a `config_version` and a `config_hash`; the node rejects a
 stale `config_version`, applies atomically, and replies `ACTIVE` or `REJECTED`
@@ -699,11 +705,19 @@ present (F37).
 
 ### 9.5 Firmware update (OTA)
 
-> **Not yet implemented — see ticket #14.** Everything below is the specified
-> design, not shipped behaviour: no `esp_ota_*` call, no `partitions.csv`, no
-> key-provisioning path and no OTA handler exist under `firmware/`, and the
-> control opcodes `0x0E`–`0x14` are absent from `node_wire.h` (F2/F29/F36/F38).
-> The core's OTA endpoints fail closed with a typed `503 ota_unavailable`.
+> **Specified and compile-verified; hardware-gated end to end.** The node
+> firmware agent (`components/node_ota/`, ticket #14) handles `OTA_BEGIN`/
+> `OTA_CHUNK`/`OTA_END`/`OTA_ABORT`, writes chunks to the inactive A/B partition
+> with `esp_ota_*`, checks CRC-32 per chunk and SHA-256 + Ed25519 over the whole
+> image, activates and reboots, then runs the pending-verify health window with
+> automatic rollback (`partitions.csv` provides the dual-OTA slots; `node_wire.h`
+> carries opcodes `0x0E`–`0x14`). Everything is compile-verified with ESP-IDF
+> v5.5.2 but **not flashed or run on hardware**: the node's Ed25519 trust anchor
+> (`AQUILA_FW_PUBKEY_HEX` or NVS `ota`/`fw_pubkey`) must be provisioned or OTA
+> fails closed, and end-to-end OTA also needs the core's signed image store and
+> a paired-node transport wired (ticket #13, P3) plus the HA `update` entity
+> (ticket #15). The core's OTA endpoints fail closed with a typed
+> `503 ota_unavailable` until those are in place.
 
 Node firmware is updated over the LAN by the core, with no cloud. OTA rides the
 **node control plane** (`9101/udp`) via opcodes `0x0E`–`0x14` (new, extending
