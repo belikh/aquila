@@ -43,7 +43,7 @@ static const char *TAG = "node_control";
 #define CONTROL_RECV_TIMEOUT_MS 200
 #define JOIN_RETRY_MS 3000
 #define NVS_NAMESPACE "aquila"
-#define IDENTIFY_GPIO (-1) /* set to a valid GPIO to enable LED blink */
+#define IDENTIFY_GPIO (-1) /* operator must set a valid GPIO here; IDENTIFY blink is compiled out until then */
 #define REPLAY_WINDOW 16u  /* recent request_ids kept to reject retransmits */
 
 static node_control_config_t s_config;

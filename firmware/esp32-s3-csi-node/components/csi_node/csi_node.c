@@ -244,11 +244,7 @@ static void csi_sender_task(void *arg)
             slot.csi[1] = 0;
         }
 
-        /* PROVISIONAL: the contract has not yet pinned the HT20/HT40
-         * subcarrier-offset convention, so this `-(n/2)` is a placeholder, not
-         * a verified bin map (signal.md §7; S11, F19). It is isolated here so
-         * it can become a Config value once a real capture fixes it; do not
-         * read it as a correctness claim. */
+        // PROVISIONAL: unconfirmed against a real capture (S11/F19; signal.md §7)
         int16_t subcarrier_offset = (int16_t)(-(int16_t)(n / 2u));
         size_t length = aq_frame_csi(
             cfg.node_id, slot.band, slot.channel, cfg.bandwidth_mhz, slot.sequence,

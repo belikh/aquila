@@ -19,6 +19,11 @@ aquila-api = { path = "../aquila-api" }
 # (`home-assistant.md`): the `signal` feature provides `SigSet`/`sigwait` without
 # any `unsafe` in this crate.
 nix = { version = "0.31", default-features = false, features = ["signal"] }
+# Topology persistence (/data/aquila/topology.json) and the OTA trust anchor
+# (AQUILA_FW_PUBKEY_HEX) are JSON / Ed25519 concerns.
+serde = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { workspace = true }
 
 [lints]
 workspace = true

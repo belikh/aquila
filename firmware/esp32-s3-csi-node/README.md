@@ -175,7 +175,10 @@ distributed image does not carry the network password (G13).
   `esp_ota_write` and emits a cumulative `OTA_ACK`; `OTA_END` finalises the
   SHA-256 and verifies an **Ed25519** signature over that digest against the
   provisioned trust anchor, then `esp_ota_set_boot_partition` and reboots;
-  `OTA_ABORT` discards the transfer. Failures are reported as `OTA_RESULT`.
+  `OTA_ABORT` discards the transfer. Failures are reported as `OTA_RESULT`. The
+  agent is implemented and compile-verified (ESP-IDF v5.5.2) but hardware-untested;
+  a trust anchor (`CONFIG_AQUILA_FW_PUBKEY_HEX` or NVS `ota`/`fw_pubkey`) must be
+  provisioned, or OTA fails closed.
 - **Pending-verify and rollback** (`firmware-ota.md` §6). On the first boot of a
   new image the node enters a pending-verify state and starts a health task; if
   the node stays healthy (associated + streaming + control responsive) for the
@@ -225,11 +228,11 @@ but none of it is exercised on hardware. In particular:
   the pending-verify health window and `esp_ota_mark_app_valid_cancel_rollback`
   / `esp_ota_mark_app_invalid_rollback_and_reboot` rollback path; and the
   whether-the-image-fits and partition-selection behaviour against a real
-  4 MB flash. None of this is exercised on hardware here;
+  4 MB flash — hardware-gated; none of this is exercised on hardware here;
 - the vendored Ed25519 verifier (`node_ota/ed25519/`) against a real signed
-  image. It is the published TweetNaCl reference, but only the Rust core signs
-  and verifies images in this repository, so the C verifier has not been
-  round-tripped against a core-produced signature;
+  image — hardware-gated: it is the published TweetNaCl reference, but only the
+  Rust core signs and verifies images in this repository, so the C verifier has
+  not been round-tripped against a core-produced signature;
 - the anti-rollback floor and trust-anchor provisioning in NVS (a fresh node
   with no `fw_pubkey` fails every OTA closed by design);
 - the control-channel HMAC-SHA256 verification and replay window
