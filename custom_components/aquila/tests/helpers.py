@@ -114,7 +114,9 @@ class StubSnapshotClient:
         manifest: Any,
         firmware: dict[str, Any] | None = None,
         jobs: dict[str, Any] | None = None,
+        health: Any = None,
         fail_nodes: bool = False,
+        fail_health: bool = False,
         fail_firmware_for: set[str] | None = None,
     ) -> None:
         self._state = state
@@ -122,11 +124,20 @@ class StubSnapshotClient:
         self._manifest = manifest
         self._firmware = firmware or {}
         self._jobs = jobs or {}
+        self._health = health if health is not None else {}
         self._fail_nodes = fail_nodes
+        self._fail_health = fail_health
         self._fail_firmware_for = fail_firmware_for or set()
 
     async def async_get_state(self) -> Any:
         return self._state
+
+    async def async_get_health(self) -> Any:
+        if self._fail_health:
+            from custom_components.aquila.api import AquilaConnectionError
+
+            raise AquilaConnectionError("health probe down")
+        return self._health
 
     async def async_get_nodes(self) -> Any:
         if self._fail_nodes:

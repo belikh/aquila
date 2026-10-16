@@ -408,8 +408,13 @@ class AquilaCoordinator(DataUpdateCoordinator[dict]):
 ```
 
 - `_async_update_data` performs `GET /api/v1/state` and, best-effort, `GET
-  /api/v1/nodes` and `GET /api/v1/firmware`; the interval defaults to 60 s and
-  is configurable. This is both the initial load and the ongoing source in v1.
+  /api/v1/health` (the **health probe**), `GET /api/v1/nodes` and `GET
+  /api/v1/firmware`; the interval defaults to 60 s and is configurable. This is
+  both the initial load and the ongoing source in v1. The probe's counters
+  (`core_connected`, `nodes_online`, `nodes_total`, `calibration_state`,
+  `clock_drift_ms`, `last_packet_ts`, `self_test_ok`) populate the snapshot's
+  `health` block (§6); a failed probe is best-effort and leaves the `/state`
+  health block in place.
 - There is no `AquilaStreamClient` in v1 (no WebSocket). A failed poll flips
   `coordinator.last_update_success`, which marks entities unavailable and writes
   `core_connected = false`; the next successful poll restores both.

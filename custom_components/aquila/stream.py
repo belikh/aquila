@@ -29,7 +29,13 @@ from .const import (
     FIRMWARE_RELEASE_NOTES,
     FIRMWARE_UPDATE_AVAILABLE,
     FIRMWARE_UPDATE_PERCENTAGE,
+    HEALTH_CALIBRATION_STATE,
+    HEALTH_CLOCK_DRIFT_MS,
     HEALTH_CORE_CONNECTED,
+    HEALTH_LAST_PACKET_TS,
+    HEALTH_NODES_ONLINE,
+    HEALTH_NODES_TOTAL,
+    HEALTH_SELF_TEST_OK,
     IMAGE_ID,
     IMAGE_NOTES,
     IMAGE_VERSION,
@@ -45,6 +51,20 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+#: The health keys the coordinator snapshot carries (home-assistant.md §6.2).
+#: The poll also probes ``GET /api/v1/health`` (the "health probe") and merges
+#: these keys into the snapshot's ``health`` block, so the diagnostic entities
+#: see the core's authoritative counters rather than only what ``/state`` embeds.
+_HEALTH_KEYS = (
+    HEALTH_CORE_CONNECTED,
+    HEALTH_NODES_ONLINE,
+    HEALTH_NODES_TOTAL,
+    HEALTH_CALIBRATION_STATE,
+    HEALTH_CLOCK_DRIFT_MS,
+    HEALTH_LAST_PACKET_TS,
+    HEALTH_SELF_TEST_OK,
+)
 
 
 def normalise_nodes(payload: Any) -> dict[str, Any]:
@@ -214,6 +234,18 @@ async def async_collect_snapshot(client: AquilaApiClient) -> dict[str, Any]:
     health = snapshot.get("health")
     if not isinstance(health, dict):
         health = {}
+    # The health probe: `GET /api/v1/health` is authoritative for the counters
+    # the diagnostic entities read (home-assistant.md §6.2). Best-effort — a
+    # failed probe leaves the `/state` health block in place, never fabricated.
+    try:
+        probe = await client.async_get_health()
+    except AquilaError as err:
+        _LOGGER.debug("Health probe failed: %s", err)
+    else:
+        if isinstance(probe, dict):
+            for key in _HEALTH_KEYS:
+                if probe.get(key) is not None:
+                    health[key] = probe[key]
     # A successful poll is the v1 connectivity signal; a failed poll raises
     # before reaching here and the coordinator marks entities unavailable.
     health.setdefault(HEALTH_CORE_CONNECTED, True)

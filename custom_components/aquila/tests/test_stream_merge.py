@@ -157,3 +157,44 @@ async def test_collect_snapshot_survives_nodes_failure() -> None:
     snapshot = await async_collect_snapshot(client)
     assert snapshot["nodes"] == {}
     assert snapshot["health"]["nodes_online"] == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_snapshot_merges_the_health_probe() -> None:
+    # `/state` embeds only a partial health block; the probe supplies the
+    # authoritative counters the diagnostic entities read (home-assistant.md §6.2).
+    client = StubSnapshotClient(
+        state={"zones": {}, "health": {"nodes_online": None, "nodes_total": None}},
+        nodes={"items": []},
+        manifest={"items": []},
+        health={
+            "nodes_online": 0,
+            "nodes_total": 2,
+            "self_test_ok": True,
+            "calibration_state": "unknown",
+            "clock_drift_ms": None,
+            "last_packet_ts": None,
+        },
+    )
+    snapshot = await async_collect_snapshot(client)
+    health = snapshot["health"]
+    assert health["nodes_online"] == 0
+    assert health["nodes_total"] == 2
+    assert health["self_test_ok"] is True
+    assert health["calibration_state"] == "unknown"
+    assert health["core_connected"] is True
+
+
+@pytest.mark.asyncio
+async def test_collect_snapshot_survives_health_probe_failure() -> None:
+    client = StubSnapshotClient(
+        state={"zones": {}, "health": {"nodes_online": 1}},
+        nodes={"items": []},
+        manifest={"items": []},
+        fail_health=True,
+    )
+    snapshot = await async_collect_snapshot(client)
+    # A failed probe is best-effort: the /state block survives and the poll
+    # still succeeds.
+    assert snapshot["health"]["nodes_online"] == 1
+    assert snapshot["health"]["core_connected"] is True
