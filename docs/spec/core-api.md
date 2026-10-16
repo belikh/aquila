@@ -46,8 +46,10 @@ custom component's concern. This API does not model HA; it models Aquila.
 host or the LAN. Exactly two paths reach the core:
 
 - the **HACS component in the HA core container** calls the core directly at
-  `http://aquila-core:8099` over the `hassio` Docker network, so the core
-  observes a private (RFC 1918) peer (`home-assistant.md` §2, §5.2);
+  `http://<repository-hash>-aquila-core:8099` over the `hassio` Docker network
+  (Supervisor assigns the hostname; the literal `aquila-core` does not resolve
+  for a repository-installed add-on), so the core observes a private (RFC 1918)
+  peer (`home-assistant.md` §2, §5.2);
 - the **dashboard** is reached through Home Assistant ingress: a minimal ingress
   proxy (owned by the add-on, specified elsewhere) terminates ingress,
   authenticates the HA user, stamps a signed identity header, and
@@ -77,10 +79,11 @@ A connection whose peer address is **loopback or private** is trusted:
 - IPv6 unique-local — `fc00::/7`.
 
 This covers the add-on's own process, its CLI and probes, and the HA core
-container, which reaches the add-on at `http://aquila-core:8099` over the
-`hassio` Docker network (`home-assistant.md` §5.2) on a Docker-bridge address
-such as `172.17.0.0/16`, which is RFC 1918 private. The trusted peer **is** the
-credential; no header is required.
+container, which reaches the add-on at
+`http://<repository-hash>-aquila-core:8099` over the `hassio` Docker network
+(`home-assistant.md` §5.2) on a Docker-bridge address such as `172.17.0.0/16`,
+which is RFC 1918 private. The trusted peer **is** the credential; no header is
+required.
 
 This is a **network-placement** trust decision, not a confidentiality claim: the
 private network is **not** encrypted, so anything able to place traffic on it is

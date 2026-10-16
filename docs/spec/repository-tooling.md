@@ -94,9 +94,10 @@ resolves them to the layout actually on disk (`aquila_core/` and
 | `home-assistant.md` §3.3 | `repository.yaml`, `hacs.json`, `aquila_core/`, `custom_components/aquila/` | `repository.yaml` and `hacs.json` at the repo root (required by the stores); add-on packaging at root `aquila_core/`; component at root `custom_components/aquila/` |
 
 Rationale: `repository.yaml` and `hacs.json` **must** sit at the repository root
-(the add-on store and HACS look only there), and HACS uses `zip_release` with
-`filename: aquila.zip`, so the component's *repository* path is independent of its
-*HA runtime* path (`custom_components/aquila`). Both HA-facing trees sit at the
+(the add-on store and HACS look only there). HACS installs by structure: it finds
+the component under `custom_components/aquila/`, so the component's *repository*
+path and its *HA runtime* path are one and the same
+(`custom_components/aquila`). Both HA-facing trees sit at the
 repo root, and the one Rust composition-root binary lives in the one Rust
 workspace as `crates/aquila-addon`.
 
@@ -925,7 +926,7 @@ jobs:
           platforms: ${{ matrix.arch == 'amd64' && 'linux/amd64' || 'linux/arm64' }}
           push: true
           tags: ghcr.io/belikh/aquila-core-${{ matrix.arch }}:${{ github.ref_name }}
-      - name: Package HACS component asset (aquila.zip)
+      - name: Package component asset for manual install (aquila.zip)
         run: |
           zip -r aquila.zip custom_components/aquila
       - name: Attest build provenance
@@ -1037,8 +1038,8 @@ owner follow-up):
    `measurement.md` all use `.aquila/metrics/ledger.jsonl`.
 3. **HA tree location — fixed.** The layout on disk is root `aquila_core/` plus
    root `custom_components/aquila/`; §1.2, `architecture.md` §9 and
-   `home-assistant.md` §3.3 agree. HACS `zip_release` makes the repository path
-   independent of the HA runtime path.
+   `home-assistant.md` §3.3 agree. HACS installs by structure, so the component's
+   repository path *is* its HA runtime path (`custom_components/aquila/`).
 
 Open, not blocking v1:
 

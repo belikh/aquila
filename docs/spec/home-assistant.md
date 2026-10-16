@@ -53,9 +53,13 @@ thing that does DSP, inference, fusion, calibration and measurement.
   discovery is ever added, `host_network: true` becomes required (see §10).
 - The core→node control channel is outbound-only from the add-on and needs no
   inbound port.
-- HA Core resolves the add-on by hostname = slug with `_` → `-`
-  (`aquila_core` → `aquila-core`), so the component's default core URL is
-  `http://aquila-core:8099`.
+- HA Core reaches the add-on over the `hassio` Docker network. Supervisor
+  assigns the add-on hostname `<repository-hash>-<slug-with-hyphens>` (for
+  example `c5ea7a93-aquila-core`), so the deployment URL is
+  `http://<repository-hash>-aquila-core:8099`. The component's `DEFAULT_URL`
+  constant is still the literal `http://aquila-core:8099`, which does not resolve
+  for a repository-installed add-on (it would only work if the slug or alias were
+  exactly `aquila-core`); automatic discovery is tracked as issue #18.
 
 ## 3. Packaging
 
@@ -204,13 +208,14 @@ at `belikh/aquila`:
 - **Add-on store:** users add `https://github.com/belikh/aquila` as a custom
   add-on repository; `repository.yaml` at the root plus the `aquila_core/`
   folder is the standard layout.
-- **HACS:** `hacs.json` at the root with
-  `{"name": "Aquila", "zip_release": true, "filename": "aquila.zip",
-  "render_readme": true}`. Because the integration is not at the repo root,
-  releases are shipped as a `aquila.zip` release asset containing
-  `custom_components/aquila/`, produced by the release workflow. HACS extracts
-  the asset, so the monorepo layout does not have to match the integration
-  layout.
+- **HACS:** `hacs.json` at the root is exactly
+  `{"name": "Aquila", "render_readme": true}` — no `zip_release`, no `filename`.
+  The repository already has the HACS-required layout, with the integration under
+  `custom_components/aquila/`, so HACS installs directly from the release tree
+  (or the branch). Each release *also* attaches `aquila.zip` (containing
+  `custom_components/aquila/`) as a release asset, but that is for manual
+  installs — HACS does not use it. (`zip_release` was tried and dropped because
+  the release zip layout was wrong for HACS.)
 - If a single repo proves ambiguous for either store, the fallback is a separate
   `belikh/aquila-addon` repository; that is a packaging detail, not a
   behavioural one. Flagged in §10.
@@ -219,7 +224,7 @@ at `belikh/aquila`:
 
 | Thing | Value | Rule |
 | --- | --- | --- |
-| Add-on slug | `aquila_core` | lowercase, `_` separators; full store slug `<repo>_aquila_core`; network hostname `aquila-core` |
+| Add-on slug | `aquila_core` | lowercase, `_` separators; full store slug `<repo>_aquila_core`; network hostname `<repository-hash>-aquila-core` (Supervisor-assigned) |
 | Component domain | `aquila` | drives `custom_components/aquila`, entity service namespace, `DOMAIN` |
 | Add-on TCP port | `8099` | HTTP + WS + ingress (not host-published) |
 | Add-on UDP ports | `9100`/`9101` | CSI ingest + node control (host-published; ADR-0003 §7) |
@@ -229,7 +234,8 @@ at `belikh/aquila`:
 
 - Component `DOMAIN = "aquila"`. The add-on slug is `aquila_core` (the core,
   not the whole product); there is exactly one add-on in v1. This slug, the
-  derived `aquila-core` hostname and the `ghcr.io/belikh/aquila-core-*` image
+  Supervisor-assigned `<repository-hash>-aquila-core` hostname and the
+  `ghcr.io/belikh/aquila-core-*` image
   are Home Assistant deployment identities, **not** Rust crate names; the
   composition-root crate is `aquila-addon` per ADR-0003.
 - `instance_id` is a random UUID generated once by the core and persisted in
@@ -279,7 +285,8 @@ no aliases and no second route table (`sister-issues-specs.md` D13). The core
 advertises its contract version; the component refuses or degrades on mismatch
 (§9).
 
-Polls (all `GET`), base `http://aquila-core:8099`:
+Polls (all `GET`), base `http://<repository-hash>-aquila-core:8099` (the
+Supervisor-assigned add-on hostname; see §2):
 
 | Path | Purpose |
 | --- | --- |
@@ -312,8 +319,9 @@ entities unavailable until the next successful poll (`manifest.json` is
   every request by exactly one of three modes (`core-api.md` §3): a **trusted
   private peer** (loopback, RFC 1918, link-local or IPv6 ULA), the add-on
   **ingress identity header**, or a **local bearer token**. The component runs in
-  the HA core container and reaches `http://aquila-core:8099` over the `hassio`
-  Docker network, so its peer address is private and the default needs no token;
+  the HA core container and reaches `http://<repository-hash>-aquila-core:8099`
+  over the `hassio` Docker network, so its peer address is private and the
+  default needs no token;
   a bearer token (`Authorization: Bearer …`) may be configured for other
   placements. A token in a **query string is always rejected** (`401`); the
   component never puts a credential in the URL. The private network is trusted
@@ -429,7 +437,10 @@ class AquilaCoordinator(DataUpdateCoordinator[dict]):
 `config_flow.py` implements `ConfigFlow` (domain `aquila`):
 
 - `async_step_user`: one field, **Core URL**, defaulted to
-  `http://aquila-core:8099` (the add-on hostname). Validates by calling
+  `http://aquila-core:8099`. That default does not resolve for a
+  repository-installed add-on, where Supervisor assigns
+  `<repository-hash>-aquila-core`; automatic discovery is tracked as issue #18.
+  Validates by calling
   `GET /api/v1/health`; on success stores `instance_id` as the entry unique_id
   and calls `async_create_entry(data={"url": ..., "token": None})`. Duplicate
   `instance_id` aborts with `already_configured`.
@@ -475,17 +486,22 @@ panel above.
 3. In HACS, add `https://github.com/belikh/aquila` as a custom repository
    (integration); download **Aquila**; restart HA.
 4. Settings → Devices & Services → Add Integration → **Aquila**. The URL
-   defaults to `http://aquila-core:8099`; the flow validates `/api/v1/health`
-   and creates the entry. Entities and the sidebar panel appear.
+   defaults to `http://aquila-core:8099` — which does not resolve for a
+   repository-installed add-on; use the Supervisor-assigned
+   `http://<repository-hash>-aquila-core:8099` instead (issue #18). The flow
+   validates `/api/v1/health` and creates the entry; the entities appear. The
+   dashboard is on the add-on page's **Open Web UI**; enable **Show in sidebar**
+   on the add-on page to add it to the sidebar.
 
 **Upgrade:**
 
 - **Add-on:** bump `version:` in `aquila_core/config.yaml`; HA shows an update;
   the user clicks Update. `/data` persists; the core runs its own schema
   migrations on start. The dashboard (WASM) updates as part of this step.
-- **Component:** bump `version` in `manifest.json`; the release workflow
-  rebuilds `aquila.zip`; HACS shows an update; the user updates and restarts.
-  `async_migrate_entry` runs in place.
+- **Component:** bump `version` in `manifest.json`; the release publishes the
+  updated component tree (and rebuilds the manual-install `aquila.zip`); HACS
+  shows an update; the user updates and restarts. `async_migrate_entry` runs in
+  place.
 - **Node firmware:** updated over the LAN by OTA from the add-on, surfaced as an
   `update.aquila_<node>_firmware` entity per node — no internet, no cloud. The
   full design is in `firmware-ota.md`.
