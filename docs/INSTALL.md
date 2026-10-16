@@ -29,7 +29,9 @@ describes three things that ship separately and version independently:
   the add-on; the add-on runs with bridge networking and publishes UDP `9100`
   (CSI ingest) and UDP `9101` (node control). The HTTP+WS API on `8099` is
   **not** exposed to the LAN; Home Assistant reaches it over the internal
-  `hassio` network at `http://aquila-core:8099`.
+  `hassio` network. The add-on's hostname is `<repository-hash>-aquila-core`,
+  where the hash is assigned by Supervisor from the repository URL (for example
+  `c5ea7a93-aquila-core`); the component must be given that URL.
 - One or more ESP32-S3 nodes (reference: a module with WiFi, e.g.
   ESP32-S3-DevKitC-1). See `firmware/esp32-s3-csi-node/README.md`.
 
@@ -57,17 +59,20 @@ describes three things that ship separately and version independently:
 5. **Start** the add-on. On first start the core generates its `instance_id`,
    initialises its persistent state under `/data`, and serves the dashboard on
    `8099`.
-6. Confirm it is up: **Settings → Add-ons → Aquila Core → Open Web UI** (or the
-   **Aquila** entry in the sidebar). This is the management dashboard served over
-   sidebar ingress; it works before the HACS component is installed.
+6. Confirm it is up: **Settings → Add-ons → Aquila Core → Open Web UI**. This is
+   the management dashboard served over ingress and works before the HACS
+   component is installed. To also show it in the sidebar, enable **Show in
+   sidebar** on the add-on page; the ingress URL alone is always available.
 
 ---
 
 ## 2. Install the HACS custom component
 
-The component is a HACS **integration**. It is not at the repository root, so
-releases ship `aquila.zip` (containing `custom_components/aquila/`) as a release
-asset (`hacs.json` sets `zip_release: true`, `filename: aquila.zip`).
+The component is a HACS **integration**, and the repository already has the
+HACS-required layout (`custom_components/aquila/`), so HACS installs it directly
+from the release (or the branch). `hacs.json` does not use `zip_release`. Each
+release also attaches `aquila.zip` (containing `custom_components/aquila/`) for
+a manual install.
 
 1. Install [HACS](https://hacs.xyz) if it is not already installed.
 2. In HACS: **⋮ → Custom repositories**, add
@@ -75,9 +80,10 @@ asset (`hacs.json` sets `zip_release: true`, `filename: aquila.zip`).
 3. Search for **Aquila**, open it, and **Download** the latest release.
 4. **Restart Home Assistant**.
 5. **Settings → Devices & Services → Add Integration → Aquila.** The core URL
-   defaults to `http://aquila-core:8099` (the add-on hostname). The flow
-   validates `GET /api/v1/health` and creates the config entry. Entities and the
-   add-on's sidebar panel appear.
+   must be the add-on's hostname on the `hassio` network —
+   `http://<repository-hash>-aquila-core:8099` (for example
+   `http://c5ea7a93-aquila-core:8099`). The flow validates `GET /api/v1/health`
+   and creates the config entry; the entities then appear.
 
 Options (`update_interval`, `expose_floors`, `expose_room_vitals`) are under
 **Configure** on the integration. A bearer token is only needed if the core is
@@ -114,7 +120,8 @@ unverified here.
 
 ## 4. First calibration
 
-1. Open the **Aquila** dashboard (sidebar entry, admin-only).
+1. Open the **Aquila** dashboard (add-on **Open Web UI**, or the sidebar entry
+   if enabled; admin-only).
 2. Define the home → floor → room → node topology.
 3. Trigger a **global calibration** pass. Calibration is a versioned,
    commit-keyed artefact, whole-home by default; it removes per-node and
@@ -151,9 +158,10 @@ runs entirely on the private control channel.
   Home Assistant offers an update. Click **Update**. `/data` persists and the
   core runs its own schema migrations on start. The dashboard (WASM) is baked
   into the image, so it updates with the add-on.
-- **Component:** bump `version` in `custom_components/aquila/manifest.json`; the
-  release workflow rebuilds `aquila.zip`; HACS offers an update. Update and
-  restart; `async_migrate_entry` runs in place.
+- **Component:** bump `version` in `custom_components/aquila/manifest.json` and
+  publish a new tag; HACS offers an update (it installs from the release tree,
+  and the release also attaches `aquila.zip`). Update and restart;
+  `async_migrate_entry` runs in place.
 - **Node firmware:** OTA via the `update` entity (above).
 - **Contract compatibility:** the component compares its version against the
   core's `/api/v1/health`; an incompatible pair is reported clearly rather than
@@ -177,10 +185,12 @@ first if you need the calibration store or the ledger.
 
 ## Troubleshooting
 
-- **The component cannot reach the core.** It defaults to
-  `http://aquila-core:8099`; confirm the add-on is running and that the hostname
-  resolves on the `hassio` network. If you changed the add-on slug, update the
-  core URL accordingly.
+- **The component cannot reach the core.** The pre-filled
+  `http://aquila-core:8099` may not resolve: Supervisor names the add-on
+  `<repository-hash>-aquila-core` (for example `c5ea7a93-aquila-core`). Confirm
+  the add-on is running, read its hostname from the add-on page, and use
+  `http://<hostname>:8099`. Discovering this automatically is tracked as issue
+  #18.
 - **No CSI arriving.** Confirm the nodes are provisioned with the HA host's LAN
   address and UDP `9100`, and that UDP `9100` is published by the add-on. CSI is
   unicast; there is no discovery.

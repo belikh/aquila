@@ -381,3 +381,33 @@ kept as a tolerated alias). `home-assistant.md` §5.2 now references §4.1.
 
 Checks: **327 passed, 0 failed** (core); **43 passed** (component); `dag-check`
 OK; clippy clean. Shipped in add-on **0.1.4** / component **0.2.1** (`v0.1.4`).
+
+## R10 — live verification on Home Assistant 2026.10.1 (issue #17)
+
+The add-on and the HACS component were installed and verified on a live
+Supervisor-managed instance (HA OS 18.2, amd64, HACS 2.0.5).
+
+**Result.** Add-on **0.1.4** runs persistently (binds `0.0.0.0:8099`, serves the
+dashboard, calibrates on startup, repeats the demo scene, clean SIGTERM); its
+`instance_id` is a UUID generated once and persisted under `/data`, stable across
+restarts (`source: generated` then `source: file`). Component **0.2.3**: the
+config entry is `loaded` with 17 entities — core-connected `on`, self-test `off`,
+lounge presence `on`, nodes online/total `0`/`2`, breathing and heart rate
+flowing, per-node firmware update entities present, and the
+`aquila.install_firmware` service registered.
+
+**Defects the live run surfaced** (all now fixed or tracked): the one-shot core
+regression (R8), the `/api/v1/health` contract mismatch (R9, #19), the invalid
+`SensorDeviceClass.MEASUREMENT` that broke the platform import (#20, now guarded
+by an import smoke test), the missing `services.yaml`, and a poll that read the
+`health` block from `/state` rather than probing `/api/v1/health`, which left the
+diagnostic entities permanently `unknown`.
+
+**Left with reason:**
+
+| item | reason |
+| --- | --- |
+| Sidebar ingress panel (`ingress_panel: false`) | `ingress_panel` is a Supervisor API field, not a `config.yaml` key (verified against the app-configuration docs); no available tool can set it, and HA has a known bug re-registering it after Core restarts (frontend #53316). The dashboard is reachable via the add-on page's **Open Web UI** and the ingress URL. |
+| `DeviceInfo.via_device` deprecation | Tracked as #21; the parameter still works and is removed in HA 2027.8. |
+| #18 (component discovery) | Tracked; the live install passed the core URL explicitly. |
+| Real sensing / OTA | Simulator only (no hardware); OTA returns `503 ota_unavailable` until a signed image store and node transport exist (#13–#15). |

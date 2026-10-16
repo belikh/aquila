@@ -25,15 +25,18 @@ Blocking edges are recorded as native GitHub issue dependencies.
 
 ## Status (verify with `gh issue list --state all`)
 
-- Closed (done): **#2–#15** (the whole plan; note #16 was never created).
-- Open: **#1** (the map itself), **#17** (run and verify the HACS integration +
-  add-on on a live HA), **#18** (component should discover the core add-on
-  instead of a hand-entered hostname), **#19** (reconcile `/api/v1/health` with
-  `home-assistant.md` §5.2: `instance_id`, `min_component_version`, status).
+- Closed (done): **#2–#15** (the whole plan; note #16 was never created), plus
+  **#17** (live verification), **#19** (core `/api/v1/health` reconciliation) and
+  **#20** (invalid `SensorDeviceClass.MEASUREMENT`) — the last two were found and
+  fixed *while* verifying #17.
+- Open: **#1** (the map itself), **#18** (component should discover the core
+  add-on instead of a hand-entered hostname), **#21** (migrate `DeviceInfo`
+  `via_device` to `via_device_id`; HA deprecation, works until 2027.8).
 
-#17–#19 are post-plan operational issues found during live verification, not
-frontier tickets from the map. #19 is fixed in add-on 0.1.4 / component 0.2.1
-(tag `v0.1.4`).
+#17–#21 are post-plan operational issues found during live verification, not
+frontier tickets from the map. Live-verified on HA 2026.10.1: add-on **0.1.4**
+running (stable `instance_id`, dashboard served via ingress), component **0.2.3**
+config entry `loaded` with 17 entities. Latest tag: **`v0.1.6`**.
 
 ## Working the plan
 
