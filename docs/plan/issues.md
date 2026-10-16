@@ -31,7 +31,9 @@ Blocking edges are recorded as native GitHub issue dependencies.
   fixed *while* verifying #17.
 - Open: **#1** (the map itself), **#18** (component should discover the core
   add-on instead of a hand-entered hostname), **#21** (migrate `DeviceInfo`
-  `via_device` to `via_device_id`; HA deprecation, works until 2027.8).
+  `via_device` to `via_device_id`; HA deprecation, works until 2027.8), and
+  **#22** (hardware bring-up: the ESP32-S3 runbook and its software
+  prerequisites P1–P6 — see `hardware-bring-up.md`).
 
 #17–#21 are post-plan operational issues found during live verification, not
 frontier tickets from the map. Live-verified on HA 2026.10.1: add-on **0.1.4**
