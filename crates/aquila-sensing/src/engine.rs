@@ -27,7 +27,7 @@ use aquila_signal::{Calibration as SignalCalibration, Config as SignalConfig};
 use aquila_sources::{CsiSource, FrameOrEnd};
 use aquila_types::{
     Clock, CsiEnvelope, DetectionScope, Estimate, Event, EventKind, EventPayload, EventScope,
-    FeatureVector, FloorId, NodeId, Pose, RoomId, SensingScope, SubjectId, TimeSpan,
+    FeatureVector, NodeId, Pose, SensingScope, SubjectId, TimeSpan, ZoneId,
     Topology as ContractTopology, VitalsReading, VitalsStatus, Witness,
 };
 
@@ -70,14 +70,13 @@ pub struct StepReport {
     pub ended: bool,
 }
 
-/// One window's floor summaries, retained for scoring and inspection
-/// (`roadmap.md`, Slice 5).
+/// One window's zone summaries, retained for scoring and inspection.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FloorWindow {
+pub struct ZoneWindow {
     /// The window's start on the core clock, in milliseconds.
     pub t_ms: i64,
-    /// The floor summaries for that window, in canonical floor order.
-    pub floors: Vec<FloorSummary>,
+    /// The zone summaries for that window, in canonical zone order.
+    pub zones: Vec<ZoneSummary>,
 }
 
 /// One window's whole-home summary, retained for scoring and inspection
@@ -117,26 +116,20 @@ pub struct Sensing {
     sync: TimeSync,
     signal_config: SignalConfig,
     signal_cal: SignalCalibration,
-    rooms: Vec<RoomId>,
-    previous: BTreeMap<RoomId, RoomState>,
-    /// The floors of the home, canonical floor-id order.
-    floors: Vec<FloorId>,
-    /// The rooms each floor contains, in canonical room-id order.
-    floor_rooms: BTreeMap<FloorId, Vec<RoomId>>,
-    /// The per-floor state carried between windows for hysteresis.
-    floor_previous: BTreeMap<FloorId, RoomState>,
-    /// The per-window floor summaries, in processing order (Slice 5).
-    floor_history: Vec<FloorWindow>,
+    zones: Vec<ZoneId>,
+    previous: BTreeMap<ZoneId, RoomState>,
     /// The whole-home hysteresis state (Slice 6).
     home_previous: RoomState,
     /// The per-window whole-home summaries, in processing order (Slice 6).
     home_history: Vec<HomeWindow>,
-    /// Per-room rolling buffers of the envelopes vitals are accumulated over.
-    vitals_buffers: BTreeMap<RoomId, Vec<CsiEnvelope>>,
-    /// The core time at which each room's vitals buffer first saw a frame, so
+    /// The per-window zone summaries, in processing order.
+    zone_history: Vec<ZoneWindow>,
+    /// Per-zone rolling buffers of the envelopes vitals are accumulated over.
+    vitals_buffers: BTreeMap<ZoneId, Vec<CsiEnvelope>>,
+    /// The core time at which each zone's vitals buffer first saw a frame, so
     /// readiness is measured from the start of accumulation, not from the
     /// (trimmed) buffer head.
-    vitals_first_seen: BTreeMap<RoomId, u64>,
+    vitals_first_seen: BTreeMap<ZoneId, u64>,
     /// The number of vitals windows estimated so far.
     vitals_windows: usize,
     /// The coarse poses emitted so far, in emission order (`roadmap.md`,
@@ -184,29 +177,12 @@ impl Sensing {
         let topology = Topology::load(topology)?;
         let signal_config =
             SignalConfig::default_reference(aquila_signal::SubcarrierLayout::ht20());
-        let rooms = topology
+        let zones = topology
             .model()
-            .rooms
+            .zones
             .iter()
-            .map(|room| room.id.clone())
+            .map(|zone| zone.id.clone())
             .collect();
-        // The floor hierarchy is data, read from the topology, never
-        // hard-coded (`roadmap.md`, Slice 5; ticket 05 "data-driven gate").
-        let mut floors: Vec<FloorId> = Vec::new();
-        let mut floor_rooms: BTreeMap<FloorId, Vec<RoomId>> = BTreeMap::new();
-        for room in &topology.model().rooms {
-            if !floors.contains(&room.floor) {
-                floors.push(room.floor.clone());
-            }
-            floor_rooms
-                .entry(room.floor.clone())
-                .or_default()
-                .push(room.id.clone());
-        }
-        floors.sort();
-        for room_ids in floor_rooms.values_mut() {
-            room_ids.sort();
-        }
         let assembler = WindowAssembler::new(&config);
         // When pose is enabled but no model is supplied, default to the
         // deterministic DSP adapter so the core always reaches pose through the
@@ -233,14 +209,11 @@ impl Sensing {
             sync: TimeSync::new(64, 4),
             signal_config,
             signal_cal: SignalCalibration::default(),
-            rooms,
+            zones,
             previous: BTreeMap::new(),
-            floors,
-            floor_rooms,
-            floor_previous: BTreeMap::new(),
-            floor_history: Vec::new(),
             home_previous: RoomState::default(),
             home_history: Vec::new(),
+            zone_history: Vec::new(),
             vitals_buffers: BTreeMap::new(),
             vitals_first_seen: BTreeMap::new(),
             vitals_windows: 0,
@@ -280,8 +253,6 @@ impl Sensing {
                 if let Some(batch) = self.assembler.finish() {
                     report.windows_emitted = 1;
                     report.events_emitted = self.process_batch(&batch)?;
-                    report.floors_summarised =
-                        self.floor_history.last().map_or(0, |w| w.floors.len());
                     report.home_summarised = 1;
                 }
                 self.finished = true;
@@ -299,8 +270,6 @@ impl Sensing {
                 if let Some(batch) = self.assembler.push(envelope) {
                     report.windows_emitted = 1;
                     report.events_emitted = self.process_batch(&batch)?;
-                    report.floors_summarised =
-                        self.floor_history.last().map_or(0, |w| w.floors.len());
                     report.home_summarised = 1;
                 }
                 Ok(report)
@@ -524,21 +493,6 @@ impl Sensing {
         &self.recorded_poses
     }
 
-    /// The floor summaries for the most recently processed window, in
-    /// canonical floor order. Empty before the first window closes.
-    #[must_use]
-    pub fn floors(&self) -> &[FloorSummary] {
-        self.floor_history
-            .last()
-            .map_or(&[][..], |window| window.floors.as_slice())
-    }
-
-    /// The per-window floor-summary history, in processing order (Slice 5).
-    #[must_use]
-    pub fn floor_history(&self) -> &[FloorWindow] {
-        &self.floor_history
-    }
-
     /// The whole-home summary for the most recently processed window. `None`
     /// before the first window closes.
     #[must_use]
@@ -696,13 +650,13 @@ impl Sensing {
         // 3. Floor escalation: rooms compose into floors (Slice 5).
         emitted += self.process_floors(&room_summaries, t_ms, stamp, max_count)?;
 
-        // 4. Home escalation: floors compose into the whole home (Slice 6).
-        let floor_summaries = self
-            .floor_history
+        // 4. Home escalation: zones compose into the whole home.
+        let zone_summaries = self
+            .zone_history
             .last()
-            .map(|window| window.floors.clone())
+            .map(|window| window.zones.clone())
             .unwrap_or_default();
-        emitted += self.process_home(&floor_summaries, t_ms, stamp, max_count)?;
+        emitted += self.process_home(&zone_summaries, t_ms, stamp, max_count)?;
 
         self.record(
             "window.frames",
@@ -1163,7 +1117,7 @@ impl Sensing {
                 })
                 .collect();
             let request = PoseRequest {
-                scope: DetectionScope::Room(room.clone()),
+                scope: DetectionScope::Zone(room.clone()),
                 contributor_nodes,
                 subject: Some(SubjectId::new(0)),
                 span: TimeSpan {
@@ -1536,7 +1490,7 @@ impl Sensing {
                 room.as_str(),
                 metric
             ),
-            scope: EventScope::Room(room.clone()),
+            scope: EventScope::Zone(room.clone()),
             kind: EventKind::VitalAlert,
             payload: EventPayload::Vitals {
                 metric: metric.to_string(),
@@ -1559,7 +1513,7 @@ impl Sensing {
         t_ms: i64,
     ) -> Result<(), SensingError> {
         let home = self.topology.home().id.clone();
-        let scope = EventScope::Room(room.clone());
+        let scope = EventScope::Zone(room.clone());
         let kind_label = format!("{kind:?}");
         let event = Event {
             id: format!("{}:{kind_label}:{}:{t_ms}", home.as_str(), room.as_str()),

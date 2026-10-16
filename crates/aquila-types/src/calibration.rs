@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{invariant, require_finite_f32, require_finite_f64, ValidationError};
-use crate::ids::{HomeId, NodeId, PairId, RoomId, SessionId};
+use crate::ids::{HomeId, NodeId, PairId, SessionId, ZoneId};
 use crate::primitives::Witness;
 use crate::time::TimeSpan;
 use crate::version::ContractVersion;
@@ -122,8 +122,8 @@ impl Calibration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BaselineScope {
-    /// A zone's baseline, keyed by the room that is the zone in v1.
-    Zone(RoomId),
+    /// A zone's baseline.
+    Zone(ZoneId),
     /// A node-pair's baseline.
     Pair(PairId),
 }

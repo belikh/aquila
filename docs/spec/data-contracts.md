@@ -93,9 +93,10 @@ pub struct Slug(pub String);           // e.g. "kitchen-01", "ground-floor"
 pub type HomeId    = Slug;
 pub type FloorId   = Slug;
 pub type RoomId    = Slug;
-/// In v1 a Zone *is* a Room; v1 emits one zone per room. A future declared
-/// sub-region zone would be an additive change, not a new parallel identity.
-pub type ZoneId    = RoomId;
+/// Identity of a virtual detection region. A zone may be coextensive with a
+/// room, a sub-region of a room (for example "bed" inside the bedroom), or span
+/// multiple rooms (`Zone.room` is `None` when it spans rooms).
+pub type ZoneId    = Slug;
 pub type PairId    = Slug;
 pub type SessionId = Slug;
 pub type MetricId  = Slug;
@@ -319,12 +320,15 @@ a declared pair.
 
 ---
 
-## 3. Home topology — `Home`, `Floor`, `Room`, `Node`, `NodePair`
+## 3. Home topology — `Home`, `Floor`, `Room`, `Zone`, `Node`, `NodePair`
 
 The physical model, defined from day one: **Home → Floors → Rooms → Nodes →
-NodePairs**. Stored as JSON in `config/topology.json` and loaded by the
-`aquila-geometry` module. Nodes and rooms are *configured*, not inferred. A
-**Zone** is a Room in v1 (`ZoneId == RoomId`).
+NodePairs → Zones**. Stored as JSON in `config/topology.json` and loaded by the
+`aquila-geometry` module. Rooms describe where nodes are physically installed;
+zones are virtual detection regions — the unit of sensing output. Nodes, rooms
+and zones are *configured*, not inferred. A zone may be coextensive with a
+room, a sub-region of a room (for example "bed" inside the bedroom, or "shower"
+versus "toilet" inside the bathroom), or span multiple rooms.
 
 ### 3.1 Coordinate model (one frame, no ambiguity)
 
@@ -412,12 +416,26 @@ pub struct NodePair {
 #[serde(rename_all = "snake_case")]
 pub enum PairScope { Room, SameFloor, CrossFloor }
 
+/// A virtual detection region. A zone may be coextensive with a room (zone
+/// `lounge` inside room `lounge`), a sub-region of a room (zone `bed` inside
+/// room `bedroom`, or zone `shower` vs zone `toilet` inside room `bathroom`),
+/// or span multiple rooms (`room` is `None`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Zone {
+    pub id: ZoneId,
+    /// The room this zone sits within, when it is a sub-region of one room.
+    /// `None` when the zone spans rooms or covers the whole home.
+    pub room: Option<RoomId>,
+    pub name: String,
+}
+
 /// The whole configured model. Referential integrity is an invariant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Topology {
     pub home: Home,
     pub floors: Vec<Floor>,
     pub rooms: Vec<Room>,
+    pub zones: Vec<Zone>,
     pub nodes: Vec<Node>,
     pub pairs: Vec<NodePair>,
 }
@@ -427,7 +445,8 @@ pub struct Topology {
 
 1. All `*Id` values are unique within their collection and non-empty.
 2. Every `Floor.home` matches `Home.id`; every `Room.floor` exists; every
-   `Node.room` exists; every `NodePair.tx`/`.rx` exist.
+   `Zone.room`, when `Some`, exists; every `Node.room` exists; every
+   `NodePair.tx`/`.rx` exist.
 3. `NodePair.tx != NodePair.rx`; the **ordered** pair `(tx, rx)` is unique (one
    directed sensing link per ordered pair per Home in v1).
 4. `PairScope` is **derived**, not free input: `Room` iff `tx` and `rx` share a

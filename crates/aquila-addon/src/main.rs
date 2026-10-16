@@ -58,7 +58,7 @@ use aquila_simulator::{
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
     Band, Clock, CsiEnvelope, DeviceType, FirmwareRef, Floor, Home, MacAddr, Node, NodeId, Room,
-    RoomId, RoomKind, Slug, Topology as ContractTopology, CONTRACT_VERSION,
+    RoomId, RoomKind, Slug, Topology as ContractTopology, Zone, CONTRACT_VERSION,
 };
 use aquila_wire::{
     ControlBody, ControlMessage, decode_control, decode_control_authenticated,
@@ -863,6 +863,16 @@ fn topology_for_scene(script: &SceneScript) -> Topology {
                 origin_home_m: [0.0, 0.0, 0.0],
                 yaw_deg: 0.0,
                 area_m2: None,
+            })
+            .collect(),
+        // One zone per room in the demo scene; zones are the detection scope,
+        // rooms are only where nodes are mounted.
+        zones: rooms
+            .iter()
+            .map(|room| Zone {
+                id: room.clone(),
+                room: Some(room.clone()),
+                name: room.as_str().to_string(),
             })
             .collect(),
         nodes: script

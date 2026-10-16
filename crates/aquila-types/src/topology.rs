@@ -1,21 +1,21 @@
 //! Home topology: the physical model from day one.
 //!
-//! **Home → Floors → Rooms → Nodes → Node-Pairs.** Stored as JSON in
-//! `config/topology.json` and loaded by `aquila-geometry`. Nodes and rooms are
-//! *configured*, not inferred. A zone is a room in v1 (`ZoneId == RoomId`).
+//! **Home → Zones → Nodes → NodePairs.** Stored as JSON in
+//! `config/topology.json` and loaded by `aquila-geometry`. Zones are virtual
+//! detection regions in 3D home space and are the only spatial concept; there
+//! are no rooms and no floors. Nodes are dumb sensors at home-frame positions.
+//! Zones and nodes are *configured*, not inferred.
 //!
 //! Coordinates are Cartesian, metres, right-handed, `x` east, `y` north, `z`
-//! up. A floor carries `elevation_m`; a room carries `origin_home_m` and
-//! `yaw_deg` mapping room-local to home frame; a node carries room-local
-//! `pos_room_m`. Positions are `Option`: `None` means "not yet surveyed", and
-//! geometry must degrade honestly rather than invent it.
+//! up. A zone carries `origin_home_m` and `extent_home_m`; a node carries
+//! `pos_home_m`. Geometry must degrade honestly rather than invent positions.
 
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{invariant, require_finite_f32, require_non_empty, ValidationError};
-use crate::ids::{FloorId, HomeId, MacAddr, NodeId, PairId, RoomId};
+use crate::ids::{HomeId, MacAddr, NodeId, PairId, ZoneId};
 use crate::version::ContractVersion;
 
 /// A calibrated dwelling: all its floors, rooms, nodes, node-pairs and its
@@ -41,92 +41,33 @@ impl Home {
     }
 }
 
-/// A storey of a home, containing rooms.
+/// A virtual detection region in 3D home space. A zone is any region the
+/// operator draws — for example "bed", "shower", "toilet", "lounge", or
+/// "whole home". Zones may overlap; a person is attributed to a zone by the
+/// fused pipeline from all node-pairs, not by which room a node is in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Floor {
-    /// Identity of the floor.
-    pub id: FloorId,
-    /// The home this floor belongs to.
-    pub home: HomeId,
-    /// Human-readable name.
+pub struct Zone {
+    /// Identity of the zone.
+    pub id: ZoneId,
+    /// Human-readable name, for example `"bed"` or `"shower"`.
     pub name: String,
-    /// The level: `-1` basement, `0` ground, `1`, `2`, and so on.
-    pub level: i8,
-    /// The height of this floor's plane in the home frame, in metres.
-    pub elevation_m: f32,
-}
-
-impl Floor {
-    /// Validate identity, ownership and finiteness.
-    pub fn validate(&self) -> Result<(), ValidationError> {
-        self.id.validate()?;
-        self.home.validate()?;
-        require_non_empty("Floor.name", &self.name)?;
-        require_finite_f32("Floor.elevation_m", self.elevation_m)
-    }
-}
-
-/// The kind of a room. `Unknown` is a first-class fallback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RoomKind {
-    /// A living room.
-    Living,
-    /// A bedroom.
-    Bedroom,
-    /// A kitchen.
-    Kitchen,
-    /// A dining room.
-    Dining,
-    /// A bathroom.
-    Bathroom,
-    /// A hall or passage.
-    Hall,
-    /// A stairwell.
-    Stairs,
-    /// An office or study.
-    Office,
-    /// A utility room.
-    Utility,
-    /// An unrecognised or unset room kind.
-    #[serde(other)]
-    Unknown = 255,
-}
-
-/// A named physical partition of a floor.
-///
-/// In v1 a room is the spatial scope of a sensing result; a detection at room
-/// scope is reported against a zone, and in v1 the zone is the room.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Room {
-    /// Identity of the room.
-    pub id: RoomId,
-    /// The floor this room belongs to.
-    pub floor: FloorId,
-    /// Human-readable name.
-    pub name: String,
-    /// The kind of room.
-    pub kind: RoomKind,
-    /// The room-local origin in the home frame, in metres.
+    /// The zone's origin in the home frame, in metres.
     pub origin_home_m: [f32; 3],
-    /// The yaw of the room frame relative to the home frame, in degrees.
-    pub yaw_deg: f32,
-    /// The floor area in square metres, when surveyed.
-    pub area_m2: Option<f32>,
+    /// The zone's half-extents in x/y/z, in metres. A point is inside the zone
+    /// when `|p - origin| <= extent` component-wise.
+    pub extent_home_m: [f32; 3],
 }
 
-impl Room {
-    /// Validate identity, ownership and finiteness.
+impl Zone {
+    /// Validate identity and finiteness.
     pub fn validate(&self) -> Result<(), ValidationError> {
         self.id.validate()?;
-        self.floor.validate()?;
-        require_non_empty("Room.name", &self.name)?;
+        require_non_empty("Zone.name", &self.name)?;
         for c in self.origin_home_m {
-            require_finite_f32("Room.origin_home_m", c)?;
+            require_finite_f32("Zone.origin_home_m", c)?;
         }
-        require_finite_f32("Room.yaw_deg", self.yaw_deg)?;
-        if let Some(area) = self.area_m2 {
-            require_finite_f32("Room.area_m2", area)?;
+        for c in self.extent_home_m {
+            require_finite_f32("Zone.extent_home_m", c)?;
         }
         Ok(())
     }
@@ -158,14 +99,13 @@ pub struct FirmwareRef {
 
 /// A node: one fixed ESP32 endpoint that streams raw CSI.
 ///
-/// A dumb sensor: it performs no DSP, inference or fusion, and is assigned to
-/// exactly one room.
+/// A dumb sensor: it performs no DSP, inference or fusion. Nodes are not "in"
+/// a zone; they contribute CSI to zone detection collaboratively via
+/// node-pairs. The node's position is its antenna mount point in home frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     /// The dense identity of the node.
     pub id: NodeId,
-    /// The room the node is assigned to.
-    pub room: RoomId,
     /// Human-readable name.
     pub name: String,
     /// The factory MAC address.
@@ -174,17 +114,16 @@ pub struct Node {
     pub device: DeviceType,
     /// The firmware the node runs.
     pub firmware: FirmwareRef,
-    /// Room-local position in metres; `None` until surveyed.
-    pub pos_room_m: Option<[f32; 3]>,
+    /// The node's antenna mount point in home frame, in metres.
+    pub pos_home_m: [f32; 3],
     /// Unix wall time of installation, in milliseconds.
     pub installed_unix_ms: i64,
 }
 
 impl Node {
-    /// Validate identity, ownership and finiteness.
+    /// Validate identity and finiteness.
     pub fn validate(&self) -> Result<(), ValidationError> {
         self.id.validate_provisioned()?;
-        self.room.validate()?;
         require_non_empty("Node.name", &self.name)?;
         require_non_empty("Node.firmware.version", &self.firmware.version)?;
         if self.firmware.sha256 == Some([0u8; 32]) {
@@ -192,33 +131,21 @@ impl Node {
                 detail: "Node.firmware.sha256 must not be the all-zero hash".to_string(),
             });
         }
-        if let Some(pos) = self.pos_room_m {
-            for c in pos {
-                require_finite_f32("Node.pos_room_m", c)?;
-            }
+        for c in self.pos_home_m {
+            require_finite_f32("Node.pos_home_m", c)?;
         }
         Ok(())
     }
 }
 
-/// The scope of a node-pair, derived from the topology rather than chosen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PairScope {
-    /// Both nodes share a room.
-    Room,
-    /// Both nodes share a floor but not a room.
-    SameFloor,
-    /// The nodes are on different floors.
-    CrossFloor,
-}
 
 /// An ordered node-pair: the unit of spatial sensing and the edge of the
 /// sensing graph.
 ///
 /// `tx` transmits; `rx` measures the channel from it. Direction is significant,
-/// because CSI is directional. v1 stages pairs within-room first, then
-/// within-floor, then cross-floor.
+/// because CSI is directional. A pair is any two nodes whose CSI is jointly
+/// processed; scope (near/far, same zone / different zone) is inferred at
+/// runtime from positions, not authored as topology.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodePair {
     /// Identity of the pair.
@@ -229,8 +156,6 @@ pub struct NodePair {
     pub tx: NodeId,
     /// The receiving node.
     pub rx: NodeId,
-    /// The pair scope; derived, not free input.
-    pub scope: PairScope,
 }
 
 impl NodePair {
@@ -246,15 +171,17 @@ impl NodePair {
 }
 
 /// The whole configured model. Referential integrity is an invariant.
+///
+/// **Home → Zones → Nodes → NodePairs.** There are no floors and no rooms;
+/// zones are the only spatial concept.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Topology {
     /// The home.
     pub home: Home,
-    /// Its floors.
-    pub floors: Vec<Floor>,
-    /// Its rooms.
-    pub rooms: Vec<Room>,
-    /// Its nodes.
+    /// Its zones: virtual detection regions in 3D home space. Zones are the
+    /// unit of sensing output.
+    pub zones: Vec<Zone>,
+    /// Its nodes: dumb sensors at home-frame positions.
     pub nodes: Vec<Node>,
     /// Its ordered node-pairs.
     pub pairs: Vec<NodePair>,
@@ -264,43 +191,21 @@ impl Topology {
     /// Validate the whole model's referential integrity.
     ///
     /// Checks identifier uniqueness, ownership, node-pair direction and
-    /// uniqueness, the `NodeId::UNPROVISIONED` ban, and that each stored
-    /// `PairScope` agrees with the topology it is embedded in.
+    /// uniqueness, and the `NodeId::UNPROVISIONED` ban.
     pub fn validate(&self) -> Result<(), ValidationError> {
         self.home.validate()?;
 
-        let mut floor_ids = HashSet::new();
-        let mut levels = HashSet::new();
-        for floor in &self.floors {
-            floor.validate()?;
-            if floor.home != self.home.id {
-                return Err(invariant("Floor.home does not match Home.id"));
-            }
-            if !floor_ids.insert(floor.id.clone()) {
-                return Err(invariant("duplicate Floor id"));
-            }
-            if !levels.insert(floor.level) {
-                return Err(invariant("duplicate Floor.level within the home"));
-            }
-        }
-
-        let mut room_ids = HashSet::new();
-        for room in &self.rooms {
-            room.validate()?;
-            if !floor_ids.contains(&room.floor) {
-                return Err(invariant("Room.floor does not exist"));
-            }
-            if !room_ids.insert(room.id.clone()) {
-                return Err(invariant("duplicate Room id"));
+        let mut zone_ids = HashSet::new();
+        for zone in &self.zones {
+            zone.validate()?;
+            if !zone_ids.insert(zone.id.clone()) {
+                return Err(invariant("duplicate Zone id"));
             }
         }
 
         let mut node_ids = HashSet::new();
         for node in &self.nodes {
             node.validate()?;
-            if !room_ids.contains(&node.room) {
-                return Err(invariant("Node.room does not exist"));
-            }
             if !node_ids.insert(node.id) {
                 return Err(invariant("duplicate Node id"));
             }
@@ -322,32 +227,8 @@ impl Topology {
             if !ordered_pairs.insert((pair.tx, pair.rx)) {
                 return Err(invariant("duplicate ordered NodePair (tx, rx)"));
             }
-            let derived = self.derive_scope(pair.tx, pair.rx);
-            if pair.scope != derived {
-                return Err(invariant("NodePair.scope disagrees with the topology"));
-            }
         }
 
         Ok(())
-    }
-
-    /// Derive the scope of an ordered node-pair from the topology.
-    ///
-    /// Returns [`PairScope::Room`] when both nodes share a room,
-    /// [`PairScope::SameFloor`] when they share a floor but not a room, and
-    /// [`PairScope::CrossFloor`] otherwise. Returns `CrossFloor` when either
-    /// endpoint is unknown, which validation rejects separately.
-    #[must_use]
-    pub fn derive_scope(&self, tx: NodeId, rx: NodeId) -> PairScope {
-        let room_of = |node: NodeId| self.nodes.iter().find(|n| n.id == node).map(|n| &n.room);
-        let floor_of = |room: &RoomId| self.rooms.iter().find(|r| &r.id == room).map(|r| &r.floor);
-        match (room_of(tx), room_of(rx)) {
-            (Some(tx_room), Some(rx_room)) if tx_room == rx_room => PairScope::Room,
-            (Some(tx_room), Some(rx_room)) => match (floor_of(tx_room), floor_of(rx_room)) {
-                (Some(tx_floor), Some(rx_floor)) if tx_floor == rx_floor => PairScope::SameFloor,
-                _ => PairScope::CrossFloor,
-            },
-            _ => PairScope::CrossFloor,
-        }
     }
 }

@@ -9,7 +9,7 @@ use aquila_simulator::{
 };
 use aquila_types::{
     Band, DeviceType, FirmwareRef, Floor, Home, MacAddr, Node, NodeId, Room, RoomId, RoomKind,
-    Slug, Topology, CONTRACT_VERSION,
+    Slug, Topology, Zone, CONTRACT_VERSION,
 };
 
 use crate::{CollectorSink, EvalScope, FixtureGroundTruth, GroundTruth, Harness};
@@ -96,6 +96,14 @@ fn topology_for_scene(script: &SceneScript) -> Topology {
                 origin_home_m: [0.0, 0.0, 0.0],
                 yaw_deg: 0.0,
                 area_m2: None,
+            })
+            .collect(),
+        zones: rooms
+            .iter()
+            .map(|room| Zone {
+                id: room.clone(),
+                room: Some(room.clone()),
+                name: room.as_str().to_string(),
             })
             .collect(),
         nodes: script

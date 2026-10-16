@@ -87,7 +87,7 @@ pub fn presence_f1(
     // Ground truth: window → room → occupied-if-any.
     let mut truth: BTreeMap<i64, BTreeMap<RoomId, bool>> = BTreeMap::new();
     for record in ground_truth {
-        if let (EventScope::Room(room), EventPayload::Presence { occupied, .. }) =
+        if let (EventScope::Zone(room), EventPayload::Presence { occupied, .. }) =
             (&record.scope, &record.payload)
         {
             truth
@@ -125,7 +125,7 @@ pub fn presence_f1(
 pub fn count_mae(events: &[Event], ground_truth: &[GroundTruthRecord], hop_ms: i64) -> f64 {
     let mut truth: BTreeMap<i64, BTreeMap<RoomId, u8>> = BTreeMap::new();
     for record in ground_truth {
-        if let (EventScope::Room(room), EventPayload::Count { people }) =
+        if let (EventScope::Zone(room), EventPayload::Count { people }) =
             (&record.scope, &record.payload)
         {
             // The last count within a window describes that window's tally.
@@ -168,7 +168,7 @@ fn room_presence_truth(
 ) -> BTreeMap<i64, BTreeMap<RoomId, bool>> {
     let mut truth: BTreeMap<i64, BTreeMap<RoomId, bool>> = BTreeMap::new();
     for record in ground_truth {
-        if let (EventScope::Room(room), EventPayload::Presence { occupied, .. }) =
+        if let (EventScope::Zone(room), EventPayload::Presence { occupied, .. }) =
             (&record.scope, &record.payload)
         {
             truth
@@ -189,7 +189,7 @@ fn room_count_truth(
 ) -> BTreeMap<i64, BTreeMap<RoomId, u8>> {
     let mut truth: BTreeMap<i64, BTreeMap<RoomId, u8>> = BTreeMap::new();
     for record in ground_truth {
-        if let (EventScope::Room(room), EventPayload::Count { people }) =
+        if let (EventScope::Zone(room), EventPayload::Count { people }) =
             (&record.scope, &record.payload)
         {
             truth
@@ -464,7 +464,7 @@ fn presence_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(RoomId,
     sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
     let mut changes: BTreeMap<i64, Vec<(RoomId, bool)>> = BTreeMap::new();
     for event in sorted {
-        if let (EventScope::Room(room), EventPayload::Presence { occupied, .. }) =
+        if let (EventScope::Zone(room), EventPayload::Presence { occupied, .. }) =
             (&event.scope, &event.payload)
         {
             changes
@@ -485,7 +485,7 @@ fn count_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(RoomId, u8
     sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
     let mut changes: BTreeMap<i64, Vec<(RoomId, u8)>> = BTreeMap::new();
     for event in sorted {
-        if let (EventScope::Room(room), EventPayload::Count { people }) =
+        if let (EventScope::Zone(room), EventPayload::Count { people }) =
             (&event.scope, &event.payload)
         {
             changes

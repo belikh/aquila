@@ -12,7 +12,7 @@ use aquila_metrics::{Measurement, MetricSink, MetricsError};
 use aquila_sensing::Sink;
 use aquila_types::{
     sha256, DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Floor, Home,
-    MacAddr, Node, NodeId, Room, RoomKind, Slug, Witness, CONTRACT_VERSION,
+    MacAddr, Node, NodeId, Room, RoomKind, Slug, Witness, Zone, CONTRACT_VERSION,
 };
 use aquila_wire::{ControlBody, ControlMessage, OtaAck, OtaAckStatus, OtaOutcome, OtaResult};
 use ed25519_dalek::{Signer, SigningKey};
@@ -58,6 +58,11 @@ fn topology() -> Topology {
             yaw_deg: 0.0,
             area_m2: None,
         }],
+        zones: vec![Zone {
+            id: room.clone(),
+            room: Some(room.clone()),
+            name: "Living".to_string(),
+        }],
         nodes: vec![Node {
             id: NodeId(1),
             room: room.clone(),
@@ -79,7 +84,7 @@ fn presence_event() -> Event {
         home: slug("home"),
         t_unix_ms: 1_000,
         dedup_key: "home:presence:living-room".to_string(),
-        scope: EventScope::Room(slug("living-room")),
+        scope: EventScope::Zone(slug("living-room")),
         kind: EventKind::PresenceChanged,
         payload: EventPayload::Presence {
             occupied: true,

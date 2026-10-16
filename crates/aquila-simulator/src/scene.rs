@@ -10,7 +10,7 @@
 //! Everything here is plain data, so a scene is a value a test can construct,
 //! compare and serialise.
 
-use aquila_types::{Band, NodeId, RoomId, Slug};
+use aquila_types::{Band, NodeId, Slug, ZoneId};
 use aquila_wire::MAX_SUBCARRIERS;
 use serde::{Deserialize, Serialize};
 
@@ -59,9 +59,9 @@ pub struct SceneScript {
 pub struct NodeSpec {
     /// The dense node identity.
     pub id: NodeId,
-    /// The room the node is assigned to.
-    pub room: RoomId,
-    /// The node position in room-local metres.
+    /// The zone the node contributes to.
+    pub zone: ZoneId,
+    /// The node position in home-frame metres.
     pub pos_m: [f64; 3],
     /// The node's clock skew in parts per million.
     pub skew_ppm: f64,
@@ -69,12 +69,12 @@ pub struct NodeSpec {
     pub noise_scale: f64,
 }
 
-/// A moving actor (a person) in one room.
+/// A moving actor (a person) in one zone.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Actor {
-    /// The room the actor occupies.
-    pub room: RoomId,
-    /// The actor's base position in room-local metres.
+    /// The zone the actor occupies.
+    pub zone: ZoneId,
+    /// The actor's base position in home-frame metres.
     pub position_m: [f64; 3],
     /// The time the actor appears, in seconds from the scene start.
     pub active_from_s: f64,
@@ -363,29 +363,29 @@ impl SceneScript {
     /// A two-node, one-actor demo scene used by tests and documentation.
     #[must_use]
     pub fn demo() -> Self {
-        let kitchen: RoomId = Slug("kitchen".into());
-        let lounge: RoomId = Slug("lounge".into());
+        let kitchen: ZoneId = Slug("kitchen".into());
+        let lounge: ZoneId = Slug("lounge".into());
         Self {
             name: "demo".into(),
             home: Slug("demo-home".into()),
             nodes: vec![
                 NodeSpec {
                     id: NodeId(1),
-                    room: kitchen.clone(),
+                    zone: kitchen.clone(),
                     pos_m: [0.0, 0.0, 2.4],
                     skew_ppm: 20.0,
                     noise_scale: 1.0,
                 },
                 NodeSpec {
                     id: NodeId(2),
-                    room: lounge.clone(),
+                    zone: lounge.clone(),
                     pos_m: [3.0, 0.0, 2.4],
                     skew_ppm: -15.0,
                     noise_scale: 1.0,
                 },
             ],
             actors: vec![Actor {
-                room: kitchen,
+                zone: kitchen,
                 position_m: [1.5, 0.0, 0.0],
                 active_from_s: 0.0,
                 active_to_s: 2.0,
@@ -467,8 +467,8 @@ impl SceneScript {
             ));
         }
         for (i, node) in self.nodes.iter().enumerate() {
-            if node.room.0.is_empty() {
-                return Err(SimError::Config(format!("node {i} has an empty room")));
+            if node.zone.0.is_empty() {
+                return Err(SimError::Config(format!("node {i} has an empty zone")));
             }
             if !(node.skew_ppm.is_finite()) {
                 return Err(SimError::Config(format!("node {i} has a non-finite skew")));

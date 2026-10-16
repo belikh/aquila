@@ -56,10 +56,8 @@ pub use detection::{
 pub use error::ValidationError;
 pub use feature::FeatureVector;
 pub use hash::{sha256, to_hex};
-pub use ids::{
-    FloorId, HomeId, MacAddr, MetricId, NodeId, NodePairId, PairId, RoomId, SessionId, Slug,
-    SubjectId, ZoneId,
-};
+pub use ids::{HomeId, MacAddr, MetricId, NodeId, NodePairId, PairId, SessionId, Slug, SubjectId,
+    ZoneId};
 pub use ledger::{DatasetRef, EnvFingerprint, Interval, LedgerRecord, MetricKind, ModelRef, Split};
 pub use pose::{
     Keypoint, KeypointId, Pose, KEYPOINT_COUNT, TORSO_DITHER_BAND_HZ,
@@ -73,9 +71,7 @@ pub use session::{
     SessionMeta,
 };
 pub use time::{Clock, CoreTime, DeviceTime, TimeSpan, TimeWindow};
-pub use topology::{
-    DeviceType, FirmwareRef, Floor, Home, Node, NodePair, PairScope, Room, RoomKind, Topology,
-};
+pub use topology::{DeviceType, FirmwareRef, Home, Node, NodePair, Topology, Zone};
 pub use version::{
     ContractVersion, CONTRACT_VERSION, CONTRACT_VERSION_MAJOR, CONTRACT_VERSION_MINOR,
 };

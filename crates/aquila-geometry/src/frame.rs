@@ -2,9 +2,8 @@
 //!
 //! `data-contracts.md` §3.1 fixes a single **home frame**: Cartesian, metres,
 //! right-handed, `x` east, `y` north, `z` up, origin at the home's declared
-//! reference point. A floor carries `elevation_m` (its plane's height); a room
-//! carries `origin_home_m` and `yaw_deg` mapping room-local to home; a node
-//! carries room-local `pos_room_m`.
+//! reference point. A zone carries `origin_home_m` and `extent_home_m`; a node
+//! carries `pos_home_m`.
 //!
 //! Geometry wraps that single frame with confidence-scored planar SE(2)
 //! transforms. A [`Transform2`] places a frame in its parent: `apply` maps a
@@ -13,10 +12,10 @@
 //! the identity with **zero** confidence, never a guessed transform
 //! (`geometry-calibration.md` §2).
 
-use aquila_types::{Confidence, FloorId, NodeId, Room, RoomId};
+use aquila_types::{Confidence, NodeId, ZoneId};
 use serde::{Deserialize, Serialize};
 
-/// The confidence of a configured (definitional) frame such as a room origin:
+/// The confidence of a configured (definitional) frame such as a zone origin:
 /// the frame *is* the survey, so there is nothing to be unsure about.
 pub const FRAME_CONFIDENCE_CONFIGURED: Confidence = Confidence::ONE;
 
@@ -67,13 +66,13 @@ impl Transform2 {
         }
     }
 
-    /// The transform placing a room frame in the home frame, from the room's
-    /// configured origin and yaw.
+    /// The transform placing a zone frame in the home frame, from the zone's
+    /// configured origin.
     #[must_use]
-    pub fn from_room(room: &Room) -> Self {
+    pub fn from_zone(zone: &aquila_types::Zone) -> Self {
         Self::new(
-            [room.origin_home_m[0], room.origin_home_m[1]],
-            room.yaw_deg.to_radians(),
+            [zone.origin_home_m[0], zone.origin_home_m[1]],
+            0.0,
             FRAME_CONFIDENCE_CONFIGURED,
         )
     }
@@ -131,19 +130,17 @@ impl Transform2 {
 
 /// A named coordinate frame.
 ///
-/// `World` is the home frame from `data-contracts.md` §3.1; `Floor`, `Room` and
-/// `Node` are the nested frames of `geometry-calibration.md` §2. The
-/// non-physical `CsiBand` subcarrier space is intentionally not a physical frame
-/// and is not modelled here.
+/// `World` is the home frame from `data-contracts.md` §3.1; `Zone` and
+/// `Node` are the nested frames. Zones are detection regions in home space;
+/// nodes are sensor mount points. The non-physical `CsiBand` subcarrier space
+/// is intentionally not a physical frame and is not modelled here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Frame {
     /// The home frame: `x` east, `y` north, `z` up, metres.
     World,
-    /// A floor's plane in the home frame.
-    Floor(FloorId),
-    /// A room frame in its floor.
-    Room(RoomId),
-    /// A node mount frame in its room.
+    /// A zone frame in the home frame.
+    Zone(ZoneId),
+    /// A node mount frame in the home frame.
     Node(NodeId),
 }

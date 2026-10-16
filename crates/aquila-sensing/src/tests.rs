@@ -348,6 +348,7 @@ fn one_room_topology() -> aquila_types::Topology {
             area_m2: Some(20.0),
         }],
         nodes: vec![node(1), node(2)],
+        zones: vec![],
         pairs: vec![],
     }
 }

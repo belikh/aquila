@@ -273,7 +273,7 @@ impl GroundTruth for FixtureGroundTruth {
             .records
             .iter()
             .filter_map(|record| match &record.scope {
-                EventScope::Room(room) => Some(room),
+                EventScope::Zone(room) => Some(room),
                 _ => None,
             })
             .collect();
@@ -410,7 +410,7 @@ impl GroundTruth for ReferenceVitalsGroundTruth {
             .records
             .iter()
             .filter_map(|record| match &record.scope {
-                EventScope::Room(room) => Some(room),
+                EventScope::Zone(room) => Some(room),
                 _ => None,
             })
             .collect();
@@ -520,7 +520,7 @@ mod tests {
         ReferenceRecord {
             session: session.clone(),
             t_unix_ms,
-            scope: EventScope::Room(room("lounge")),
+            scope: EventScope::Zone(room("lounge")),
             payload: EventPayload::Vitals {
                 metric: "breathing_rate".to_string(),
                 value: 16.0,

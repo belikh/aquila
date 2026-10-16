@@ -24,8 +24,8 @@ use aquila_session::{Manifest, SessionWriter};
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
     Band, BuildId, CsiEnvelope, CsiFrame, EventPayload, EventScope, GroundTruthRecord,
-    GroundTruthRef, GtKind, Keypoint, KeypointId, PhyFlags, Pose, RoomId, Session, SessionId,
-    SubjectId, Witness, CONTRACT_VERSION, KEYPOINT_COUNT,
+    GroundTruthRef, GtKind, Keypoint, KeypointId, PhyFlags, Pose, Session, SessionId,
+    SubjectId, Witness, ZoneId, CONTRACT_VERSION, KEYPOINT_COUNT,
 };
 use aquila_wire::{decode_datagram, encode_datagram};
 
@@ -322,7 +322,7 @@ impl SimulatorSource {
             let f_rf = centre_hz + (k as f64 - n as f64 / 2.0) * self.script.subcarrier_spacing_hz;
             let (mut re, mut im) = self.baseline(node_index, k);
             for (index, actor) in self.script.actors.iter().enumerate() {
-                if actor.room != node.room || !actor.present(t) {
+                if actor.zone != node.zone || !actor.present(t) {
                     continue;
                 }
                 if let Some(body) = self.bodies[index].as_ref() {
@@ -480,15 +480,15 @@ fn total_ticks(script: &SceneScript) -> usize {
     ((script.duration_s * script.tick_hz).ceil() as usize).max(1)
 }
 
-/// The rooms named by the scene's nodes, first-seen order.
-fn rooms_of(script: &SceneScript) -> Vec<RoomId> {
-    let mut rooms: Vec<RoomId> = Vec::new();
+/// The zones named by the scene's nodes, first-seen order.
+fn zones_of(script: &SceneScript) -> Vec<ZoneId> {
+    let mut zones: Vec<ZoneId> = Vec::new();
     for node in &script.nodes {
-        if !rooms.contains(&node.room) {
-            rooms.push(node.room.clone());
+        if !zones.contains(&node.zone) {
+            zones.push(node.zone.clone());
         }
     }
-    rooms
+    zones
 }
 
 /// Synthesise the per-tick ground truth for a scene (§7.3).
@@ -501,18 +501,18 @@ pub fn synthesise_ground_truth(
     config: &SimConfig,
 ) -> Vec<(u64, GroundTruthRecord)> {
     let ticks = total_ticks(script);
-    let rooms = rooms_of(script);
+    let zones = zones_of(script);
     let mut out = Vec::new();
     for tick in 0..ticks {
         let t = tick as f64 / script.tick_hz;
         let host_us =
             config.start_host_us + ((tick as f64) * 1_000_000.0 / script.tick_hz).round() as u64;
         let t_unix_ms = config.start_unix_ms + (t * 1_000.0).round() as i64;
-        for room in &rooms {
+        for zone in &zones {
             let present: Vec<&crate::scene::Actor> = script
                 .actors
                 .iter()
-                .filter(|actor| actor.room == *room && actor.present(t))
+                .filter(|actor| actor.zone == *zone && actor.present(t))
                 .collect();
             let count = present.len() as u8;
             let mut push = |payload: EventPayload| {
@@ -522,7 +522,7 @@ pub fn synthesise_ground_truth(
                         session: config.session.clone(),
                         t_unix_ms,
                         kind: GtKind::Synthetic,
-                        scope: EventScope::Room(room.clone()),
+                        scope: EventScope::Zone(zone.clone()),
                         payload,
                     },
                 ));
@@ -627,7 +627,7 @@ pub fn synthesise_pose_ground_truth(script: &SceneScript, config: &SimConfig) ->
             }
             out.push(Pose {
                 subject: SubjectId::new(index as u32),
-                room: actor.room.clone(),
+                zone: actor.zone.clone(),
                 t_unix_ms,
                 keys,
                 score: 1.0,

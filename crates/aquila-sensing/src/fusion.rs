@@ -10,7 +10,7 @@
 //! Unknown is never conflated with absent: a prior log-odds of `0` yields
 //! `p = 0.5`, and an empty evidence set yields the prior, never "absent".
 
-use aquila_types::{NodeId, RoomId};
+use aquila_types::{NodeId, ZoneId};
 
 /// A discrete probability mass function over counts `0..=MAX_COUNT_V1`.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,8 +63,8 @@ impl CountPmf {
 pub struct NodeEvidence {
     /// The contributing node.
     pub node: NodeId,
-    /// The room the node is mounted in.
-    pub room: RoomId,
+    /// The zone the node contributes to.
+    pub zone: ZoneId,
     /// The log-odds of presence in this node's volume.
     pub presence_logit: f64,
     /// The node's count PMF over its volume.

@@ -148,6 +148,11 @@ fn topology() -> Topology {
         home: home(),
         floors: vec![floor()],
         rooms: vec![room()],
+        zones: vec![Zone {
+            id: slug("kitchen-01"),
+            room: Some(slug("kitchen-01")),
+            name: "Kitchen".to_string(),
+        }],
         nodes: vec![
             topology_node(1, "kitchen-01"),
             topology_node(2, "kitchen-01"),
@@ -295,7 +300,7 @@ fn vitals_reading() -> VitalsReading {
 
 fn detection() -> Detection {
     Detection {
-        scope: DetectionScope::Room(slug("kitchen-01")),
+        scope: DetectionScope::Zone(slug("kitchen-01")),
         span: span(),
         kind: DetectionKind::Presence,
         confidence: 0.9,
@@ -311,7 +316,7 @@ fn event() -> Event {
         home: slug("home-01"),
         t_unix_ms: 1_700_000_000_000,
         dedup_key: "home-01:presence_changed:kitchen-01".to_string(),
-        scope: EventScope::Room(slug("kitchen-01")),
+        scope: EventScope::Zone(slug("kitchen-01")),
         kind: EventKind::PresenceChanged,
         payload: EventPayload::Presence {
             occupied: true,
@@ -402,7 +407,7 @@ fn every_record_round_trips() {
         session: slug("session-01"),
         t_unix_ms: 1_700_000_000_000,
         kind: GtKind::CameraResearch,
-        scope: EventScope::Room(slug("kitchen-01")),
+        scope: EventScope::Zone(slug("kitchen-01")),
         payload: EventPayload::Count { people: 2 },
     });
     round_trip(&ledger_record(MetricKind::Gated));
@@ -593,7 +598,7 @@ fn detection_value_kind_scope_coupling() {
     let mut wrong_scope = detection();
     wrong_scope.kind = DetectionKind::Occupancy;
     wrong_scope.value = DetectionValue::Occupancy(vec![(slug("kitchen-01"), 1)]);
-    wrong_scope.scope = DetectionScope::Room(slug("kitchen-01"));
+    wrong_scope.scope = DetectionScope::Zone(slug("kitchen-01"));
     assert!(wrong_scope.validate().is_err());
 
     let mut too_many = detection();

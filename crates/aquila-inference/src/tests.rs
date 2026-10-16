@@ -137,7 +137,7 @@ fn sample_count(
 
 fn pose_request(subject: Option<SubjectId>) -> PoseRequest {
     PoseRequest {
-        scope: DetectionScope::Room(room()),
+        scope: DetectionScope::Zone(room()),
         contributor_nodes: vec![node(1), node(2)],
         subject,
         span: span(),
@@ -148,7 +148,7 @@ fn pose_request(subject: Option<SubjectId>) -> PoseRequest {
 
 fn vitals_request(subject: Option<SubjectId>) -> VitalsRequest {
     VitalsRequest {
-        scope: DetectionScope::Room(room()),
+        scope: DetectionScope::Zone(room()),
         contributor_nodes: vec![node(1), node(2)],
         subject,
         span: span(),
@@ -203,7 +203,7 @@ impl PoseModel for TestPoseModel {
                 for request in requests {
                     request.validate()?;
                     let room = match &request.scope {
-                        DetectionScope::Room(room) => Some(room.clone()),
+                        DetectionScope::Zone(room) => Some(room.clone()),
                         DetectionScope::Home(_) => None,
                     };
                     let pose = match (room.as_ref(), request.subject) {
@@ -278,7 +278,7 @@ impl VitalsModel for TestVitalsModel {
                 for request in requests {
                     request.validate()?;
                     let room = match &request.scope {
-                        DetectionScope::Room(room) => room.clone(),
+                        DetectionScope::Zone(room) => room.clone(),
                         DetectionScope::Home(_) => {
                             // Vitals are room-scoped in v1: a reading carries a
                             // room. A home-scoped request is malformed here.

@@ -4,7 +4,7 @@ use aquila_geometry::Topology;
 use aquila_sensing::{Sink, SinkError};
 use aquila_types::{
     DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Floor, Home, MacAddr,
-    Node, NodeId, Room, RoomId, RoomKind, Slug, Witness, CONTRACT_VERSION,
+    Node, NodeId, Room, RoomId, RoomKind, Slug, Witness, Zone, CONTRACT_VERSION,
 };
 
 use crate::{EntityKind, EntityModel, HaSink};
@@ -44,6 +44,11 @@ fn topology() -> Topology {
             origin_home_m: [0.0, 0.0, 0.0],
             yaw_deg: 0.0,
             area_m2: None,
+        }],
+        zones: vec![Zone {
+            id: room.clone(),
+            room: Some(room.clone()),
+            name: "Living".to_string(),
         }],
         nodes: vec![Node {
             id: NodeId(1),
@@ -87,7 +92,7 @@ fn events_project_to_ha_entities() {
     let mut model = EntityModel::from_topology(&topology(), "inst");
 
     model.apply(&event(
-        EventScope::Room(room.clone()),
+        EventScope::Zone(room.clone()),
         EventKind::PresenceChanged,
         EventPayload::Presence {
             occupied: true,
@@ -95,7 +100,7 @@ fn events_project_to_ha_entities() {
         },
     ));
     model.apply(&event(
-        EventScope::Room(room.clone()),
+        EventScope::Zone(room.clone()),
         EventKind::VitalAlert,
         EventPayload::Vitals {
             metric: "breathing_rate".to_string(),
@@ -150,7 +155,7 @@ fn the_sink_updates_a_shared_model() {
     let mut sink = sink;
 
     let err: Result<(), SinkError> = sink.emit(&event(
-        EventScope::Room(room.clone()),
+        EventScope::Zone(room.clone()),
         EventKind::PresenceChanged,
         EventPayload::Presence {
             occupied: false,
@@ -168,7 +173,7 @@ fn snapshot_is_json_with_zones_and_health() {
     let room: RoomId = slug("living-room");
     let mut model = EntityModel::from_topology(&topology(), "inst");
     model.apply(&event(
-        EventScope::Room(room),
+        EventScope::Zone(room),
         EventKind::CountChanged,
         EventPayload::Count { people: 2 },
     ));

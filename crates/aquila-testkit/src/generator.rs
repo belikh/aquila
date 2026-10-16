@@ -137,6 +137,7 @@ pub fn topology_for(script: &SceneScript) -> Topology {
                 area_m2: None,
             })
             .collect(),
+        zones: vec![],
         nodes: script
             .nodes
             .iter()
@@ -257,6 +258,7 @@ pub fn topology_for_floors(script: &SceneScript, floors: &[FloorPlan]) -> Topolo
         },
         floors: floor_records,
         rooms,
+        zones: vec![],
         nodes: script
             .nodes
             .iter()

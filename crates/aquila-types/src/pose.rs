@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{require_not_infinite, require_unit_interval, ValidationError};
-use crate::ids::{RoomId, SubjectId};
+use crate::ids::{SubjectId, ZoneId};
 use crate::primitives::Witness;
 
 /// The number of keypoints in the COCO-17 schema.
@@ -114,8 +114,8 @@ impl Keypoint {
 pub struct Pose {
     /// The session-scoped subject index.
     pub subject: SubjectId,
-    /// The room (the zone in v1) the pose is expressed in.
-    pub room: RoomId,
+    /// The zone the pose is expressed in.
+    pub zone: ZoneId,
     /// Unix wall time, in milliseconds.
     pub t_unix_ms: i64,
     /// Exactly [`KEYPOINT_COUNT`] keypoints in ascending [`KeypointId`] order.
@@ -131,7 +131,7 @@ impl Pose {
     ///
     /// The array *is* the schema: `keys[i].id as u8 == i` for every slot.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        self.room.validate()?;
+        self.zone.validate()?;
         require_unit_interval("Pose.score", self.score)?;
         for (i, key) in self.keys.iter().enumerate() {
             if key.id as usize != i {

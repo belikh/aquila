@@ -49,7 +49,7 @@
 
 use aquila_inference::{ModelError, ModelId, PoseModel, PoseNodeSeries, PoseOutcome, PoseRequest};
 use aquila_types::{
-    sha256, CsiEnvelope, DetectionScope, Keypoint, KeypointId, NodeId, Pose, RoomId, SubjectId,
+    sha256, CsiEnvelope, DetectionScope, Keypoint, KeypointId, NodeId, Pose, SubjectId, ZoneId,
     Witness, KEYPOINT_COUNT, TORSO_DITHER_BAND_HZ, TORSO_DITHER_MIN_SEPARATION_HZ,
     TORSO_SCATTERER_COUNT,
 };
@@ -163,8 +163,8 @@ pub struct PoseNodeInput<'a> {
 /// empty or too-short window, an unplaced node, a single-node view, or a fit
 /// with no usable ranges.
 #[must_use]
-pub fn estimate_room_pose(
-    room: &RoomId,
+pub fn estimate_zone_pose(
+    zone: &ZoneId,
     subject: SubjectId,
     t_unix_ms: i64,
     nodes: &[PoseNodeInput<'_>],
@@ -429,7 +429,7 @@ fn blank_keypoints() -> [Keypoint; KEYPOINT_COUNT] {
 
 /// Assemble a contract [`Pose`] from a fused torso estimate.
 fn assemble_pose(
-    room: &RoomId,
+    zone: &ZoneId,
     subject: SubjectId,
     t_unix_ms: i64,
     estimate: &fusion::TorsoEstimate,
@@ -454,7 +454,7 @@ fn assemble_pose(
     }
     Pose {
         subject,
-        room: room.clone(),
+        zone: zone.clone(),
         t_unix_ms,
         keys,
         score: confidence,
@@ -514,7 +514,7 @@ impl DspPoseModel {
     /// Serve one request: no pose for a non-room scope or a request without a
     /// raw series.
     fn infer_one(&self, request: &PoseRequest) -> PoseOutcome {
-        let DetectionScope::Room(room) = &request.scope else {
+        let DetectionScope::Zone(zone) = &request.scope else {
             return PoseOutcome {
                 pose: None,
                 presence: None,
@@ -539,8 +539,8 @@ impl DspPoseModel {
             })
             .collect();
         let subject = request.subject.unwrap_or(SubjectId::new(0));
-        let pose = estimate_room_pose(
-            room,
+        let pose = estimate_zone_pose(
+            zone,
             subject,
             request.span.start_unix_ms,
             &inputs,

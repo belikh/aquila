@@ -77,12 +77,25 @@ pub(crate) fn build(topology: &Topology, instance_id: &str) -> Projections {
         })
         .collect();
 
+    let zones: Vec<Value> = model
+        .zones
+        .iter()
+        .map(|zone| {
+            json!({
+                "id": zone.id.as_str(),
+                "room_id": zone.room.as_ref().map(|r| r.as_str()),
+                "name": zone.name,
+            })
+        })
+        .collect();
+
     let schema = json!({
         "instance_id": instance_id,
         "contract": home.contract.to_string(),
         "home": { "id": home.id.as_str(), "name": home.name, "time_zone": home.time_zone },
         "floors": floors,
         "rooms": rooms,
+        "zones": zones,
         "metrics": metric_vocabulary(),
     });
 

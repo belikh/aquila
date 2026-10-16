@@ -59,42 +59,42 @@
 
 use std::cmp::Ordering;
 
-use aquila_types::{Estimate, FloorId, RoomId};
+use aquila_types::{Estimate, ZoneId};
 
 use crate::fusion::CountPmf;
 
 /// Why a room contributes (or does not) to a floor's aggregate count.
 ///
-/// Coverage is separate from the count value: an uncovered room is Unknown,
+/// Coverage is separate from the count value: an uncovered zone is Unknown,
 /// never a fabricated `0` (`fusion-sync.md` §2.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoomCoverage {
-    /// The room had usable, calibrated evidence this window.
+pub enum ZoneCoverage {
+    /// The zone had usable, calibrated evidence this window.
     Covered,
-    /// The room had no usable evidence; its count is Unknown.
+    /// The zone had no usable evidence; its count is Unknown.
     Uncovered,
 }
 
-/// The per-room summary the escalation step consumes.
+/// The per-zone summary the escalation step consumes.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RoomSummary {
-    /// The room.
-    pub room: RoomId,
+pub struct ZoneSummary {
+    /// The zone.
+    pub zone: ZoneId,
     /// The pooled presence probability in `[0, 1]`.
     pub presence_probability: f64,
     /// The MAP people count.
     pub count: u8,
-    /// The room's count PMF, for the floor convolution.
+    /// The zone's count PMF, for the zone convolution.
     pub count_pmf: CountPmf,
-    /// Whether the room carried usable evidence this window.
-    pub coverage: RoomCoverage,
+    /// Whether the zone carried usable evidence this window.
+    pub coverage: ZoneCoverage,
 }
 
-impl RoomSummary {
-    /// A covered room summary from its pooled presence probability and count
+impl ZoneSummary {
+    /// A covered zone summary from its pooled presence probability and count
     /// PMF. The MAP count is derived from the PMF, so the two cannot disagree.
     #[must_use]
-    pub fn covered(room: RoomId, presence_probability: f64, count_pmf: CountPmf) -> Self {
+    pub fn covered(zone: ZoneId, presence_probability: f64, count_pmf: CountPmf) -> Self {
         let (count, _) = count_pmf.map();
         Self {
             room,
@@ -128,126 +128,126 @@ impl RoomSummary {
 /// away** (`fusion-sync.md` §2.4).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Conflict {
-    /// Room attribution is ambiguous: the two strongest room presence
-    /// probabilities on a floor lie within `room_gap`, so naming a single room
+    /// Zone attribution is ambiguous: the two strongest zone presence
+    /// probabilities lie within `node_gap`, so naming a single zone
     /// would be a false confident claim (`fusion-sync.md` §2.4.1).
-    AmbiguousRooms {
-        /// The floor whose attribution is unresolved.
-        floor: FloorId,
-        /// Each contending room and its pooled presence probability, in
-        /// canonical room-id order.
-        candidates: Vec<(RoomId, f64)>,
+    AmbiguousZones {
+        /// The zone whose attribution is unresolved.
+        zone: ZoneId,
+        /// Each contending zone and its pooled presence probability, in
+        /// canonical zone-id order.
+        candidates: Vec<(ZoneId, f64)>,
     },
-    /// Whole-home location is ambiguous: the two strongest floor presence
+    /// Whole-home location is ambiguous: the two strongest zone presence
     /// probabilities lie within the home ambiguity margin, so naming a single
-    /// floor would be a false confident claim (`fusion-sync.md` §2.4.1,
+    /// zone would be a false confident claim (`fusion-sync.md` §2.4.1,
     /// `geometry-calibration.md` §4 staging). The home's aggregate presence and
     /// convolved count are unaffected.
-    AmbiguousFloors {
-        /// Each contending floor and its soft-OR presence probability, in
-        /// canonical floor-id order.
-        candidates: Vec<(FloorId, f64)>,
+    AmbiguousZonesHome {
+        /// Each contending zone and its soft-OR presence probability, in
+        /// canonical zone-id order.
+        candidates: Vec<(ZoneId, f64)>,
     },
 }
 
-/// The aggregated state of one floor for one window.
+/// The aggregated state of one zone for one window.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FloorSummary {
-    /// The floor.
-    pub floor: FloorId,
-    /// The soft-OR presence probability across the floor's covered rooms;
-    /// `None` when no room on the floor has usable evidence
+pub struct ZoneSummary {
+    /// The zone.
+    pub zone: ZoneId,
+    /// The soft-OR presence probability across the zone's covered nodes;
+    /// `None` when no node in the zone has usable evidence
     /// (`Occupancy::Unknown`, never `Absent`).
     pub presence_probability: Option<f64>,
-    /// The MAP floor count from the room-PMF convolution, or `None` when the
-    /// floor count is Unknown (an uncovered room, or no covered rooms).
+    /// The MAP zone count from the node-PMF convolution, or `None` when the
+    /// zone count is Unknown (an uncovered node, or no covered nodes).
     pub count: Option<u8>,
     /// The convolved count PMF's MAP probability; `0.0` when the count is
     /// Unknown.
     pub count_confidence: f64,
-    /// The convolved floor count PMF, or `None` when Unknown.
+    /// The convolved zone count PMF, or `None` when Unknown.
     pub count_pmf: Option<CountPmf>,
-    /// The floor's rooms, canonical room-id order.
-    pub rooms: Vec<RoomSummary>,
-    /// The confidently attributed room, or `None` when the floor is unoccupied
+    /// The zone's contributing nodes, canonical node-id order.
+    pub nodes: Vec<NodeId>,
+    /// The confidently attributed node, or `None` when the zone is unoccupied
     /// or the attribution is ambiguous.
-    pub attribution: Option<RoomId>,
-    /// Every conflict raised by this floor this window.
+    pub attribution: Option<NodeId>,
+    /// Every conflict raised by this zone this window.
     pub conflicts: Vec<Conflict>,
 }
 
-/// Floor occupancy: the soft-OR `1 − Π(1 − p_room)` across the given rooms'
+/// Zone occupancy: the soft-OR `1 − Π(1 − p_node)` across the given nodes'
 /// presence probabilities (`fusion-sync.md` §2.5).
 ///
-/// Only [`RoomCoverage::Covered`] rooms contribute: an uncovered room is
-/// Unknown, not a `p = 0` witness. With no covered rooms this returns `0.0`; a
+/// Only [`ZoneCoverage::Covered`] nodes contribute: an uncovered node is
+/// Unknown, not a `p = 0` witness. With no covered nodes this returns `0.0`; a
 /// caller that needs to distinguish "unknown" from "absent" should use
-/// [`aggregate_floor`], whose `presence_probability` is `Option`.
+/// [`aggregate_zone`], whose `presence_probability` is `Option`.
 #[must_use]
-pub fn floor_presence_probability(rooms: &[RoomSummary]) -> f64 {
+pub fn zone_presence_probability(nodes: &[ZoneSummary]) -> f64 {
     let mut complement = 1.0_f64;
-    for room in rooms
+    for node in nodes
         .iter()
-        .filter(|room| room.coverage == RoomCoverage::Covered)
+        .filter(|node| node.coverage == ZoneCoverage::Covered)
     {
-        complement *= 1.0 - room.presence_probability.clamp(0.0, 1.0);
+        complement *= 1.0 - node.presence_probability.clamp(0.0, 1.0);
     }
     (1.0 - complement).clamp(0.0, 1.0)
 }
 
-/// Home occupancy: a soft-OR over floors, each already a soft-OR over rooms.
+/// Home occupancy: a soft-OR over zones, each already a soft-OR over nodes.
 #[must_use]
-pub fn home_presence_probability(floors: &[f64]) -> f64 {
+pub fn home_presence_probability(zones: &[f64]) -> f64 {
     let mut complement = 1.0_f64;
-    for p in floors {
+    for p in zones {
         complement *= 1.0 - p.clamp(0.0, 1.0);
     }
     (1.0 - complement).clamp(0.0, 1.0)
 }
 
-/// Aggregate one floor from its room summaries (`fusion-sync.md` §2.5).
+/// Aggregate one zone from its node summaries (`fusion-sync.md` §2.5).
 ///
-/// `room_gap` is the attribution ambiguity margin; `presence_threshold` is the
-/// presence probability above which a room counts as occupied for attribution
+/// `node_gap` is the attribution ambiguity margin; `presence_threshold` is the
+/// presence probability above which a node counts as occupied for attribution
 /// (`p_hi`); `max_count` bounds the convolved PMF.
 ///
-/// Determinism: rooms are processed in canonical room-id order, so the result
-/// is independent of the order `rooms` is supplied in.
+/// Determinism: nodes are processed in canonical node-id order, so the result
+/// is independent of the order `nodes` is supplied in.
 #[must_use]
-pub fn aggregate_floor(
-    floor: FloorId,
-    rooms: &[RoomSummary],
-    room_gap: f64,
+pub fn aggregate_zone(
+    zone: ZoneId,
+    nodes: &[ZoneSummary],
+    node_gap: f64,
     presence_threshold: f64,
     max_count: usize,
-) -> FloorSummary {
-    let mut ordered: Vec<RoomSummary> = rooms.to_vec();
-    ordered.sort_by(|a, b| a.room.cmp(&b.room));
+) -> ZoneSummary {
+    let mut ordered: Vec<ZoneSummary> = nodes.to_vec();
+    ordered.sort_by(|a, b| a.zone.cmp(&b.zone));
 
-    let covered: Vec<&RoomSummary> = ordered
+    let covered: Vec<&ZoneSummary> = ordered
         .iter()
-        .filter(|room| room.coverage == RoomCoverage::Covered)
+        .filter(|node| node.coverage == ZoneCoverage::Covered)
         .collect();
     let all_covered = covered.len() == ordered.len() && !ordered.is_empty();
 
-    // Presence: soft-OR over the covered rooms only.
+    // Presence: soft-OR over the covered nodes only.
     let presence_probability = if covered.is_empty() {
         None
     } else {
-        Some(floor_presence_probability(&ordered))
+        Some(zone_presence_probability(&ordered))
     };
 
-    // Count: convolution over the covered rooms. Any uncovered room makes the
-    // floor count Unknown rather than treating a broad, uninformative factor as
+    // Count: convolution over the covered nodes. Any uncovered node makes the
+    // zone count Unknown rather than treating a broad, uninformative factor as
     // evidence (`fusion-sync.md` §2.5).
     let count_pmf = if !all_covered {
         None
     } else {
         let mut acc: Option<CountPmf> = None;
-        for room in &covered {
+        for node in &covered {
             acc = Some(match acc {
-                None => room.count_pmf.clone(),
-                Some(previous) => convolve(&previous, &room.count_pmf, max_count),
+                None => node.count_pmf.clone(),
+                Some(previous) => convolve(&previous, &node.count_pmf, max_count),
             });
         }
         acc
@@ -260,61 +260,58 @@ pub fn aggregate_floor(
         None => (None, 0.0),
     };
 
-    // Attribution: the strongest occupied room, or an ambiguity conflict.
-    let mut present: Vec<&RoomSummary> = covered
+    // Attribution: the strongest occupied node, or an ambiguity conflict.
+    let mut present: Vec<&ZoneSummary> = covered
         .iter()
         .copied()
-        .filter(|room| room.presence_probability >= presence_threshold)
+        .filter(|node| node.presence_probability >= presence_threshold)
         .collect();
     present.sort_by(|a, b| {
         b.presence_probability
             .partial_cmp(&a.presence_probability)
             .unwrap_or(Ordering::Equal)
-            .then_with(|| a.room.cmp(&b.room))
+            .then_with(|| a.zone.cmp(&b.zone))
     });
 
     let mut attribution = None;
     let mut conflicts = Vec::new();
     if let Some(top) = present.first() {
-        let mut candidates: Vec<(RoomId, f64)> = present
+        let mut candidates: Vec<(ZoneId, f64)> = present
             .iter()
-            .filter(|room| top.presence_probability - room.presence_probability < room_gap)
-            .map(|room| (room.room.clone(), room.presence_probability))
+            .filter(|node| top.presence_probability - node.presence_probability < node_gap)
+            .map(|node| (node.zone.clone(), node.presence_probability))
             .collect();
         candidates.sort_by(|a, b| a.0.cmp(&b.0));
         if candidates.len() >= 2 {
-            conflicts.push(Conflict::AmbiguousRooms {
-                floor: floor.clone(),
+            conflicts.push(Conflict::AmbiguousZones {
+                zone: zone.clone(),
                 candidates,
             });
         } else {
-            attribution = Some(top.room.clone());
+            attribution = Some(top.zone.clone());
         }
     }
 
-    FloorSummary {
-        floor,
+    ZoneSummary {
+        zone,
         presence_probability,
         count,
         count_confidence,
         count_pmf,
-        rooms: ordered,
+        nodes: ordered,
         attribution,
         conflicts,
     }
 }
 
-/// A confidently attributed whole-home coarse location: the floor, and the room
-/// within it when that floor's own room attribution is confident
-/// (`fusion-sync.md` §2.5, home).
+/// A confidently attributed whole-home coarse location: the zone, when the
+/// zone's own attribution is confident (`fusion-sync.md` §2.5, home).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HomeLocation {
-    /// The attributed floor.
-    pub floor: FloorId,
-    /// The room within the attributed floor, or `None` when the floor's own
-    /// attribution is ambiguous (floor-level accuracy only) — never a false
-    /// confident room (`fusion-sync.md` §2.4.1).
-    pub room: Option<RoomId>,
+    /// The attributed zone, or `None` when the zone attribution is ambiguous
+    /// (zone-level accuracy only) — never a false confident zone
+    /// (`fusion-sync.md` §2.4.1).
+    pub zone: Option<ZoneId>,
 }
 
 /// The aggregated state of the whole home for one window.

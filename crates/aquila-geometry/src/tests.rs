@@ -8,7 +8,7 @@
 
 use proptest::prelude::*;
 
-use aquila_types::{Slug, CONTRACT_VERSION};
+use aquila_types::{Slug, Zone, CONTRACT_VERSION};
 
 use crate::*;
 
@@ -97,6 +97,11 @@ fn sample_topology() -> aquila_types::Topology {
                 area_m2: Some(12.0),
             },
         ],
+        zones: vec![Zone {
+            id: slug("living"),
+            room: Some(slug("R0")),
+            name: "Living".to_string(),
+        }],
         nodes: vec![
             node_at(1, "R0", Some([1.0, 1.0, 0.0])),
             node_at(2, "R0", Some([3.0, 1.0, 0.0])),
@@ -129,8 +134,11 @@ fn attribution_room_zone_and_floor() {
     assert_eq!(t.room_of(NodeId(1)).confidence, Confidence::ONE);
     assert_eq!(t.room_of(NodeId(4)).value.map(name), Some("R2"));
 
-    // In v1 a zone is a room.
-    assert_eq!(t.zone_of(NodeId(3)).value.flatten().map(name), Some("R1"));
+    // Node 3 is in room R1 which has no zone mapped to it.
+    assert_eq!(t.zone_of(NodeId(3)).value.flatten(), None);
+
+    // Node 1 is in room R0, which has zone "living".
+    assert_eq!(t.zone_of(NodeId(1)).value.flatten().map(name), Some("living"));
 
     assert_eq!(t.floor_of(NodeId(1)).value.map(name), Some("F0"));
     assert_eq!(t.floor_of(NodeId(4)).value.map(name), Some("F1"));
@@ -298,6 +306,7 @@ fn estimate_position_demotes_when_ellipse_exceeds_the_room() {
             yaw_deg: 0.0,
             area_m2: Some(0.0001),
         }],
+        zones: vec![],
         nodes: vec![
             node_at(1, "Rt", Some([1.0, 1.0, 0.0])),
             node_at(2, "Rt", Some([3.0, 1.0, 0.0])),
