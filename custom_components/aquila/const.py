@@ -16,7 +16,7 @@ MANUFACTURER: Final = "Aquila"
 
 #: Component version; must match ``manifest.json`` ``version`` and is the value
 #: compared against the core's ``min_component_version`` (home-assistant.md §9).
-COMPONENT_VERSION: Final = "0.2.1"
+COMPONENT_VERSION: Final = "0.2.2"
 
 #: The API major the component speaks; the core's ``api_version`` major must match.
 API_MAJOR: Final = 1

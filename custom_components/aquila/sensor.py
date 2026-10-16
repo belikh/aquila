@@ -167,7 +167,6 @@ class AquilaPersonCountSensor(AquilaEntity, SensorEntity):
 class AquilaVitalsSensor(AquilaEntity, SensorEntity):
     """Per-zone (room/home) breathing or heart rate."""
 
-    _attr_device_class = SensorDeviceClass.MEASUREMENT
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
@@ -274,7 +273,6 @@ class AquilaCalibrationStateSensor(AquilaEntity, SensorEntity):
 class AquilaClockDriftSensor(AquilaEntity, SensorEntity):
     """Diagnostic: node clock drift estimate, in milliseconds."""
 
-    _attr_device_class = SensorDeviceClass.MEASUREMENT
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_translation_key = METRIC_CLOCK_DRIFT
