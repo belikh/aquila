@@ -38,8 +38,8 @@ use crate::calibration::{
 use crate::config::SensingConfig;
 use crate::error::SensingError;
 use crate::escalation::{
-    aggregate_floor, aggregate_floor_vitals, aggregate_home, Conflict, FloorSummary, HomeSummary,
-    RoomSummary, RoomVitals,
+    aggregate_home, aggregate_home_vitals, Conflict, HomeSummary, ZoneAggregate, ZoneSummary,
+    ZoneVitals,
 };
 use crate::features::extract_motion;
 use crate::fusion::{self, NodeEvidence};
@@ -47,9 +47,9 @@ use crate::sink::Sink;
 use crate::time::{NodeClockFit, TimeSync};
 use crate::window::{WindowAssembler, WindowBatch};
 
-/// One room's pose input for a window: the node, its planar position, its
+/// One zone's pose input for a window: the node, its planar position, its
 /// fusion weight, and this window's envelopes from that node.
-type RoomPoseEntry<'a> = (NodeId, [f64; 2], f64, &'a [CsiEnvelope]);
+type ZonePoseEntry<'a> = (NodeId, [f64; 2], f64, &'a [CsiEnvelope]);
 
 /// What one call to [`Sensing::step`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -60,9 +60,6 @@ pub struct StepReport {
     pub windows_emitted: usize,
     /// Events emitted to the sink in this step, across every scope.
     pub events_emitted: usize,
-    /// Floor summaries aggregated in this step's window (0 when no window was
-    /// processed), one per floor in the topology.
-    pub floors_summarised: usize,
     /// Whether the whole-home summary was aggregated in this step's window:
     /// `1` when a window was processed, `0` otherwise (Slice 6).
     pub home_summarised: usize,
@@ -70,13 +67,13 @@ pub struct StepReport {
     pub ended: bool,
 }
 
-/// One window's zone summaries, retained for scoring and inspection.
+/// One window's zone aggregates, retained for scoring and inspection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ZoneWindow {
     /// The window's start on the core clock, in milliseconds.
     pub t_ms: i64,
-    /// The zone summaries for that window, in canonical zone order.
-    pub zones: Vec<ZoneSummary>,
+    /// The zone aggregates for that window, in canonical zone order.
+    pub zones: Vec<ZoneAggregate>,
 }
 
 /// One window's whole-home summary, retained for scoring and inspection
@@ -431,16 +428,16 @@ impl Sensing {
     /// than guessing with a synthetic-tuned constant (`sister-issues-core.md`
     /// S9): `p = 0.5` sits between `p_lo` and `p_hi`, so no occupancy is
     /// asserted.
-    fn presence_logit(&self, room: &RoomId, node: NodeId, window_std: f64) -> f64 {
+    fn presence_logit(&self, zone: &ZoneId, node: NodeId, window_std: f64) -> f64 {
         if let Some(calibration) = self.config.calibration.as_ref() {
-            if let (Some(zone), Some(baseline)) = (
-                calibration.zone_for_room(room),
+            if let (Some(zone_cal), Some(baseline)) = (
+                calibration.zone_for_zone(zone),
                 calibration.node_baseline(node),
             ) {
                 return calibrated_logit(
                     window_std,
                     f64::from(baseline.amplitude_std_mean),
-                    f64::from(zone.detection.presence_threshold_db),
+                    f64::from(zone_cal.detection.presence_threshold_db),
                     self.config.calibration_scale_floor_db,
                 );
             }
@@ -507,6 +504,12 @@ impl Sensing {
         &self.home_history
     }
 
+    /// The per-window zone history, in processing order.
+    #[must_use]
+    pub fn zone_history(&self) -> &[ZoneWindow] {
+        &self.zone_history
+    }
+
     /// The optional pose model.
     #[must_use]
     pub const fn pose_model(&self) -> Option<&Arc<dyn PoseModel>> {
@@ -524,8 +527,8 @@ impl Sensing {
         self.windows_processed += 1;
         let max_count = usize::from(self.config.max_count);
 
-        // 1. Per-node evidence, grouped by room.
-        let mut by_room: BTreeMap<RoomId, Vec<NodeEvidence>> = BTreeMap::new();
+        // 1. Per-node evidence, grouped by zone.
+        let mut by_zone: BTreeMap<ZoneId, Vec<NodeEvidence>> = BTreeMap::new();
         let mut signal_energy_total = 0.0_f64;
         let mut presence_energy_total = 0.0_f64;
         let mut motion_cv_total = 0.0_f64;
@@ -536,7 +539,7 @@ impl Sensing {
             let SensingScope::Node(node) = sensing_frame.scope else {
                 continue;
             };
-            let Some(room) = self.topology.room_of(node).value.cloned() else {
+            let Some(zone) = self.topology.zone_of(node).value.flatten() else {
                 continue;
             };
             let feature = extract_motion(
@@ -559,13 +562,13 @@ impl Sensing {
             if sensing_frame.frames.len() < self.config.min_frames_per_node {
                 continue;
             }
-            let logit = self.presence_logit(&room, node, feature.amplitude_std);
+            let logit = self.presence_logit(zone, node, feature.amplitude_std);
             let presence_probability = fusion::sigmoid(logit);
             let weight = self.config.node_weight.clamp(0.0, 1.0) * self.sync.weight(node);
             let count_pmf = fusion::node_count_pmf(presence_probability, max_count);
-            by_room.entry(room.clone()).or_default().push(NodeEvidence {
+            by_zone.entry(zone.clone()).or_default().push(NodeEvidence {
                 node,
-                room,
+                zone: zone.clone(),
                 presence_logit: logit,
                 count_pmf,
                 weight,
@@ -574,15 +577,15 @@ impl Sensing {
         }
         let nodes_denominator = nodes_seen.max(1) as f64;
 
-        // 2. Room decisions, in canonical room order, with edge-triggered events.
+        // 2. Zone decisions, in canonical zone order, with edge-triggered events.
         let t_ms = (batch.start.0 / 1_000_000) as i64;
         let stamp = Timestamp::now(self.clock.as_ref());
         let mut emitted = 0usize;
-        let rooms = self.rooms.clone();
-        let mut room_summaries: BTreeMap<RoomId, RoomSummary> = BTreeMap::new();
+        let zones = self.zones.clone();
+        let mut zone_summaries: BTreeMap<ZoneId, ZoneSummary> = BTreeMap::new();
 
-        for room in &rooms {
-            let evidence = by_room.remove(room).unwrap_or_default();
+        for zone in &zones {
+            let evidence = by_zone.remove(zone).unwrap_or_default();
             let covered = !evidence.is_empty();
             let probability = fusion::pooled_presence_probability(
                 self.config.prior_logit,
@@ -592,7 +595,7 @@ impl Sensing {
             let pmf = fusion::mix_count_pmf(&evidence, max_count);
             let (map_count, _) = pmf.map();
 
-            let state = self.previous.entry(room.clone()).or_default();
+            let state = self.previous.entry(zone.clone()).or_default();
             state.presence_probability = probability;
 
             let desired_occupied = if state.occupied {
@@ -609,7 +612,7 @@ impl Sensing {
 
             if occupied_changed {
                 self.emit(
-                    room,
+                    zone,
                     EventKind::PresenceChanged,
                     EventPayload::Presence {
                         occupied,
@@ -621,7 +624,7 @@ impl Sensing {
             }
             if count_changed {
                 self.emit(
-                    room,
+                    zone,
                     EventKind::CountChanged,
                     EventPayload::Count { people: count },
                     t_ms,
@@ -630,33 +633,38 @@ impl Sensing {
             }
 
             self.record(
-                &format!("room.presence.{}", room.as_str()),
+                &format!("zone.presence.{}", zone.as_str()),
                 MeasurementValue::Scalar(probability),
                 "ratio",
                 Grade::Statistical,
                 stamp,
             )?;
 
-            room_summaries.insert(
-                room.clone(),
+            zone_summaries.insert(
+                zone.clone(),
                 if covered {
-                    RoomSummary::covered(room.clone(), probability, pmf)
+                    ZoneSummary::covered(zone.clone(), probability, pmf)
                 } else {
-                    RoomSummary::uncovered(room.clone(), max_count)
+                    ZoneSummary::uncovered(zone.clone(), max_count)
                 },
             );
         }
 
-        // 3. Floor escalation: rooms compose into floors (Slice 5).
-        emitted += self.process_floors(&room_summaries, t_ms, stamp, max_count)?;
-
-        // 4. Home escalation: zones compose into the whole home.
-        let zone_summaries = self
-            .zone_history
-            .last()
-            .map(|window| window.zones.clone())
-            .unwrap_or_default();
-        emitted += self.process_home(&zone_summaries, t_ms, stamp, max_count)?;
+        // 3. Zone escalation: zones compose into the whole home.
+        let zone_aggregates: Vec<ZoneAggregate> = zone_summaries
+            .values()
+            .map(|zs| ZoneAggregate {
+                zone: zs.zone.clone(),
+                presence_probability: Some(zs.presence_probability),
+                count: Some(zs.count),
+                count_confidence: zs.count_pmf.map().1,
+                count_pmf: Some(zs.count_pmf.clone()),
+                nodes: vec![],
+                attribution: None,
+                conflicts: vec![],
+            })
+            .collect();
+        emitted += self.process_home(&zone_aggregates, t_ms, stamp, max_count)?;
 
         self.record(
             "window.frames",
@@ -719,177 +727,24 @@ impl Sensing {
         Ok(emitted)
     }
 
-    /// Aggregate this window's room summaries into per-floor summaries, apply
-    /// floor hysteresis, emit floor-scoped events, and record floor and
-    /// attribution measurements (`fusion-sync.md` §2.5; `roadmap.md`, Slice 5).
-    ///
-    /// The hierarchy is read from the topology, so this is data-driven, never
-    /// hard-coded. Cross-room results (attribution, floor count) are reported
-    /// and labelled, never gated (`evaluation.md` §5.3).
-    fn process_floors(
-        &mut self,
-        room_summaries: &BTreeMap<RoomId, RoomSummary>,
-        t_ms: i64,
-        stamp: Timestamp,
-        max_count: usize,
-    ) -> Result<usize, SensingError> {
-        let mut emitted = 0usize;
-        let mut summaries = Vec::with_capacity(self.floors.len());
-        let floors = self.floors.clone();
-        for floor in &floors {
-            let room_ids = self.floor_rooms.get(floor).cloned().unwrap_or_default();
-            let rooms: Vec<RoomSummary> = room_ids
-                .iter()
-                .filter_map(|id| room_summaries.get(id).cloned())
-                .collect();
-            let summary = aggregate_floor(
-                floor.clone(),
-                &rooms,
-                self.config.room_gap,
-                self.config.p_hi,
-                max_count,
-            );
-            emitted += self.apply_floor(&summary, t_ms, stamp)?;
-            summaries.push(summary);
-        }
-        self.floor_history.push(FloorWindow {
-            t_ms,
-            floors: summaries,
-        });
-        Ok(emitted)
-    }
-
-    /// Apply one floor summary: debounced presence and count with floor-scoped
-    /// events, the floor and attribution measurements, and the ambiguity
-    /// conflict count.
-    fn apply_floor(
-        &mut self,
-        summary: &FloorSummary,
-        t_ms: i64,
-        stamp: Timestamp,
-    ) -> Result<usize, SensingError> {
-        let mut emitted = 0usize;
-        let (occupied_changed, count_changed, occupied, count, probability) = {
-            let state = self
-                .floor_previous
-                .entry(summary.floor.clone())
-                .or_default();
-            let mut occupied_changed = false;
-            if let Some(p) = summary.presence_probability {
-                state.presence_probability = p;
-                let desired_occupied = if state.occupied {
-                    p >= self.config.p_lo
-                } else {
-                    p >= self.config.p_hi
-                };
-                occupied_changed = debounce_occupied(state, desired_occupied, self.config.t_hold);
-            }
-            let mut count_changed = false;
-            if let Some(c) = summary.count {
-                let desired_count = if state.occupied { c } else { 0 };
-                count_changed = debounce_count(state, desired_count, self.config.t_hold);
-            }
-            (
-                occupied_changed,
-                count_changed,
-                state.occupied,
-                state.count,
-                summary.presence_probability,
-            )
-        };
-
-        if occupied_changed {
-            if let Some(p) = probability {
-                self.emit_floor(
-                    &summary.floor,
-                    EventKind::PresenceChanged,
-                    EventPayload::Presence {
-                        occupied,
-                        probability: p as f32,
-                    },
-                    t_ms,
-                )?;
-                emitted += 1;
-            }
-        }
-        if count_changed {
-            self.emit_floor(
-                &summary.floor,
-                EventKind::CountChanged,
-                EventPayload::Count { people: count },
-                t_ms,
-            )?;
-            emitted += 1;
-        }
-
-        if let Some(p) = summary.presence_probability {
-            self.record(
-                &format!("floor.presence.{}", summary.floor.as_str()),
-                MeasurementValue::Scalar(p),
-                "ratio",
-                Grade::Statistical,
-                stamp,
-            )?;
-        }
-        if let Some(count) = summary.count {
-            self.record(
-                &format!("floor.count.{}", summary.floor.as_str()),
-                MeasurementValue::Count(u64::from(count)),
-                "count",
-                Grade::Statistical,
-                stamp,
-            )?;
-            self.record(
-                &format!("floor.count.confidence.{}", summary.floor.as_str()),
-                MeasurementValue::Scalar(summary.count_confidence),
-                "ratio",
-                Grade::Statistical,
-                stamp,
-            )?;
-        }
-        self.record(
-            &format!("floor.attribution.{}", summary.floor.as_str()),
-            MeasurementValue::Flag(summary.attribution.is_some()),
-            "flag",
-            Grade::Deterministic,
-            stamp,
-        )?;
-        for conflict in &summary.conflicts {
-            match conflict {
-                Conflict::AmbiguousRooms { candidates, .. } => {
-                    self.record(
-                        "floor.conflict.ambiguous_rooms",
-                        MeasurementValue::Count(candidates.len() as u64),
-                        "count",
-                        Grade::Deterministic,
-                        stamp,
-                    )?;
-                }
-                // A whole-home ambiguity is reported at home scope, not here.
-                Conflict::AmbiguousFloors { .. } => {}
-            }
-        }
-        Ok(emitted)
-    }
-
-    /// Aggregate this window's floor summaries into the whole home, apply home
+    /// Aggregate this window's zone summaries into the whole home, apply home
     /// hysteresis, emit home-scoped events, and record home and whole-home
     /// attribution measurements (`fusion-sync.md` §2.5; `roadmap.md`, Slice 6).
     ///
-    /// Home presence soft-ORs the floors, home count convolves the floor count
-    /// PMFs, and the whole-home location names the strongest occupied floor (and
-    /// its confident room), withheld when two floors are ambiguous. The
-    /// hierarchy is read from the topology, so this is data-driven with no
-    /// per-floor special case. Cross-floor results are reported and labelled,
-    /// never gated (`evaluation.md` §5.3).
+    /// Home presence soft-ORs the zones, home count convolves the zone count
+    /// PMFs, and the whole-home location names the strongest occupied zone,
+    /// withheld when two zones are ambiguous. The hierarchy is read from the
+    /// topology, so this is data-driven with no per-zone special case.
+    /// Cross-zone results are reported and labelled, never gated
+    /// (`evaluation.md` §5.3).
     fn process_home(
         &mut self,
-        floors: &[FloorSummary],
+        zones: &[ZoneAggregate],
         t_ms: i64,
         stamp: Timestamp,
         max_count: usize,
     ) -> Result<usize, SensingError> {
-        let summary = aggregate_home(floors, self.config.home_gap, self.config.p_hi, max_count);
+        let summary = aggregate_home(zones, self.config.home_gap, self.config.p_hi, max_count);
         let mut emitted = 0usize;
 
         let (occupied_changed, count_changed, occupied, count, probability) = {
@@ -973,9 +828,9 @@ impl Sensing {
             stamp,
         )?;
         for conflict in &summary.conflicts {
-            if let Conflict::AmbiguousFloors { candidates } = conflict {
+            if let Conflict::AmbiguousZonesHome { candidates } = conflict {
                 self.record(
-                    "home.conflict.ambiguous_floors",
+                    "home.conflict.ambiguous_zones",
                     MeasurementValue::Count(candidates.len() as u64),
                     "count",
                     Grade::Deterministic,
@@ -1015,57 +870,13 @@ impl Sensing {
         Ok(())
     }
 
-    /// The floor a room belongs to, from the topology. `None` for a room that
-    /// is not in the topology.
-    fn floor_of_room(&self, room: &RoomId) -> Option<FloorId> {
-        self.topology
-            .model()
-            .rooms
-            .iter()
-            .find(|candidate| &candidate.id == room)
-            .map(|candidate| candidate.floor.clone())
-    }
-
-    /// Build and emit one edge-triggered floor-scoped event.
-    fn emit_floor(
-        &mut self,
-        floor: &FloorId,
-        kind: EventKind,
-        payload: EventPayload,
-        t_ms: i64,
-    ) -> Result<(), SensingError> {
-        let home = self.topology.home().id.clone();
-        let kind_label = format!("{kind:?}");
-        let event = Event {
-            id: format!(
-                "{}:{kind_label}:floor:{}:{t_ms}",
-                home.as_str(),
-                floor.as_str()
-            ),
-            home,
-            t_unix_ms: t_ms,
-            dedup_key: format!(
-                "{}:{kind_label}:floor:{}",
-                self.topology.home().id.as_str(),
-                floor.as_str()
-            ),
-            scope: EventScope::Floor(floor.clone()),
-            kind,
-            payload,
-            witness: Witness::Measured,
-        };
-        event.validate()?;
-        self.output.emit(&event)?;
-        Ok(())
-    }
-
-    /// Estimate one coarse pose per room from the window's per-node CSI.
+    /// Estimate one coarse pose per zone from the window's per-node CSI.
     ///
-    /// This is feature-level, within-room fusion (`fusion-sync.md` §2): each
+    /// This is feature-level, within-zone fusion (`fusion-sync.md` §2): each
     /// node contributes scalar torso-scatterer ranges derived from its own CSI,
     /// weighted by its calibration quality and clock health, and
-    /// [`crate::pose::estimate_room_pose`] combines them into a rigid torso. No
-    /// cross-node raw phase is combined (§3). A room with fewer than two nodes
+    /// [`crate::pose::estimate_zone_pose`] combines them into a rigid torso. No
+    /// cross-node raw phase is combined (§3). A zone with fewer than two nodes
     /// — or one that cannot form a torso — yields no pose, never a fabricated
     /// one.
     fn process_pose(
@@ -1073,14 +884,14 @@ impl Sensing {
         batch: &WindowBatch,
         stamp: Timestamp,
     ) -> Result<usize, SensingError> {
-        // Group this window's node envelopes by room, carrying each node's
+        // Group this window's node envelopes by zone, carrying each node's
         // position and fusion weight.
-        let mut by_room: BTreeMap<RoomId, Vec<RoomPoseEntry<'_>>> = BTreeMap::new();
+        let mut by_zone: BTreeMap<ZoneId, Vec<ZonePoseEntry<'_>>> = BTreeMap::new();
         for sensing_frame in &batch.frames {
             let SensingScope::Node(node) = sensing_frame.scope else {
                 continue;
             };
-            let Some(room) = self.topology.room_of(node).value.cloned() else {
+            let Some(zone) = self.topology.zone_of(node).value.flatten() else {
                 continue;
             };
             let Some(position) = self.topology.position(node).value else {
@@ -1088,7 +899,7 @@ impl Sensing {
             };
             let quality = self.node_calibration_quality(node);
             let weight = fusion::node_fusion_weight(quality, self.sync.weight(node));
-            by_room.entry(room).or_default().push((
+            by_zone.entry(zone.clone()).or_default().push((
                 node,
                 [f64::from(position[0]), f64::from(position[1])],
                 weight,
@@ -1105,7 +916,7 @@ impl Sensing {
 
         let t_ms = (batch.start.0 / 1_000_000) as i64;
         let mut emitted = 0usize;
-        for (room, entries) in &by_room {
+        for (zone, entries) in &by_zone {
             let contributor_nodes: Vec<NodeId> = entries.iter().map(|e| e.0).collect();
             let series: Vec<PoseNodeSeries> = entries
                 .iter()
@@ -1117,7 +928,7 @@ impl Sensing {
                 })
                 .collect();
             let request = PoseRequest {
-                scope: DetectionScope::Zone(room.clone()),
+                scope: DetectionScope::Zone(zone.clone()),
                 contributor_nodes,
                 subject: Some(SubjectId::new(0)),
                 span: TimeSpan {
@@ -1204,39 +1015,39 @@ impl Sensing {
         let window_ns = self.config.vitals_window_ns;
         let cutoff = batch.end.0.saturating_sub(window_ns);
 
-        // Append this window's per-node envelopes, grouped by room, and note
-        // which rooms saw frames (so a silent room is not re-estimated).
-        let mut touched: std::collections::BTreeSet<RoomId> = std::collections::BTreeSet::new();
+        // Append this window's per-node envelopes, grouped by zone, and note
+        // which zones saw frames (so a silent zone is not re-estimated).
+        let mut touched: std::collections::BTreeSet<ZoneId> = std::collections::BTreeSet::new();
         for sensing_frame in &batch.frames {
             let SensingScope::Node(node) = sensing_frame.scope else {
                 continue;
             };
-            let Some(room) = self.topology.room_of(node).value.cloned() else {
+            let Some(zone) = self.topology.zone_of(node).value.flatten() else {
                 continue;
             };
-            touched.insert(room.clone());
-            self.vitals_first_seen.entry(room.clone()).or_insert(
+            touched.insert(zone.clone());
+            self.vitals_first_seen.entry(zone.clone()).or_insert(
                 sensing_frame
                     .frames
                     .first()
                     .map_or(batch.end.0, |env| env.host_rx_mono_ns),
             );
-            let buffer = self.vitals_buffers.entry(room).or_default();
+            let buffer = self.vitals_buffers.entry(zone.clone()).or_default();
             buffer.extend(sensing_frame.frames.iter().cloned());
         }
 
         let mut emitted = 0usize;
-        let mut room_vitals: BTreeMap<RoomId, RoomVitals> = BTreeMap::new();
-        for room in touched {
+        let mut zone_vitals: BTreeMap<ZoneId, ZoneVitals> = BTreeMap::new();
+        for zone in touched {
             // Trim the buffer to the trailing vitals span.
-            if let Some(buffer) = self.vitals_buffers.get_mut(&room) {
+            if let Some(buffer) = self.vitals_buffers.get_mut(&zone) {
                 let keep_from = buffer
                     .iter()
                     .position(|env| env.host_rx_mono_ns >= cutoff)
                     .unwrap_or(buffer.len());
                 buffer.drain(0..keep_from);
             }
-            let Some(first_seen) = self.vitals_first_seen.get(&room).copied() else {
+            let Some(first_seen) = self.vitals_first_seen.get(&zone).copied() else {
                 continue;
             };
             // Ready once a full span has been observed since accumulation
@@ -1244,7 +1055,7 @@ impl Sensing {
             if batch.end.0.saturating_sub(first_seen) < window_ns {
                 continue;
             }
-            let buffer = match self.vitals_buffers.get(&room) {
+            let buffer = match self.vitals_buffers.get(&zone) {
                 Some(buffer) if buffer.len() >= 2 => buffer.clone(),
                 _ => continue,
             };
@@ -1301,7 +1112,7 @@ impl Sensing {
 
             let reading = VitalsReading {
                 subject: None,
-                room: room.clone(),
+                zone: zone.clone(),
                 span: TimeSpan {
                     start_mono_ns: start_ns,
                     end_mono_ns: end_ns,
@@ -1315,10 +1126,10 @@ impl Sensing {
             };
             reading.validate()?;
 
-            room_vitals.insert(
-                room.clone(),
-                RoomVitals {
-                    room: room.clone(),
+            zone_vitals.insert(
+                zone.clone(),
+                ZoneVitals {
+                    zone: zone.clone(),
                     breathing: reading.breathing,
                     heart_rate: reading.heart_rate,
                 },
@@ -1342,7 +1153,7 @@ impl Sensing {
 
             let t_ms = (batch.end.0 / 1_000_000) as i64;
             if let Some(estimate) = &reading.breathing {
-                self.emit_vital(&room, "breathing_rate", estimate.value, "brpm", t_ms)?;
+                self.emit_zone_vital(&zone, "breathing_rate", estimate.value, "brpm", t_ms)?;
                 emitted += 1;
                 self.record(
                     "vitals.breathing.brpm",
@@ -1360,7 +1171,7 @@ impl Sensing {
                 )?;
             }
             if let Some(estimate) = &reading.heart_rate {
-                self.emit_vital(&room, "heart_rate", estimate.value, "bpm", t_ms)?;
+                self.emit_zone_vital(&zone, "heart_rate", estimate.value, "bpm", t_ms)?;
                 emitted += 1;
                 self.record(
                     "vitals.heart.bpm",
@@ -1379,95 +1190,44 @@ impl Sensing {
             }
         }
 
-        // Aggregate the room vitals per floor by highest-confidence selection
-        // and emit floor-scoped vitals events (`fusion-sync.md` §2.2; Slice 5).
-        let mut by_floor: BTreeMap<FloorId, Vec<RoomVitals>> = BTreeMap::new();
-        for (room, vitals) in &room_vitals {
-            if let Some(floor) = self.floor_of_room(room) {
-                by_floor.entry(floor).or_default().push(vitals.clone());
-            }
+        let t_ms = (batch.end.0 / 1_000_000) as i64;
+
+        // Aggregate the zone vitals by highest-confidence selection
+        // and emit zone-scoped vitals events (`fusion-sync.md` §2.2).
+        let aggregated = aggregate_home_vitals(
+            &zone_vitals.values().cloned().collect::<Vec<_>>(),
+            self.config.vitals_floor_min_confidence,
+        );
+        if let Some((zone_id, estimate)) = &aggregated.breathing {
+            self.emit_zone_vital(zone_id, "breathing_rate", estimate.value, "brpm", t_ms)?;
+            emitted += 1;
+            self.record(
+                "vitals.zone.breathing.brpm",
+                MeasurementValue::Scalar(f64::from(estimate.value)),
+                "brpm",
+                Grade::Statistical,
+                stamp,
+            )?;
         }
-        let floor_t_ms = (batch.end.0 / 1_000_000) as i64;
-        for (floor, rooms) in by_floor {
-            let aggregated =
-                aggregate_floor_vitals(&rooms, self.config.vitals_floor_min_confidence);
-            if let Some((_, estimate)) = &aggregated.breathing {
-                self.emit_floor_vital(
-                    &floor,
-                    "breathing_rate",
-                    estimate.value,
-                    "brpm",
-                    floor_t_ms,
-                )?;
-                emitted += 1;
-                self.record(
-                    "vitals.floor.breathing.brpm",
-                    MeasurementValue::Scalar(f64::from(estimate.value)),
-                    "brpm",
-                    Grade::Statistical,
-                    stamp,
-                )?;
-            }
-            if let Some((_, estimate)) = &aggregated.heart_rate {
-                self.emit_floor_vital(&floor, "heart_rate", estimate.value, "bpm", floor_t_ms)?;
-                emitted += 1;
-                self.record(
-                    "vitals.floor.heart.bpm",
-                    MeasurementValue::Scalar(f64::from(estimate.value)),
-                    "bpm",
-                    Grade::Statistical,
-                    stamp,
-                )?;
-            }
+        if let Some((zone_id, estimate)) = &aggregated.heart_rate {
+            self.emit_zone_vital(zone_id, "heart_rate", estimate.value, "bpm", t_ms)?;
+            emitted += 1;
+            self.record(
+                "vitals.zone.heart.bpm",
+                MeasurementValue::Scalar(f64::from(estimate.value)),
+                "bpm",
+                Grade::Statistical,
+                stamp,
+            )?;
         }
 
         Ok(emitted)
     }
 
-    /// Emit one floor-scoped vitals event carrying a measured rate.
-    fn emit_floor_vital(
+    /// Emit one zone-scoped vitals event carrying a measured rate.
+    fn emit_zone_vital(
         &mut self,
-        floor: &FloorId,
-        metric: &str,
-        value: f32,
-        unit: &str,
-        t_ms: i64,
-    ) -> Result<(), SensingError> {
-        let home = self.topology.home().id.clone();
-        let event = Event {
-            id: format!(
-                "{}:vital:floor:{}:{}:{}",
-                home.as_str(),
-                floor.as_str(),
-                metric,
-                t_ms
-            ),
-            home,
-            t_unix_ms: t_ms,
-            dedup_key: format!(
-                "{}:vital:floor:{}:{}",
-                self.topology.home().id.as_str(),
-                floor.as_str(),
-                metric
-            ),
-            scope: EventScope::Floor(floor.clone()),
-            kind: EventKind::VitalAlert,
-            payload: EventPayload::Vitals {
-                metric: metric.to_string(),
-                value,
-                unit: unit.to_string(),
-            },
-            witness: Witness::Measured,
-        };
-        event.validate()?;
-        self.output.emit(&event)?;
-        Ok(())
-    }
-
-    /// Emit one vitals event carrying a measured rate.
-    fn emit_vital(
-        &mut self,
-        room: &RoomId,
+        zone: &ZoneId,
         metric: &str,
         value: f32,
         unit: &str,
@@ -1478,7 +1238,7 @@ impl Sensing {
             id: format!(
                 "{}:vital:{}:{}:{}",
                 home.as_str(),
-                room.as_str(),
+                zone.as_str(),
                 metric,
                 t_ms
             ),
@@ -1487,10 +1247,10 @@ impl Sensing {
             dedup_key: format!(
                 "{}:vital:{}:{}",
                 self.topology.home().id.as_str(),
-                room.as_str(),
+                zone.as_str(),
                 metric
             ),
-            scope: EventScope::Zone(room.clone()),
+            scope: EventScope::Zone(zone.clone()),
             kind: EventKind::VitalAlert,
             payload: EventPayload::Vitals {
                 metric: metric.to_string(),
@@ -1507,22 +1267,22 @@ impl Sensing {
     /// Build and emit one edge-triggered event.
     fn emit(
         &mut self,
-        room: &RoomId,
+        zone: &ZoneId,
         kind: EventKind,
         payload: EventPayload,
         t_ms: i64,
     ) -> Result<(), SensingError> {
         let home = self.topology.home().id.clone();
-        let scope = EventScope::Zone(room.clone());
+        let scope = EventScope::Zone(zone.clone());
         let kind_label = format!("{kind:?}");
         let event = Event {
-            id: format!("{}:{kind_label}:{}:{t_ms}", home.as_str(), room.as_str()),
+            id: format!("{}:{kind_label}:{}:{t_ms}", home.as_str(), zone.as_str()),
             home,
             t_unix_ms: t_ms,
             dedup_key: format!(
                 "{}:{kind_label}:{}",
                 self.topology.home().id.as_str(),
-                room.as_str()
+                zone.as_str()
             ),
             scope,
             kind,

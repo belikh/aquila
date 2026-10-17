@@ -106,6 +106,8 @@ pub struct FirmwareRef {
 pub struct Node {
     /// The dense identity of the node.
     pub id: NodeId,
+    /// The zone the node contributes to.
+    pub zone: ZoneId,
     /// Human-readable name.
     pub name: String,
     /// The factory MAC address.
@@ -124,6 +126,7 @@ impl Node {
     /// Validate identity and finiteness.
     pub fn validate(&self) -> Result<(), ValidationError> {
         self.id.validate_provisioned()?;
+        self.zone.validate()?;
         require_non_empty("Node.name", &self.name)?;
         require_non_empty("Node.firmware.version", &self.firmware.version)?;
         if self.firmware.sha256 == Some([0u8; 32]) {

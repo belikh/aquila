@@ -27,16 +27,18 @@ mod tests;
 
 pub use clock::FakeClock;
 pub use fixture::{Fixture, FixtureError};
-pub use generator::{topology_for, topology_for_floors, DeterministicCsiGenerator, FloorPlan};
+pub use generator::{
+    topology_for, topology_for_floors, DeterministicCsiGenerator, ZonePlan,
+};
 pub use metrics::RecordingMetricSink;
 pub use models::{FakePoseModel, FakeVitalsModel};
 pub use ota::{
     sign_image, signing_key, verify_image, verifying_key, FakeOtaNode, FakeOtaTransport,
 };
 pub use scoring::{
-    count_mae, floor_count_mae, floor_presence_f1, home_count_mae, home_floor_attribution_accuracy,
-    home_presence_f1, presence_f1, room_attribution_accuracy, torso_pck20, torso_span, vitals_mae,
-    vitals_reference, window_index, FloorRooms, PckScore, PresenceScore, TorsoPoint,
+    count_mae, home_count_mae, home_floor_attribution_accuracy, home_presence_f1, presence_f1,
+    room_attribution_accuracy, torso_pck20, torso_span, vitals_mae, vitals_reference, window_index,
+    zone_count_mae, zone_presence_f1, PckScore, PresenceScore, TorsoPoint,
 };
 // The evaluation `Sink` adapter has one canonical home — `aquila-evaluation`
 // (`interface-register.md` "Seams and their adapters"); testkit re-exports it so

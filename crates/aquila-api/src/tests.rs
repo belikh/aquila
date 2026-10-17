@@ -11,8 +11,8 @@ use aquila_geometry::Topology;
 use aquila_metrics::{Measurement, MetricSink, MetricsError};
 use aquila_sensing::Sink;
 use aquila_types::{
-    sha256, DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Floor, Home,
-    MacAddr, Node, NodeId, Room, RoomKind, Slug, Witness, Zone, CONTRACT_VERSION,
+    sha256, DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Home, MacAddr,
+    Node, NodeId, Slug, Witness, Zone, CONTRACT_VERSION,
 };
 use aquila_wire::{ControlBody, ControlMessage, OtaAck, OtaAckStatus, OtaOutcome, OtaResult};
 use ed25519_dalek::{Signer, SigningKey};
@@ -42,35 +42,20 @@ fn topology() -> Topology {
             time_zone: "Australia/Sydney".to_string(),
             contract: CONTRACT_VERSION,
         },
-        floors: vec![Floor {
-            id: floor.clone(),
-            home: home.clone(),
-            name: "Ground".to_string(),
-            level: 0,
-            elevation_m: 0.0,
-        }],
-        rooms: vec![Room {
+        zones: vec![aquila_types::Zone {
             id: room.clone(),
-            floor: floor.clone(),
-            name: "Living".to_string(),
-            kind: RoomKind::Living,
             origin_home_m: [0.0, 0.0, 0.0],
-            yaw_deg: 0.0,
-            area_m2: None,
-        }],
-        zones: vec![Zone {
-            id: room.clone(),
-            room: Some(room.clone()),
+            extent_home_m: [5.0, 5.0, 5.0],
             name: "Living".to_string(),
         }],
         nodes: vec![Node {
             id: NodeId(1),
-            room: room.clone(),
+            zone: room.clone(),
             name: "node-1".to_string(),
             mac: MacAddr([0, 0, 0, 0, 0, 1]),
             device: DeviceType::Esp32S3,
             firmware,
-            pos_room_m: Some([0.0, 0.0, 2.4]),
+            pos_home_m: [0.0, 0.0, 2.4],
             installed_unix_ms: 0,
         }],
         pairs: vec![],

@@ -52,39 +52,15 @@ pub(crate) fn build(topology: &Topology, instance_id: &str) -> Projections {
         node_target.insert(node.id.0.to_string(), target);
     }
 
-    let floors: Vec<Value> = model
-        .floors
-        .iter()
-        .map(|floor| {
-            json!({
-                "id": floor.id.as_str(),
-                "name": floor.name,
-                "level": floor.level,
-                "elevation_m": floor.elevation_m,
-            })
-        })
-        .collect();
-    let rooms: Vec<Value> = model
-        .rooms
-        .iter()
-        .map(|room| {
-            json!({
-                "id": room.id.as_str(),
-                "floor_id": room.floor.as_str(),
-                "name": room.name,
-                "kind": room.kind,
-            })
-        })
-        .collect();
-
     let zones: Vec<Value> = model
         .zones
         .iter()
         .map(|zone| {
             json!({
                 "id": zone.id.as_str(),
-                "room_id": zone.room.as_ref().map(|r| r.as_str()),
                 "name": zone.name,
+                "origin_home_m": zone.origin_home_m,
+                "extent_home_m": zone.extent_home_m,
             })
         })
         .collect();
@@ -93,8 +69,6 @@ pub(crate) fn build(topology: &Topology, instance_id: &str) -> Projections {
         "instance_id": instance_id,
         "contract": home.contract.to_string(),
         "home": { "id": home.id.as_str(), "name": home.name, "time_zone": home.time_zone },
-        "floors": floors,
-        "rooms": rooms,
         "zones": zones,
         "metrics": metric_vocabulary(),
     });
@@ -112,7 +86,7 @@ fn node_json(node: &Node) -> Value {
     json!({
         "id": node.id.0.to_string(),
         "name": node.name,
-        "roomId": node.room.as_str(),
+        "pos_home_m": node.pos_home_m,
         "mac": mac_string(node),
         "hardware": hardware_name(node.device),
         "firmware": node_firmware_json(node),

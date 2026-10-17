@@ -105,32 +105,19 @@ fn home() -> Home {
     }
 }
 
-fn floor() -> Floor {
-    Floor {
-        id: slug("ground-floor"),
-        home: slug("home-01"),
-        name: "Ground".to_string(),
-        level: 0,
-        elevation_m: 0.0,
-    }
-}
-
-fn room() -> Room {
-    Room {
+fn zone() -> Zone {
+    Zone {
         id: slug("kitchen-01"),
-        floor: slug("ground-floor"),
-        name: "Kitchen".to_string(),
-        kind: RoomKind::Kitchen,
         origin_home_m: [0.0, 0.0, 0.0],
-        yaw_deg: 0.0,
-        area_m2: Some(12.5),
+        extent_home_m: [5.0, 5.0, 5.0],
+        name: "Kitchen".to_string(),
     }
 }
 
-fn topology_node(id: u16, room_id: &str) -> Node {
+fn topology_node(id: u16, zone_id: &str) -> Node {
     Node {
         id: node(id),
-        room: slug(room_id),
+        zone: slug(zone_id),
         name: format!("node-{id}"),
         mac: MacAddr([0x02, 0, 0, 0, 0, id as u8]),
         device: DeviceType::Esp32S3,
@@ -138,7 +125,7 @@ fn topology_node(id: u16, room_id: &str) -> Node {
             version: "1.0.0".to_string(),
             sha256: Some([7u8; 32]),
         },
-        pos_room_m: Some([1.0, 2.0, 2.5]),
+        pos_home_m: [1.0, 2.0, 2.5],
         installed_unix_ms: 1_700_000_000_000,
     }
 }
@@ -146,13 +133,7 @@ fn topology_node(id: u16, room_id: &str) -> Node {
 fn topology() -> Topology {
     Topology {
         home: home(),
-        floors: vec![floor()],
-        rooms: vec![room()],
-        zones: vec![Zone {
-            id: slug("kitchen-01"),
-            room: Some(slug("kitchen-01")),
-            name: "Kitchen".to_string(),
-        }],
+        zones: vec![zone()],
         nodes: vec![
             topology_node(1, "kitchen-01"),
             topology_node(2, "kitchen-01"),
@@ -162,7 +143,6 @@ fn topology() -> Topology {
             home: slug("home-01"),
             tx: node(1),
             rx: node(2),
-            scope: PairScope::Room,
         }],
     }
 }
@@ -283,7 +263,7 @@ fn baseline() -> Baseline {
 fn vitals_reading() -> VitalsReading {
     VitalsReading {
         subject: Some(SubjectId(1)),
-        room: slug("kitchen-01"),
+        zone: slug("kitchen-01"),
         span: span(),
         breathing: Some(Estimate {
             value: 15.0,
@@ -381,13 +361,13 @@ fn every_record_round_trips() {
         frames: vec![envelope()],
     });
     round_trip(&home());
-    round_trip(&floor());
-    round_trip(&room());
+    round_trip(&zone());
+    round_trip(&zone());
     round_trip(&topology_node(1, "kitchen-01"));
     round_trip(&topology());
     round_trip(&Pose {
         subject: SubjectId(1),
-        room: slug("kitchen-01"),
+        zone: slug("kitchen-01"),
         t_unix_ms: 1_700_000_000_000,
         keys: pose_keys(),
         score: 0.75,
@@ -537,7 +517,7 @@ fn sensing_frame_scope_invariant() {
 fn pose_invariants() {
     let valid = Pose {
         subject: SubjectId(1),
-        room: slug("kitchen-01"),
+        zone: slug("kitchen-01"),
         t_unix_ms: 0,
         keys: pose_keys(),
         score: 0.5,
@@ -686,7 +666,7 @@ fn topology_referential_integrity() {
     assert!(duplicate_node.validate().is_err());
 
     let mut missing_room = topology();
-    missing_room.nodes[0].room = slug("nowhere");
+    missing_room.nodes[0].zone = slug("nowhere");
     assert!(missing_room.validate().is_err());
 
     let mut unprovisioned = topology();
@@ -697,19 +677,9 @@ fn topology_referential_integrity() {
     self_pair.pairs[0].rx = self_pair.pairs[0].tx;
     assert!(self_pair.validate().is_err());
 
-    let mut mismatched_scope = topology();
-    mismatched_scope.pairs[0].scope = PairScope::CrossFloor;
-    assert!(mismatched_scope.validate().is_err());
-
-    let mut duplicate_level = topology();
-    duplicate_level.floors.push(Floor {
-        id: slug("first-floor"),
-        home: slug("home-01"),
-        name: "First".to_string(),
-        level: 0,
-        elevation_m: 3.0,
-    });
-    assert!(duplicate_level.validate().is_err());
+    let mut duplicate_zone = topology();
+    duplicate_zone.zones.push(zone());
+    assert!(duplicate_zone.validate().is_err());
 }
 
 #[test]

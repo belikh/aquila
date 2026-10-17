@@ -11,10 +11,9 @@
 
 use std::collections::BTreeMap;
 
-use aquila_sensing::{FloorWindow, HomeWindow};
+use aquila_sensing::{HomeWindow, ZoneWindow};
 use aquila_types::{
-    Event, EventKind, EventPayload, EventScope, FloorId, GroundTruthRecord, KeypointId, Pose,
-    RoomId,
+    Event, EventKind, EventPayload, EventScope, GroundTruthRecord, KeypointId, Pose, ZoneId,
 };
 
 /// A binary-classification confusion matrix and its derived scores.
@@ -85,7 +84,7 @@ pub fn presence_f1(
     hop_ms: i64,
 ) -> PresenceScore {
     // Ground truth: window → room → occupied-if-any.
-    let mut truth: BTreeMap<i64, BTreeMap<RoomId, bool>> = BTreeMap::new();
+    let mut truth: BTreeMap<i64, BTreeMap<ZoneId, bool>> = BTreeMap::new();
     for record in ground_truth {
         if let (EventScope::Zone(room), EventPayload::Presence { occupied, .. }) =
             (&record.scope, &record.payload)
@@ -123,7 +122,7 @@ pub fn presence_f1(
 /// ground truth.
 #[must_use]
 pub fn count_mae(events: &[Event], ground_truth: &[GroundTruthRecord], hop_ms: i64) -> f64 {
-    let mut truth: BTreeMap<i64, BTreeMap<RoomId, u8>> = BTreeMap::new();
+    let mut truth: BTreeMap<i64, BTreeMap<ZoneId, u8>> = BTreeMap::new();
     for record in ground_truth {
         if let (EventScope::Zone(room), EventPayload::Count { people }) =
             (&record.scope, &record.payload)
@@ -159,14 +158,14 @@ pub fn count_mae(events: &[Event], ground_truth: &[GroundTruthRecord], hop_ms: i
 
 /// The room → floor grouping the floor scorers need: each floor and the rooms
 /// it contains, in canonical order.
-pub type FloorRooms = Vec<(FloorId, Vec<RoomId>)>;
+pub type ZoneRooms = Vec<(ZoneId, Vec<ZoneId>)>;
 
 /// The per-window room presence truth, aggregated from the ground-truth records.
 fn room_presence_truth(
     ground_truth: &[GroundTruthRecord],
     hop_ms: i64,
-) -> BTreeMap<i64, BTreeMap<RoomId, bool>> {
-    let mut truth: BTreeMap<i64, BTreeMap<RoomId, bool>> = BTreeMap::new();
+) -> BTreeMap<i64, BTreeMap<ZoneId, bool>> {
+    let mut truth: BTreeMap<i64, BTreeMap<ZoneId, bool>> = BTreeMap::new();
     for record in ground_truth {
         if let (EventScope::Zone(room), EventPayload::Presence { occupied, .. }) =
             (&record.scope, &record.payload)
@@ -186,8 +185,8 @@ fn room_presence_truth(
 fn room_count_truth(
     ground_truth: &[GroundTruthRecord],
     hop_ms: i64,
-) -> BTreeMap<i64, BTreeMap<RoomId, u8>> {
-    let mut truth: BTreeMap<i64, BTreeMap<RoomId, u8>> = BTreeMap::new();
+) -> BTreeMap<i64, BTreeMap<ZoneId, u8>> {
+    let mut truth: BTreeMap<i64, BTreeMap<ZoneId, u8>> = BTreeMap::new();
     for record in ground_truth {
         if let (EventScope::Zone(room), EventPayload::Count { people }) =
             (&record.scope, &record.payload)
@@ -203,13 +202,13 @@ fn room_count_truth(
 
 /// The per-window floor presence truth: the union (logical OR) of the floor's
 /// rooms' presence.
-fn floor_presence_truth(
+fn zone_presence_truth(
     ground_truth: &[GroundTruthRecord],
-    floor_rooms: &FloorRooms,
+    floor_rooms: &ZoneRooms,
     hop_ms: i64,
-) -> BTreeMap<i64, BTreeMap<FloorId, bool>> {
+) -> BTreeMap<i64, BTreeMap<ZoneId, bool>> {
     let room_truth = room_presence_truth(ground_truth, hop_ms);
-    let mut truth: BTreeMap<i64, BTreeMap<FloorId, bool>> = BTreeMap::new();
+    let mut truth: BTreeMap<i64, BTreeMap<ZoneId, bool>> = BTreeMap::new();
     for (window, rooms) in &room_truth {
         let entry = truth.entry(*window).or_default();
         for (floor, ids) in floor_rooms {
@@ -225,11 +224,11 @@ fn floor_presence_truth(
 /// The per-window floor count truth: the sum of the floor's rooms' counts.
 fn floor_count_truth(
     ground_truth: &[GroundTruthRecord],
-    floor_rooms: &FloorRooms,
+    floor_rooms: &ZoneRooms,
     hop_ms: i64,
-) -> BTreeMap<i64, BTreeMap<FloorId, u8>> {
+) -> BTreeMap<i64, BTreeMap<ZoneId, u8>> {
     let room_truth = room_count_truth(ground_truth, hop_ms);
-    let mut truth: BTreeMap<i64, BTreeMap<FloorId, u8>> = BTreeMap::new();
+    let mut truth: BTreeMap<i64, BTreeMap<ZoneId, u8>> = BTreeMap::new();
     for (window, rooms) in &room_truth {
         let entry = truth.entry(*window).or_default();
         for (floor, ids) in floor_rooms {
@@ -244,42 +243,42 @@ fn floor_count_truth(
 }
 
 /// Group floor presence-change events by window, in deterministic event order.
-fn floor_presence_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(FloorId, bool)>> {
+fn zone_presence_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(ZoneId, bool)>> {
     let mut sorted: Vec<&Event> = events
         .iter()
         .filter(|e| e.kind == EventKind::PresenceChanged)
         .collect();
     sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
-    let mut changes: BTreeMap<i64, Vec<(FloorId, bool)>> = BTreeMap::new();
+    let mut changes: BTreeMap<i64, Vec<(ZoneId, bool)>> = BTreeMap::new();
     for event in sorted {
-        if let (EventScope::Floor(floor), EventPayload::Presence { occupied, .. }) =
+        if let (EventScope::Zone(zone), EventPayload::Presence { occupied, .. }) =
             (&event.scope, &event.payload)
         {
             changes
                 .entry(window_index(event.t_unix_ms, hop_ms))
                 .or_default()
-                .push((floor.clone(), *occupied));
+                .push((zone.clone(), *occupied));
         }
     }
     changes
 }
 
-/// Group floor count-change events by window, in deterministic event order.
-fn floor_count_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(FloorId, u8)>> {
+/// Group zone count-change events by window, in deterministic event order.
+fn zone_count_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(ZoneId, u8)>> {
     let mut sorted: Vec<&Event> = events
         .iter()
         .filter(|e| e.kind == EventKind::CountChanged)
         .collect();
     sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
-    let mut changes: BTreeMap<i64, Vec<(FloorId, u8)>> = BTreeMap::new();
+    let mut changes: BTreeMap<i64, Vec<(ZoneId, u8)>> = BTreeMap::new();
     for event in sorted {
-        if let (EventScope::Floor(floor), EventPayload::Count { people }) =
+        if let (EventScope::Zone(zone), EventPayload::Count { people }) =
             (&event.scope, &event.payload)
         {
             changes
                 .entry(window_index(event.t_unix_ms, hop_ms))
                 .or_default()
-                .push((floor.clone(), *people));
+                .push((zone.clone(), *people));
         }
     }
     changes
@@ -289,14 +288,14 @@ fn floor_count_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(Floo
 /// truth (`roadmap.md`, Slice 5). Floor predictions come from the core's
 /// floor-scoped presence events.
 #[must_use]
-pub fn floor_presence_f1(
+pub fn zone_presence_f1(
     events: &[Event],
     ground_truth: &[GroundTruthRecord],
-    floor_rooms: &FloorRooms,
+    floor_rooms: &ZoneRooms,
     hop_ms: i64,
 ) -> PresenceScore {
-    let truth = floor_presence_truth(ground_truth, floor_rooms, hop_ms);
-    let changes = floor_presence_changes(events, hop_ms);
+    let truth = zone_presence_truth(ground_truth, floor_rooms, hop_ms);
+    let changes = zone_presence_changes(events, hop_ms);
     let predicted = replay(&changes, truth.keys().copied());
 
     let (mut tp, mut fp, mut fn_, mut tn) = (0u64, 0u64, 0u64, 0u64);
@@ -319,14 +318,14 @@ pub fn floor_presence_f1(
 /// The mean absolute error of the floor count timeline against the summed room
 /// ground truth, with its paired sample count (`roadmap.md`, Slice 5).
 #[must_use]
-pub fn floor_count_mae(
+pub fn zone_count_mae(
     events: &[Event],
     ground_truth: &[GroundTruthRecord],
-    floor_rooms: &FloorRooms,
+    floor_rooms: &ZoneRooms,
     hop_ms: i64,
 ) -> (f64, u64) {
     let truth = floor_count_truth(ground_truth, floor_rooms, hop_ms);
-    let changes = floor_count_changes(events, hop_ms);
+    let changes = zone_count_changes(events, hop_ms);
     let predicted = replay(&changes, truth.keys().copied());
 
     let mut total = 0.0_f64;
@@ -356,12 +355,12 @@ pub fn floor_count_mae(
 /// not inflate or deflate the number. Returns `(accuracy, paired_windows)`.
 #[must_use]
 pub fn room_attribution_accuracy(
-    history: &[FloorWindow],
+    history: &[ZoneWindow],
     ground_truth: &[GroundTruthRecord],
-    floor_rooms: &FloorRooms,
+    floor_rooms: &ZoneRooms,
     hop_ms: i64,
 ) -> (f64, u64) {
-    let rooms_by_floor: BTreeMap<FloorId, &Vec<RoomId>> = floor_rooms
+    let rooms_by_floor: BTreeMap<ZoneId, &Vec<ZoneId>> = floor_rooms
         .iter()
         .map(|(floor, rooms)| (floor.clone(), rooms))
         .collect();
@@ -374,11 +373,11 @@ pub fn room_attribution_accuracy(
         let Some(rooms) = room_truth.get(&window_index) else {
             continue;
         };
-        for floor in &window.floors {
-            let Some(floor_room_ids) = rooms_by_floor.get(&floor.floor) else {
+        for zone_agg in &window.zones {
+            let Some(floor_room_ids) = rooms_by_floor.get(&zone_agg.zone) else {
                 continue;
             };
-            let occupied: Vec<&RoomId> = floor_room_ids
+            let occupied: Vec<&ZoneId> = floor_room_ids
                 .iter()
                 .filter(|room| rooms.get(*room).copied().unwrap_or(false))
                 .collect();
@@ -386,7 +385,7 @@ pub fn room_attribution_accuracy(
                 continue;
             }
             total += 1;
-            if floor.attribution.as_ref() == Some(occupied[0]) {
+            if zone_agg.attribution.as_ref() == Some(occupied[0]) {
                 correct += 1;
             }
         }
@@ -456,13 +455,13 @@ pub fn vitals_mae(events: &[Event], metric: &str, reference: f32) -> (f64, usize
 }
 
 /// Group presence-change events by window, in deterministic event order.
-fn presence_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(RoomId, bool)>> {
+fn presence_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(ZoneId, bool)>> {
     let mut sorted: Vec<&Event> = events
         .iter()
         .filter(|e| e.kind == EventKind::PresenceChanged)
         .collect();
     sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
-    let mut changes: BTreeMap<i64, Vec<(RoomId, bool)>> = BTreeMap::new();
+    let mut changes: BTreeMap<i64, Vec<(ZoneId, bool)>> = BTreeMap::new();
     for event in sorted {
         if let (EventScope::Zone(room), EventPayload::Presence { occupied, .. }) =
             (&event.scope, &event.payload)
@@ -477,13 +476,13 @@ fn presence_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(RoomId,
 }
 
 /// Group count-change events by window, in deterministic event order.
-fn count_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(RoomId, u8)>> {
+fn count_changes(events: &[Event], hop_ms: i64) -> BTreeMap<i64, Vec<(ZoneId, u8)>> {
     let mut sorted: Vec<&Event> = events
         .iter()
         .filter(|e| e.kind == EventKind::CountChanged)
         .collect();
     sorted.sort_by_key(|e| (e.t_unix_ms, e.id.clone()));
-    let mut changes: BTreeMap<i64, Vec<(RoomId, u8)>> = BTreeMap::new();
+    let mut changes: BTreeMap<i64, Vec<(ZoneId, u8)>> = BTreeMap::new();
     for event in sorted {
         if let (EventScope::Zone(room), EventPayload::Count { people }) =
             (&event.scope, &event.payload)
@@ -706,7 +705,7 @@ fn nearest_reference<'a>(
     let mut best: Option<&Pose> = None;
     let mut best_delta = i64::MAX;
     for reference in references {
-        if reference.room != prediction.room {
+        if reference.zone != prediction.zone {
             continue;
         }
         let delta = (reference.t_unix_ms - prediction.t_unix_ms).abs();
@@ -860,7 +859,7 @@ pub fn home_count_mae(
 pub fn home_floor_attribution_accuracy(
     history: &[HomeWindow],
     ground_truth: &[GroundTruthRecord],
-    floor_rooms: &FloorRooms,
+    floor_rooms: &ZoneRooms,
     hop_ms: i64,
 ) -> (f64, u64) {
     let room_truth = room_presence_truth(ground_truth, hop_ms);
@@ -872,7 +871,7 @@ pub fn home_floor_attribution_accuracy(
         let Some(rooms) = room_truth.get(&window_index) else {
             continue;
         };
-        let mut occupied_floors: Vec<&FloorId> = floor_rooms
+        let mut occupied_floors: Vec<&ZoneId> = floor_rooms
             .iter()
             .filter(|(_, ids)| {
                 ids.iter()
@@ -888,8 +887,8 @@ pub fn home_floor_attribution_accuracy(
             .home
             .attribution
             .as_ref()
-            .map(|location| &location.floor);
-        if attributed == Some(occupied_floors.remove(0)) {
+            .map(|location| location.zone.as_ref());
+        if attributed.flatten() == Some(occupied_floors.remove(0)) {
             correct += 1;
         }
     }

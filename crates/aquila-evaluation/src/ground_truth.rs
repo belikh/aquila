@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 
 use aquila_simulator::{SceneScript, SimConfig, SimulatorSource};
 use aquila_types::{
-    sha256, to_hex, CoreTime, EventPayload, EventScope, GroundTruthRecord, GtKind, RoomId,
-    SessionId, TimeWindow,
+    sha256, to_hex, CoreTime, EventPayload, EventScope, GroundTruthRecord, GtKind, SessionId,
+    TimeWindow, ZoneId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -119,8 +119,8 @@ impl ReferenceProvenance {
 pub struct EvalScope {
     /// The sessions the claim covers.
     pub sessions: Vec<SessionId>,
-    /// The rooms the claim covers.
-    pub rooms: Vec<RoomId>,
+    /// The zones the claim covers.
+    pub zones: Vec<ZoneId>,
 }
 
 /// An offline reference label source. Never a runtime input.
@@ -269,18 +269,18 @@ impl GroundTruth for FixtureGroundTruth {
     }
 
     fn coverage(&self, scope: &EvalScope) -> Coverage {
-        let labelled: BTreeSet<&RoomId> = self
+        let labelled: BTreeSet<&ZoneId> = self
             .records
             .iter()
             .filter_map(|record| match &record.scope {
-                EventScope::Zone(room) => Some(room),
+                EventScope::Zone(zone) => Some(zone),
                 _ => None,
             })
             .collect();
-        let total = if scope.rooms.is_empty() {
+        let total = if scope.zones.is_empty() {
             labelled.len()
         } else {
-            scope.rooms.len()
+            scope.zones.len()
         };
         Coverage {
             labelled: labelled.len().min(total),
@@ -406,18 +406,18 @@ impl GroundTruth for ReferenceVitalsGroundTruth {
     }
 
     fn coverage(&self, scope: &EvalScope) -> Coverage {
-        let labelled: BTreeSet<&RoomId> = self
+        let labelled: BTreeSet<&ZoneId> = self
             .records
             .iter()
             .filter_map(|record| match &record.scope {
-                EventScope::Zone(room) => Some(room),
+                EventScope::Zone(zone) => Some(zone),
                 _ => None,
             })
             .collect();
-        let total = if scope.rooms.is_empty() {
+        let total = if scope.zones.is_empty() {
             labelled.len()
         } else {
-            scope.rooms.len()
+            scope.zones.len()
         };
         Coverage {
             labelled: labelled.len().min(total),
@@ -512,7 +512,7 @@ mod tests {
         Slug(value.to_string())
     }
 
-    fn room(value: &str) -> RoomId {
+    fn zone(value: &str) -> ZoneId {
         Slug(value.to_string())
     }
 
@@ -520,7 +520,7 @@ mod tests {
         ReferenceRecord {
             session: session.clone(),
             t_unix_ms,
-            scope: EventScope::Zone(room("lounge")),
+            scope: EventScope::Zone(zone("lounge")),
             payload: EventPayload::Vitals {
                 metric: "breathing_rate".to_string(),
                 value: 16.0,
@@ -544,7 +544,7 @@ mod tests {
 
         let scope = EvalScope {
             sessions: vec![session.clone()],
-            rooms: vec![room("lounge")],
+            zones: vec![zone("lounge")],
         };
         let coverage = truth.coverage(&scope);
         assert_eq!(coverage.labelled, 0);
@@ -579,7 +579,7 @@ mod tests {
 
         let scope = EvalScope {
             sessions: vec![session.clone()],
-            rooms: vec![room("lounge")],
+            zones: vec![zone("lounge")],
         };
         let coverage = truth.coverage(&scope);
         assert_eq!(coverage.labelled, 1);

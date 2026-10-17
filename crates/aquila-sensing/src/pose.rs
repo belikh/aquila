@@ -191,7 +191,7 @@ pub fn estimate_zone_pose(
     if !estimate.confidence.is_finite() {
         return None;
     }
-    Some(assemble_pose(room, subject, t_unix_ms, &estimate, geometry))
+    Some(assemble_pose(zone, subject, t_unix_ms, &estimate, geometry))
 }
 
 /// The centred complex CSI series of a node's window, per subcarrier.

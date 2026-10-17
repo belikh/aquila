@@ -8,8 +8,8 @@
 
 use aquila_types::{
     ContractVersion, Detection, DetectionKind, DetectionScope, DetectionValue, Estimate, Keypoint,
-    KeypointId, NodeId, Pose, RoomId, Slug, SubjectId, TimeSpan, VitalsReading, VitalsStatus,
-    Witness, CONTRACT_VERSION, KEYPOINT_COUNT,
+    KeypointId, NodeId, Pose, Slug, SubjectId, TimeSpan, VitalsReading, VitalsStatus, Witness,
+    ZoneId, CONTRACT_VERSION, KEYPOINT_COUNT,
 };
 use proptest::prelude::*;
 
@@ -49,7 +49,7 @@ fn model_id() -> ModelId {
     ModelId::new("0".repeat(64)).expect("a 64-character lower-case hex id is valid")
 }
 
-fn room() -> RoomId {
+fn zone() -> ZoneId {
     Slug::new("kitchen").expect("non-empty slug")
 }
 
@@ -70,7 +70,7 @@ fn features() -> FeatureVector {
     FeatureVector::new(vec![0.1, 0.2, 0.3, 0.4])
 }
 
-fn sample_pose(room: &RoomId, subject: SubjectId, present: bool) -> Pose {
+fn sample_pose(zone: &ZoneId, subject: SubjectId, present: bool) -> Pose {
     let keys: [Keypoint; KEYPOINT_COUNT] = core::array::from_fn(|i| {
         if present {
             Keypoint {
@@ -93,7 +93,7 @@ fn sample_pose(room: &RoomId, subject: SubjectId, present: bool) -> Pose {
     });
     Pose {
         subject,
-        room: room.clone(),
+        zone: zone.clone(),
         t_unix_ms: 1_700_000_000_000,
         keys,
         score: if present { 0.8 } else { 0.0 },
@@ -137,7 +137,7 @@ fn sample_count(
 
 fn pose_request(subject: Option<SubjectId>) -> PoseRequest {
     PoseRequest {
-        scope: DetectionScope::Zone(room()),
+        scope: DetectionScope::Zone(zone()),
         contributor_nodes: vec![node(1), node(2)],
         subject,
         span: span(),
@@ -148,7 +148,7 @@ fn pose_request(subject: Option<SubjectId>) -> PoseRequest {
 
 fn vitals_request(subject: Option<SubjectId>) -> VitalsRequest {
     VitalsRequest {
-        scope: DetectionScope::Zone(room()),
+        scope: DetectionScope::Zone(zone()),
         contributor_nodes: vec![node(1), node(2)],
         subject,
         span: span(),
@@ -277,19 +277,19 @@ impl VitalsModel for TestVitalsModel {
                 let mut readings = Vec::with_capacity(requests.len());
                 for request in requests {
                     request.validate()?;
-                    let room = match &request.scope {
-                        DetectionScope::Zone(room) => room.clone(),
+                    let zone = match &request.scope {
+                        DetectionScope::Zone(zone) => zone.clone(),
                         DetectionScope::Home(_) => {
-                            // Vitals are room-scoped in v1: a reading carries a
-                            // room. A home-scoped request is malformed here.
+                            // Vitals are zone-scoped in v1: a reading carries a
+                            // zone. A home-scoped request is malformed here.
                             return Err(ModelError::FeatureMalformed(
-                                "vitals requires a room scope".to_string(),
+                                "vitals requires a zone scope".to_string(),
                             ));
                         }
                     };
                     readings.push(VitalsReading {
                         subject: request.subject,
-                        room,
+                        zone,
                         span: request.span,
                         breathing: *breathing,
                         heart_rate: *heart_rate,
@@ -415,7 +415,7 @@ fn no_claim_emits_no_outputs() {
 fn absent_keypoints_use_zero_confidence_not_an_error() {
     // The contract's own representation of a missing keypoint is
     // `confidence == 0.0`; NaN coordinates are permitted and mean "no estimate".
-    let pose = sample_pose(&room(), SubjectId::new(1), false);
+    let pose = sample_pose(&zone(), SubjectId::new(1), false);
     assert!(pose.validate().is_ok());
     assert!(pose.keys.iter().all(|key| key.confidence == 0.0));
     assert_eq!(pose.score, 0.0);

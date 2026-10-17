@@ -25,15 +25,16 @@ use aquila_simulator::{
 };
 use aquila_sources::{LiveConfig, NodeControl, UdpLiveSource};
 use aquila_types::{
-    Band, CsiEnvelope, Event, FloorId, GroundTruthRecord, MacAddr, NodeId, RoomId, Slug,
+    Band, CsiEnvelope, Event, ZoneId, GroundTruthRecord, MacAddr, NodeId, Slug,
 };
 use aquila_wire::{AckStatus, ControlBody, ControlMessage, JoinAck, SetConfig, SyncEcho, SyncPing};
 
 use crate::{
-    count_mae, floor_count_mae, floor_presence_f1, home_count_mae, home_floor_attribution_accuracy,
-    home_presence_f1, presence_f1, room_attribution_accuracy, topology_for, topology_for_floors,
-    torso_pck20, vitals_mae, vitals_reference, CollectorSink, DeterministicCsiGenerator, FakeClock,
-    Fixture, FloorPlan, RecordingMetricSink, VirtualNode, VirtualNodeConfig,
+    count_mae, home_count_mae, home_floor_attribution_accuracy, home_presence_f1, presence_f1,
+    room_attribution_accuracy, topology_for, topology_for_floors, torso_pck20, vitals_mae,
+    vitals_reference, CollectorSink, DeterministicCsiGenerator, FakeClock, Fixture,
+    RecordingMetricSink, VirtualNode, VirtualNodeConfig, ZonePlan, zone_count_mae,
+    zone_presence_f1,
 };
 
 /// The window hop used to align predictions with ground truth, in milliseconds.
@@ -64,23 +65,23 @@ fn tracer_scene() -> SceneScript {
         nodes: vec![
             NodeSpec {
                 id: NodeId(1),
-                room: kitchen.clone(),
+                zone: kitchen.clone(),
                 pos_m: [0.0, 0.0, 2.4],
                 skew_ppm: 12.0,
                 noise_scale: 1.0,
             },
             NodeSpec {
                 id: NodeId(2),
-                room: lounge.clone(),
-                pos_m: [0.0, 0.0, 2.4],
+                zone: lounge.clone(),
+                pos_m: [3.0, 0.0, 2.4],
                 skew_ppm: -9.0,
                 noise_scale: 1.0,
             },
         ],
         actors: vec![
             Actor {
-                room: kitchen,
-                position_m: [1.5, 0.0, 0.0],
+                zone: kitchen,
+                position_m: [0.4, 0.0, 2.4],
                 active_from_s: 0.0,
                 active_to_s: 4.0,
                 motion: Motion::Walk {
@@ -98,8 +99,8 @@ fn tracer_scene() -> SceneScript {
                 body: None,
             },
             Actor {
-                room: lounge,
-                position_m: [1.5, 0.0, 0.0],
+                zone: lounge,
+                position_m: [0.4, 0.0, 2.4],
                 active_from_s: 6.0,
                 active_to_s: 12.0,
                 motion: Motion::Walk {
@@ -223,14 +224,14 @@ fn vitals_scene() -> SceneScript {
         home: Slug("vitals-home".to_string()),
         nodes: vec![NodeSpec {
             id: NodeId(1),
-            room: lounge.clone(),
+            zone: lounge.clone(),
             pos_m: [0.0, 0.0, 2.4],
             skew_ppm: 0.0,
             noise_scale: 1.0,
         }],
         actors: vec![Actor {
-            room: lounge,
-            position_m: [1.5, 0.0, 0.0],
+            zone: lounge,
+            position_m: [0.4, 0.0, 2.4],
             active_from_s: 0.0,
             active_to_s: 90.0,
             motion: Motion::Stationary,
@@ -561,15 +562,15 @@ fn calibration_empty_scene() -> SceneScript {
         nodes: vec![
             NodeSpec {
                 id: NodeId(1),
-                room: kitchen,
+                zone: kitchen,
                 pos_m: [0.0, 0.0, 2.4],
                 skew_ppm: 12.0,
                 noise_scale: 1.0,
             },
             NodeSpec {
                 id: NodeId(2),
-                room: lounge,
-                pos_m: [0.0, 0.0, 2.4],
+                zone: lounge,
+                pos_m: [3.0, 0.0, 2.4],
                 skew_ppm: -9.0,
                 noise_scale: 1.0,
             },
@@ -588,12 +589,12 @@ fn calibration_empty_scene() -> SceneScript {
 }
 
 /// A walk-through scene: one actor moving in `room` for the whole capture.
-fn calibration_walk_scene(room: &RoomId) -> SceneScript {
+fn calibration_walk_scene(zone: &ZoneId) -> SceneScript {
     let mut scene = calibration_empty_scene();
-    scene.name = format!("calibration-walk-{}", room.as_str());
+    scene.name = format!("calibration-walk-{}", zone.as_str());
     scene.actors = vec![Actor {
-        room: room.clone(),
-        position_m: [1.5, 0.0, 0.0],
+        zone: zone.clone(),
+        position_m: [0.4, 0.0, 2.4],
         active_from_s: 0.0,
         active_to_s: scene.duration_s,
         motion: Motion::Walk {
@@ -934,7 +935,7 @@ fn a_stale_calibration_is_never_silently_reused() {
 }
 
 // ---------------------------------------------------------------------------
-// Slice 4 — multi-node single room: fusion and coarse pose (`roadmap.md`,
+// Slice 4 — multi-node single zone: fusion and coarse pose (`roadmap.md`,
 // Slice 4)
 // ---------------------------------------------------------------------------
 
@@ -950,21 +951,21 @@ fn pose_scene() -> SceneScript {
         nodes: vec![
             NodeSpec {
                 id: NodeId(1),
-                room: study.clone(),
+                zone: study.clone(),
                 pos_m: [0.3, 0.3, 0.0],
                 skew_ppm: 8.0,
                 noise_scale: 1.0,
             },
             NodeSpec {
                 id: NodeId(2),
-                room: study.clone(),
+                zone: study.clone(),
                 pos_m: [0.3, 3.7, 0.0],
                 skew_ppm: -6.0,
                 noise_scale: 1.0,
             },
         ],
         actors: vec![Actor {
-            room: study,
+            zone: study,
             position_m: [2.0, 2.0, 0.0],
             active_from_s: 0.0,
             active_to_s: 12.0,
@@ -1130,7 +1131,7 @@ mean torso span {:.3} m; presence F1={:.3}, events={}, measurements={}",
 /// and `NaN != NaN` under the derived `PartialEq`).
 fn pose_bit_equal(a: &aquila_types::Pose, b: &aquila_types::Pose) -> bool {
     a.subject == b.subject
-        && a.room == b.room
+        && a.zone == b.zone
         && a.t_unix_ms == b.t_unix_ms
         && a.score.to_bits() == b.score.to_bits()
         && a.witness == b.witness
@@ -1245,9 +1246,9 @@ fn floor_scene() -> SceneScript {
     let study: Slug = Slug("study".to_string());
     let kitchen: Slug = Slug("kitchen".to_string());
     let lounge: Slug = Slug("lounge".to_string());
-    let node = |id: u16, room: &Slug, x: f64| NodeSpec {
+    let node = |id: u16, zone: &Slug, x: f64| NodeSpec {
         id: NodeId(id),
-        room: room.clone(),
+        zone: zone.clone(),
         pos_m: [x, 0.0, 2.4],
         skew_ppm: 0.0,
         noise_scale: 1.0,
@@ -1263,30 +1264,33 @@ fn floor_scene() -> SceneScript {
         rate_hz: 0.25,
         phase_rad: 0.0,
     };
-    let actor = |room: &Slug, from: f64, to: f64| Actor {
-        room: room.clone(),
-        position_m: [1.5, 0.0, 0.0],
-        active_from_s: from,
-        active_to_s: to,
-        motion: walk,
-        breathing: Some(breath),
-        heart: None,
-        body: None,
+        let actor = |zone: &Slug, from: f64, to: f64| {
+        let pos = match zone {
+            z if z == &kitchen => [5.4, 0.0, 2.4],
+            z if z == &lounge => [12.4, 0.0, 2.4],
+            z if z == &study => [10.4, 0.0, 2.4],
+            _ => [1.5, 0.0, 2.4],
+        };
+            motion: walk,
+            breathing: Some(breath),
+            heart: None,
+            body: None,
+        }
     };
     SceneScript {
         name: "slice5-floor".to_string(),
         home: Slug("slice5-home".to_string()),
         nodes: vec![
             node(1, &study, 0.3),
-            node(2, &study, 3.7),
-            node(3, &kitchen, 0.3),
-            node(4, &kitchen, 3.7),
-            node(5, &lounge, 0.3),
-            node(6, &lounge, 3.7),
+            node(2, &study, 0.5),
+            node(3, &kitchen, 5.3),
+            node(4, &kitchen, 5.5),
+            node(5, &lounge, 7.3),
+            node(6, &lounge, 7.5),
         ],
         actors: vec![
             actor(&study, 0.0, 6.0),
-            actor(&kitchen, 4.0, 10.0),
+            actor(&kitchen, 6.0, 10.0),
             actor(&lounge, 8.0, 14.0),
         ],
         band: Band::B2G4,
@@ -1301,16 +1305,13 @@ fn floor_scene() -> SceneScript {
     }
 }
 
-/// The floor → rooms grouping of a scene, read from its contract topology
-/// (`topology_for` places every scene room on one "ground" floor).
-fn floor_rooms_for(script: &SceneScript) -> Vec<(FloorId, Vec<RoomId>)> {
+/// The zone → zones grouping of a scene (each zone is its own group).
+fn zone_rooms_for(script: &SceneScript) -> Vec<(ZoneId, Vec<ZoneId>)> {
     let topology = topology_for(script);
-    let mut map: std::collections::BTreeMap<FloorId, Vec<RoomId>> =
+    let mut map: std::collections::BTreeMap<ZoneId, Vec<ZoneId>> =
         std::collections::BTreeMap::new();
-    for room in &topology.rooms {
-        map.entry(room.floor.clone())
-            .or_default()
-            .push(room.id.clone());
+    for zone in &topology.zones {
+        map.entry(zone.id.clone()).or_default().push(zone.id.clone());
     }
     map.into_iter().collect()
 }
@@ -1327,7 +1328,7 @@ const FLOOR_STEP_NS: u64 = 8_333_333;
 struct FloorRun {
     events: Vec<Event>,
     measurements: Vec<Measurement>,
-    floor_history: Vec<aquila_sensing::FloorWindow>,
+    zone_history: Vec<aquila_sensing::ZoneWindow>,
     ground_truth: Vec<GroundTruthRecord>,
 }
 
@@ -1370,7 +1371,7 @@ fn run_floor_tracer() -> FloorRun {
     FloorRun {
         events: snapshot(&event_handle),
         measurements: snapshot(&record_handle),
-        floor_history: sensing.floor_history().to_vec(),
+        zone_history: sensing.zone_history().to_vec(),
         ground_truth: fixture.ground_truth,
     }
 }
@@ -1379,12 +1380,12 @@ fn run_floor_tracer() -> FloorRun {
 fn floor_presence_and_count_meet_the_slice5_bars() {
     let script = floor_scene();
     let run = run_floor_tracer();
-    let floor_rooms = floor_rooms_for(&script);
+    let floor_rooms = zone_rooms_for(&script);
 
-    let score = floor_presence_f1(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
-    let (mae, count_n) = floor_count_mae(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
+    let score = zone_presence_f1(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
+    let (mae, count_n) = zone_count_mae(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
     let (attribution, attribution_n) =
-        room_attribution_accuracy(&run.floor_history, &run.ground_truth, &floor_rooms, HOP_MS);
+        room_attribution_accuracy(&run.zone_history, &run.ground_truth, &floor_rooms, HOP_MS);
 
     eprintln!(
         "slice5 floor: TP={} FP={} FN={} TN={} precision={:.3} recall={:.3} F1={:.3}; \
@@ -1426,9 +1427,9 @@ floor count MAE={:.3} over {} windows; room attribution={:.3} over {} windows; e
     assert_eq!(floor_rooms.len(), 1);
     assert_eq!(floor_rooms[0].1.len(), 3);
     assert!(run
-        .floor_history
+        .zone_history
         .iter()
-        .all(|window| window.floors.len() == 1));
+        .all(|window| window.zones.len() == 1));
 
     // The slice-5 ledger rows; this test is the reproducer.
     let ledger = Mutex::new(Vec::new());
@@ -1467,8 +1468,8 @@ fn floor_replay_is_deterministic() {
     );
     assert_eq!(first.measurements, second.measurements);
     assert_eq!(
-        first.floor_history, second.floor_history,
-        "same scene and seed must produce byte-identical floor summaries"
+        first.zone_history, second.zone_history,
+        "same scene and seed must produce byte-identical zone summaries"
     );
 }
 
@@ -1476,7 +1477,7 @@ fn floor_replay_is_deterministic() {
 fn floor_measurements_are_recorded() {
     let run = run_floor_tracer();
     assert!(
-        !run.floor_history.is_empty(),
+        !run.zone_history.is_empty(),
         "at least one window must summarise the floor"
     );
     assert!(
@@ -1494,7 +1495,7 @@ fn floor_measurements_are_recorded() {
     assert!(
         run.events
             .iter()
-            .any(|e| matches!(&e.scope, aquila_types::EventScope::Floor(_))),
+            .all(|e| matches!(&e.scope, aquila_types::EventScope::Zone(_) | aquila_types::EventScope::Home)),
         "the core must emit at least one floor-scoped event"
     );
     for measurement in &run.measurements {
@@ -1523,13 +1524,13 @@ fn home_scene() -> SceneScript {
     let kitchen: Slug = Slug("kitchen".to_string());
     let lounge: Slug = Slug("lounge".to_string());
     let study: Slug = Slug("study".to_string());
-    let bedroom: Slug = Slug("bedroom".to_string());
+    let bedzone: Slug = Slug("bedroom".to_string());
     let loft: Slug = Slug("loft".to_string());
     let landing: Slug = Slug("landing".to_string());
 
-    let node = |id: u16, room: &Slug, x: f64| NodeSpec {
+    let node = |id: u16, zone: &Slug, x: f64| NodeSpec {
         id: NodeId(id),
-        room: room.clone(),
+        zone: zone.clone(),
         pos_m: [x, 0.0, 2.4],
         skew_ppm: 0.0,
         noise_scale: 1.0,
@@ -1545,15 +1546,25 @@ fn home_scene() -> SceneScript {
         rate_hz: 0.25,
         phase_rad: 0.0,
     };
-    let actor = |room: &Slug, from: f64, to: f64| Actor {
-        room: room.clone(),
-        position_m: [1.5, 0.0, 0.0],
-        active_from_s: from,
-        active_to_s: to,
-        motion: walk,
-        breathing: Some(breath),
-        heart: None,
-        body: None,
+        let actor = |zone: &Slug, from: f64, to: f64| {
+        let pos = match zone {
+            z if z == &kitchen => [0.4, 0.0, 2.4],
+            z if z == &lounge => [5.4, 0.0, 2.4],
+            z if z == &study => [10.4, 0.0, 2.4],
+            z if z == &loft => [20.4, 0.0, 2.4],
+            z if z == &landing => [25.4, 0.0, 2.4],
+            _ => [1.5, 0.0, 2.4],
+        };
+        Actor {
+            zone: zone.clone(),
+            position_m: pos,
+            active_from_s: from,
+            active_to_s: to,
+            motion: walk,
+            breathing: Some(breath),
+            heart: None,
+            body: None,
+        }
     };
 
     SceneScript {
@@ -1566,8 +1577,8 @@ fn home_scene() -> SceneScript {
             node(4, &lounge, 3.7),
             node(5, &study, 0.3),
             node(6, &study, 3.7),
-            node(7, &bedroom, 0.3),
-            node(8, &bedroom, 3.7),
+            node(7, &study, 0.3),
+            node(8, &study, 3.7),
             node(9, &loft, 0.3),
             node(10, &loft, 3.7),
             node(11, &landing, 0.3),
@@ -1590,42 +1601,34 @@ fn home_scene() -> SceneScript {
     }
 }
 
-/// The three-floor plan for [`home_scene`]: ground/first/second, two rooms each.
-fn home_floor_plans() -> Vec<FloorPlan> {
+/// The three-zone plan for [`home_scene`]: ground/first/second, two zones each.
+fn home_zone_plans() -> Vec<ZonePlan> {
     vec![
-        FloorPlan {
+        ZonePlan {
             id: Slug("ground".to_string()),
             name: "Ground".to_string(),
-            level: 0,
-            elevation_m: 0.0,
-            rooms: vec![Slug("kitchen".to_string()), Slug("lounge".to_string())],
+            zones: vec![Slug("kitchen".to_string()), Slug("lounge".to_string())],
         },
-        FloorPlan {
+        ZonePlan {
             id: Slug("first".to_string()),
             name: "First".to_string(),
-            level: 1,
-            elevation_m: 3.0,
-            rooms: vec![Slug("study".to_string()), Slug("bedroom".to_string())],
+            zones: vec![Slug("study".to_string()), Slug("bedroom".to_string())],
         },
-        FloorPlan {
+        ZonePlan {
             id: Slug("second".to_string()),
             name: "Second".to_string(),
-            level: 2,
-            elevation_m: 6.0,
-            rooms: vec![Slug("loft".to_string()), Slug("landing".to_string())],
+            zones: vec![Slug("loft".to_string()), Slug("landing".to_string())],
         },
     ]
 }
 
-/// The floor → rooms grouping of a scene, read from its multi-floor topology.
-fn home_floor_rooms(script: &SceneScript) -> Vec<(FloorId, Vec<RoomId>)> {
-    let topology = topology_for_floors(script, &home_floor_plans());
-    let mut map: std::collections::BTreeMap<FloorId, Vec<RoomId>> =
+/// The zone → zones grouping of a scene, read from its multi-zone topology.
+fn home_zone_rooms(script: &SceneScript) -> Vec<(ZoneId, Vec<ZoneId>)> {
+    let topology = topology_for_floors(script, &home_zone_plans());
+    let mut map: std::collections::BTreeMap<ZoneId, Vec<ZoneId>> =
         std::collections::BTreeMap::new();
-    for room in &topology.rooms {
-        map.entry(room.floor.clone())
-            .or_default()
-            .push(room.id.clone());
+    for zone in &topology.zones {
+        map.entry(zone.id.clone()).or_default().push(zone.id.clone());
     }
     map.into_iter().collect()
 }
@@ -1661,7 +1664,7 @@ fn run_home_tracer() -> HomeRun {
         Box::new(metrics),
         None,
         None,
-        topology_for_floors(&script, &home_floor_plans()),
+        topology_for_floors(&script, &home_zone_plans()),
         synthetic_config(),
     )
     .expect("valid core");
@@ -1686,7 +1689,7 @@ fn run_home_tracer() -> HomeRun {
 fn whole_home_presence_count_and_attribution_meet_the_slice6_bars() {
     let script = home_scene();
     let run = run_home_tracer();
-    let floor_rooms = home_floor_rooms(&script);
+    let floor_rooms = home_zone_rooms(&script);
 
     let presence = home_presence_f1(&run.events, &run.ground_truth, HOP_MS);
     let (count_mae_home, count_n) = home_count_mae(&run.events, &run.ground_truth, HOP_MS);

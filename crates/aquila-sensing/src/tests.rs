@@ -9,8 +9,8 @@ use std::sync::Arc;
 use aquila_metrics::InMemoryMetricSink;
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
-    Band, Clock, CoreTime, CsiEnvelope, CsiFrame, Estimate, EventKind, NodeId, PhyFlags, RoomId,
-    Slug,
+    Band, Clock, CoreTime, CsiEnvelope, CsiFrame, Estimate, EventKind, NodeId, PhyFlags, Slug,
+    ZoneId,
 };
 
 use crate::clock::ManualClock;
@@ -138,10 +138,10 @@ fn time_sync_publishes_no_model_below_min_samples() {
 
 fn evidence(node: u16, logit: f64, weight: f64) -> NodeEvidence {
     let p = fusion::sigmoid(logit);
-    let room: RoomId = Slug("room".into());
+    let zone: ZoneId = Slug("zone".into());
     NodeEvidence {
         node: NodeId(node),
-        room,
+        zone,
         presence_logit: logit,
         count_pmf: fusion::node_count_pmf(p, 8),
         weight,
@@ -304,24 +304,23 @@ fn assembler_groups_multiple_nodes() {
 // Engine
 // ---------------------------------------------------------------------------
 
-/// A minimal two-node, one-room contract topology.
+/// A minimal two-node, one-zone contract topology.
 fn one_room_topology() -> aquila_types::Topology {
-    use aquila_types::{Floor, Home, MacAddr, Node, Room, RoomKind, CONTRACT_VERSION};
+    use aquila_types::{Home, MacAddr, Node, CONTRACT_VERSION};
     let home = Slug("home".into());
-    let floor = Slug("ground".into());
-    let room = Slug("lounge".into());
+    let zone = Slug("lounge".into());
     let firmware = aquila_types::FirmwareRef {
         version: "test".into(),
         sha256: None,
     };
     let node = |id: u16| Node {
         id: NodeId(id),
-        room: room.clone(),
+        zone: zone.clone(),
         name: format!("node-{id}"),
         mac: MacAddr([0, 0, 0, 0, 0, id as u8]),
         device: aquila_types::DeviceType::Esp32S3,
         firmware: firmware.clone(),
-        pos_room_m: Some([0.0, 0.0, 2.4]),
+        pos_home_m: [0.0, 0.0, 2.4],
         installed_unix_ms: 0,
     };
     aquila_types::Topology {
@@ -331,24 +330,13 @@ fn one_room_topology() -> aquila_types::Topology {
             time_zone: "Australia/Sydney".into(),
             contract: CONTRACT_VERSION,
         },
-        floors: vec![Floor {
-            id: floor.clone(),
-            home: home.clone(),
-            name: "Ground".into(),
-            level: 0,
-            elevation_m: 0.0,
-        }],
-        rooms: vec![Room {
-            id: room.clone(),
-            floor,
-            name: "Lounge".into(),
-            kind: RoomKind::Living,
+        zones: vec![aquila_types::Zone {
+            id: zone.clone(),
             origin_home_m: [0.0, 0.0, 0.0],
-            yaw_deg: 0.0,
-            area_m2: Some(20.0),
+            extent_home_m: [5.0, 5.0, 5.0],
+            name: "Lounge".into(),
         }],
         nodes: vec![node(1), node(2)],
-        zones: vec![],
         pairs: vec![],
     }
 }
@@ -484,10 +472,10 @@ fn clamp_logit_is_bounded_and_finite() {
 #[test]
 fn escalation_soft_or_is_monotone() {
     let room = |p: f64| {
-        crate::escalation::RoomSummary::covered(Slug("r".into()), p, fusion::node_count_pmf(p, 8))
+        crate::escalation::ZoneSummary::covered(Slug("r".into()), p, fusion::node_count_pmf(p, 8))
     };
-    let one = crate::escalation::floor_presence_probability(&[room(0.5)]);
-    let two = crate::escalation::floor_presence_probability(&[room(0.5), room(0.5)]);
+    let one = crate::escalation::zone_presence_probability(&[room(0.5)]);
+    let two = crate::escalation::zone_presence_probability(&[room(0.5), room(0.5)]);
     assert!(two >= one);
     assert!((one - 0.5).abs() < 1e-12);
     assert!((crate::escalation::home_presence_probability(&[one]) - one).abs() < 1e-12);
@@ -496,9 +484,9 @@ fn escalation_soft_or_is_monotone() {
 #[test]
 fn floor_count_is_the_convolution_of_room_pmfs() {
     let room = |id: &str, p: f64| {
-        crate::escalation::RoomSummary::covered(Slug(id.into()), p, fusion::node_count_pmf(p, 8))
+        crate::escalation::ZoneSummary::covered(Slug(id.into()), p, fusion::node_count_pmf(p, 8))
     };
-    let summary = crate::escalation::aggregate_floor(
+    let summary = crate::escalation::aggregate_zone(
         Slug("ground".into()),
         &[room("kitchen", 0.999), room("lounge", 0.999)],
         0.15,
@@ -509,7 +497,7 @@ fn floor_count_is_the_convolution_of_room_pmfs() {
     assert_eq!(summary.count, Some(2));
     assert!(summary.presence_probability.unwrap_or(0.0) > 0.99);
     // A single occupied room yields its own MAP count.
-    let single = crate::escalation::aggregate_floor(
+    let single = crate::escalation::aggregate_zone(
         Slug("ground".into()),
         &[room("kitchen", 0.999), room("lounge", 0.01)],
         0.15,
@@ -522,9 +510,9 @@ fn floor_count_is_the_convolution_of_room_pmfs() {
 #[test]
 fn ambiguous_room_attribution_raises_a_conflict() {
     let room = |id: &str, p: f64| {
-        crate::escalation::RoomSummary::covered(Slug(id.into()), p, fusion::node_count_pmf(p, 8))
+        crate::escalation::ZoneSummary::covered(Slug(id.into()), p, fusion::node_count_pmf(p, 8))
     };
-    let ambiguous = crate::escalation::aggregate_floor(
+    let ambiguous = crate::escalation::aggregate_zone(
         Slug("ground".into()),
         &[room("kitchen", 0.9), room("lounge", 0.9)],
         0.15,
@@ -537,7 +525,7 @@ fn ambiguous_room_attribution_raises_a_conflict() {
     );
     assert!(matches!(
         ambiguous.conflicts.as_slice(),
-        [crate::escalation::Conflict::AmbiguousRooms { .. }]
+        [crate::escalation::Conflict::AmbiguousZones { .. }]
     ));
     // The floor's aggregate presence and count are still reported: the
     // ambiguity is about which room, not whether the floor is occupied.
@@ -545,7 +533,7 @@ fn ambiguous_room_attribution_raises_a_conflict() {
     assert_eq!(ambiguous.count, Some(2));
 
     // A clear winner is attributed, with no conflict.
-    let clear = crate::escalation::aggregate_floor(
+    let clear = crate::escalation::aggregate_zone(
         Slug("ground".into()),
         &[room("kitchen", 0.99), room("lounge", 0.1)],
         0.15,
@@ -558,13 +546,13 @@ fn ambiguous_room_attribution_raises_a_conflict() {
 
 #[test]
 fn uncovered_room_forces_unknown_floor_count() {
-    let covered = crate::escalation::RoomSummary::covered(
+    let covered = crate::escalation::ZoneSummary::covered(
         Slug("kitchen".into()),
         0.99,
         fusion::node_count_pmf(0.99, 8),
     );
-    let uncovered = crate::escalation::RoomSummary::uncovered(Slug("lounge".into()), 8);
-    let summary = crate::escalation::aggregate_floor(
+    let uncovered = crate::escalation::ZoneSummary::uncovered(Slug("lounge".into()), 8);
+    let summary = crate::escalation::aggregate_zone(
         Slug("ground".into()),
         &[covered, uncovered],
         0.15,
@@ -582,9 +570,9 @@ fn uncovered_room_forces_unknown_floor_count() {
 
 #[test]
 fn no_covered_rooms_is_unknown_not_absent() {
-    let summary = crate::escalation::aggregate_floor(
+    let summary = crate::escalation::aggregate_zone(
         Slug("ground".into()),
-        &[crate::escalation::RoomSummary::uncovered(
+        &[crate::escalation::ZoneSummary::uncovered(
             Slug("lounge".into()),
             8,
         )],
@@ -600,22 +588,22 @@ fn no_covered_rooms_is_unknown_not_absent() {
 fn floor_vitals_take_the_highest_confidence() {
     let estimate = |value: f32, confidence: f32| Estimate { value, confidence };
     let rooms = vec![
-        crate::escalation::RoomVitals {
-            room: Slug("kitchen".into()),
+        crate::escalation::ZoneVitals {
+            zone: Slug("kitchen".into()),
             breathing: Some(estimate(15.0, 0.4)),
             heart_rate: None,
         },
-        crate::escalation::RoomVitals {
-            room: Slug("lounge".into()),
+        crate::escalation::ZoneVitals {
+            zone: Slug("lounge".into()),
             breathing: Some(estimate(16.0, 0.9)),
             heart_rate: Some(estimate(70.0, 0.5)),
         },
     ];
-    let vitals = crate::escalation::aggregate_floor_vitals(&rooms, 0.0);
+    let vitals = crate::escalation::aggregate_home_vitals(&rooms, 0.0);
     assert_eq!(vitals.breathing.as_ref().unwrap().1.value, 16.0);
     assert_eq!(vitals.heart_rate.as_ref().unwrap().1.value, 70.0);
     // A confidence floor excludes a low-confidence estimate.
-    let filtered = crate::escalation::aggregate_floor_vitals(&rooms, 0.95);
+    let filtered = crate::escalation::aggregate_home_vitals(&rooms, 0.95);
     assert!(filtered.breathing.is_none());
     assert!(filtered.heart_rate.is_none());
 }
@@ -624,23 +612,25 @@ fn floor_vitals_take_the_highest_confidence() {
 // Home escalation (Slice 6)
 // ---------------------------------------------------------------------------
 
-use crate::escalation::{aggregate_floor, aggregate_home, Conflict, FloorSummary, RoomSummary};
+use crate::escalation::{
+    aggregate_home, aggregate_zone, Conflict, HomeSummary, ZoneAggregate, ZoneSummary,
+};
 
-/// Aggregate a floor of one-room-per-entry presence probabilities.
-fn home_test_floor(floor: &str, rooms: &[(&str, f64)]) -> FloorSummary {
-    let summaries: Vec<RoomSummary> = rooms
+/// Aggregate a zone of one-node-per-entry presence probabilities.
+fn home_test_zone(zone: &str, zones: &[(&str, f64)]) -> ZoneAggregate {
+    let summaries: Vec<ZoneSummary> = zones
         .iter()
-        .map(|(room, p)| {
-            RoomSummary::covered(Slug((*room).into()), *p, fusion::node_count_pmf(*p, 8))
+        .map(|(zone, p)| {
+            ZoneSummary::covered(Slug((*zone).into()), *p, fusion::node_count_pmf(*p, 8))
         })
         .collect();
-    aggregate_floor(Slug(floor.into()), &summaries, 0.15, 0.8, 8)
+    aggregate_zone(Slug(zone.into()), &summaries, 0.15, 0.8, 8)
 }
 
 #[test]
 fn home_presence_is_a_soft_or_over_floors() {
-    let ground = home_test_floor("ground", &[("kitchen", 0.5)]);
-    let first = home_test_floor("first", &[("study", 0.5)]);
+    let ground = home_test_zone("ground", &[("kitchen", 0.5)]);
+    let first = home_test_zone("first", &[("study", 0.5)]);
     let home = aggregate_home(&[ground, first], 0.15, 0.8, 8);
     // 1 - (1 - 0.5)(1 - 0.5) = 0.75.
     assert!((home.presence_probability.unwrap_or(0.0) - 0.75).abs() < 1e-12);
@@ -648,8 +638,8 @@ fn home_presence_is_a_soft_or_over_floors() {
 
 #[test]
 fn home_count_is_the_convolution_of_floor_pmfs() {
-    let ground = home_test_floor("ground", &[("kitchen", 0.999), ("lounge", 0.999)]);
-    let first = home_test_floor("first", &[("study", 0.999)]);
+    let ground = home_test_zone("ground", &[("kitchen", 0.999), ("lounge", 0.999)]);
+    let first = home_test_zone("first", &[("study", 0.999)]);
     let home = aggregate_home(&[ground, first], 0.15, 0.8, 8);
     // Two people on the ground floor convolve with one upstairs to three.
     assert_eq!(home.count, Some(3));
@@ -658,8 +648,8 @@ fn home_count_is_the_convolution_of_floor_pmfs() {
 
 #[test]
 fn ambiguous_floors_withhold_home_attribution() {
-    let ground = home_test_floor("ground", &[("kitchen", 0.9)]);
-    let first = home_test_floor("first", &[("study", 0.9)]);
+    let ground = home_test_zone("ground", &[("kitchen", 0.9)]);
+    let first = home_test_zone("first", &[("study", 0.9)]);
     let home = aggregate_home(&[ground, first], 0.15, 0.8, 8);
     assert!(
         home.attribution.is_none(),
@@ -667,28 +657,27 @@ fn ambiguous_floors_withhold_home_attribution() {
     );
     assert!(matches!(
         home.conflicts.as_slice(),
-        [Conflict::AmbiguousFloors { .. }]
+        [Conflict::AmbiguousZonesHome { .. }]
     ));
     // The home's presence and count are still reported.
     assert!(home.presence_probability.unwrap_or(0.0) > 0.9);
     assert_eq!(home.count, Some(2));
 
     // A clear winner is attributed, with its confident room.
-    let ground = home_test_floor("ground", &[("kitchen", 0.99)]);
-    let first = home_test_floor("first", &[("study", 0.1)]);
+    let ground = home_test_zone("ground", &[("kitchen", 0.99)]);
+    let first = home_test_zone("first", &[("study", 0.1)]);
     let clear = aggregate_home(&[ground, first], 0.15, 0.8, 8);
-    let location = clear.attribution.expect("a confident floor");
-    assert_eq!(location.floor, Slug("ground".into()));
-    assert_eq!(location.room, Some(Slug("kitchen".into())));
+    let location = clear.attribution.expect("a confident zone");
+    assert_eq!(location.zone, Some(Slug("ground".into())));
     assert!(clear.conflicts.is_empty());
 }
 
 #[test]
 fn unknown_floor_forces_unknown_home_count() {
-    let covered = home_test_floor("ground", &[("kitchen", 0.99)]);
-    let uncovered = aggregate_floor(
+    let covered = home_test_zone("ground", &[("kitchen", 0.99)]);
+    let uncovered = aggregate_zone(
         Slug("first".into()),
-        &[RoomSummary::uncovered(Slug("study".into()), 8)],
+        &[ZoneSummary::uncovered(Slug("study".into()), 8)],
         0.15,
         0.8,
         8,

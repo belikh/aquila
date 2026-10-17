@@ -57,8 +57,8 @@ use aquila_simulator::{
 };
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
-    Band, Clock, CsiEnvelope, DeviceType, FirmwareRef, Floor, Home, MacAddr, Node, NodeId, Room,
-    RoomId, RoomKind, Slug, Topology as ContractTopology, Zone, CONTRACT_VERSION,
+    Band, Clock, CsiEnvelope, DeviceType, FirmwareRef, Home, MacAddr, Node, NodeId, Slug,
+    Topology as ContractTopology, Zone, ZoneId, CONTRACT_VERSION,
 };
 use aquila_wire::{
     ControlBody, ControlMessage, decode_control, decode_control_authenticated,
@@ -513,9 +513,9 @@ fn calibrate_on_startup(
 fn calibration_inputs(script: &SceneScript) -> Result<CalibrationInputs, String> {
     let empty = collect_frames(&empty_scene(script))?;
     let mut walkthrough = Vec::new();
-    for room in scene_rooms(script) {
-        let frames = collect_frames(&walk_scene(script, &room))?;
-        walkthrough.push((room, frames));
+    for zone in scene_zones(script) {
+        let frames = collect_frames(&walk_scene(script, &zone))?;
+        walkthrough.push((zone, frames));
     }
     Ok(CalibrationInputs::new(empty, walkthrough))
 }
@@ -728,50 +728,49 @@ fn install_signal_handling() -> Result<Arc<AtomicBool>, String> {
     Ok(flag)
 }
 
-/// The distinct rooms a scene's nodes occupy, in declaration order.
-fn scene_rooms(script: &SceneScript) -> Vec<RoomId> {
-    let mut rooms: Vec<RoomId> = Vec::new();
+/// The distinct zones a scene's nodes occupy, in declaration order.
+fn scene_zones(script: &SceneScript) -> Vec<ZoneId> {
+    let mut zones: Vec<ZoneId> = Vec::new();
     for node in &script.nodes {
-        if !rooms.contains(&node.room) {
-            rooms.push(node.room.clone());
+        if !zones.contains(&node.zone) {
+            zones.push(node.zone.clone());
         }
     }
-    rooms
+    zones
 }
 
 /// A deterministic two-room scene with one walking, breathing actor in the
 /// lounge for the middle of each cycle, so the default run exercises presence,
 /// count and vitals end to end without hardware.
 fn demo_scene() -> SceneScript {
-    let kitchen: RoomId = Slug("kitchen".to_string());
-    let lounge: RoomId = Slug("lounge".to_string());
+    let lounge: ZoneId = Slug("lounge".to_string());
     SceneScript {
         name: "addon-demo".to_string(),
         home: Slug("addon-home".to_string()),
         nodes: vec![
             NodeSpec {
                 id: NodeId(1),
-                room: kitchen,
+                zone: lounge.clone(),
                 pos_m: [0.0, 0.0, 2.4],
                 skew_ppm: 12.0,
                 noise_scale: 1.0,
             },
             NodeSpec {
                 id: NodeId(2),
-                room: lounge.clone(),
-                pos_m: [0.0, 0.0, 2.4],
+                zone: lounge.clone(),
+                pos_m: [3.0, 0.0, 2.4],
                 skew_ppm: -9.0,
                 noise_scale: 1.0,
             },
         ],
         actors: vec![Actor {
-            room: lounge,
+            zone: lounge.clone(),
             position_m: [1.5, 0.0, 0.0],
             active_from_s: 2.0,
             active_to_s: 6.0,
             motion: Motion::Walk {
                 axis: [1.0, 0.0, 0.0],
-                amplitude_m: 0.5,
+                amplitude_m: 2.0,
                 period_s: 2.0,
                 phase_rad: 0.0,
             },
@@ -803,14 +802,20 @@ fn empty_scene(script: &SceneScript) -> SceneScript {
     scene
 }
 
-/// A labelled walk-through for calibration: one actor moving in `room` for the
+/// A labelled walk-through for calibration: one actor moving in `zone` for the
 /// whole capture, with the same nodes as the runtime scene.
-fn walk_scene(script: &SceneScript, room: &RoomId) -> SceneScript {
+fn walk_scene(script: &SceneScript, zone: &ZoneId) -> SceneScript {
     let mut scene = script.clone();
-    scene.name = format!("{}-walk-{}", script.name, room.as_str());
+    scene.name = format!("{}-walk-{}", script.name, zone.as_str());
+    // Place the actor at the zone's origin (first node in that zone) so the
+    // walk-through capture has an actor inside the zone.
+    let pos = script.nodes.iter()
+        .find(|n| n.zone == *zone)
+        .map(|n| n.pos_m)
+        .unwrap_or([1.5, 0.0, 0.0]);
     scene.actors = vec![Actor {
-        room: room.clone(),
-        position_m: [1.5, 0.0, 0.0],
+        zone: zone.clone(),
+        position_m: pos,
         active_from_s: 0.0,
         active_to_s: scene.duration_s,
         motion: Motion::Walk {
@@ -830,15 +835,14 @@ fn walk_scene(script: &SceneScript, room: &RoomId) -> SceneScript {
     scene
 }
 
-/// Build a contract topology for a scene: one floor, one room per node room.
+/// Build a contract topology for a scene: one zone per node zone.
 fn topology_for_scene(script: &SceneScript) -> Topology {
     let home = script.home.clone();
-    let floor: Slug = Slug("ground".to_string());
     let firmware = FirmwareRef {
         version: "addon".to_string(),
         sha256: None,
     };
-    let rooms = scene_rooms(script);
+    let zones = scene_zones(script);
     let model = ContractTopology {
         home: Home {
             id: home.clone(),
@@ -846,33 +850,29 @@ fn topology_for_scene(script: &SceneScript) -> Topology {
             time_zone: "Australia/Sydney".to_string(),
             contract: CONTRACT_VERSION,
         },
-        floors: vec![Floor {
-            id: floor.clone(),
-            home: home.clone(),
-            name: "Ground".to_string(),
-            level: 0,
-            elevation_m: 0.0,
-        }],
-        rooms: rooms
+        zones: zones
             .iter()
-            .map(|room| Room {
-                id: room.clone(),
-                floor: floor.clone(),
-                name: room.as_str().to_string(),
-                kind: RoomKind::Unknown,
-                origin_home_m: [0.0, 0.0, 0.0],
-                yaw_deg: 0.0,
-                area_m2: None,
-            })
-            .collect(),
-        // One zone per room in the demo scene; zones are the detection scope,
-        // rooms are only where nodes are mounted.
-        zones: rooms
-            .iter()
-            .map(|room| Zone {
-                id: room.clone(),
-                room: Some(room.clone()),
-                name: room.as_str().to_string(),
+            .map(|zone| {
+                // Distinct zone origins per node zone so zones do not overlap and
+                // calibration can attribute each zone separately.
+                let origin = script
+                    .nodes
+                    .iter()
+                    .find(|n| n.zone == *zone)
+                    .map(|n| n.pos_m)
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                // Zone origins spaced 5m apart so calibration can separate them.
+                let zone_index = zones.iter().position(|z| z == zone).unwrap_or(0);
+                Zone {
+                    id: zone.clone(),
+                    origin_home_m: [
+                        origin[0] as f32 + zone_index as f32 * 5.0,
+                        origin[1] as f32,
+                        origin[2] as f32,
+                    ],
+                    extent_home_m: [2.0, 2.0, 2.0],
+                    name: zone.as_str().to_string(),
+                }
             })
             .collect(),
         nodes: script
@@ -880,16 +880,16 @@ fn topology_for_scene(script: &SceneScript) -> Topology {
             .iter()
             .map(|spec| Node {
                 id: spec.id,
-                room: spec.room.clone(),
+                zone: spec.zone.clone(),
                 name: format!("node-{}", spec.id.0),
                 mac: MacAddr([0, 0, 0, 0, 0, spec.id.0 as u8]),
                 device: DeviceType::Esp32S3,
                 firmware: firmware.clone(),
-                pos_room_m: Some([
+                pos_home_m: [
                     spec.pos_m[0] as f32,
                     spec.pos_m[1] as f32,
                     spec.pos_m[2] as f32,
-                ]),
+                ],
                 installed_unix_ms: 0,
             })
             .collect(),
@@ -1409,9 +1409,17 @@ mod tests {
         .expect("valid core");
 
         let request = CalibrationRequest::new(TEST_COMMIT, "addon-test", CALIBRATION_GENERATED_AT);
-        let report = sensing.calibrate(&request, &inputs).expect("calibration");
-        assert!(report.calibrated, "calibration note: {}", report.note);
-        assert!(report.artifact.is_some());
+        match sensing.calibrate(&request, &inputs) {
+            Ok(report) => {
+                assert!(report.calibrated, "calibration note: {}", report.note);
+                assert!(report.artifact.is_some());
+                eprintln!("CALIBRATION SUCCESS: {:#?}", report.quality);
+            }
+            Err(e) => {
+                eprintln!("CALIBRATION FAILED: {e:?}");
+                panic!("calibration failed: {e}");
+            }
+        }
 
         // Two passes cover the actor's 2..6 s presence span and its absence.
         let mut emitted = 0usize;
