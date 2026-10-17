@@ -1264,13 +1264,18 @@ fn floor_scene() -> SceneScript {
         rate_hz: 0.25,
         phase_rad: 0.0,
     };
-        let actor = |zone: &Slug, from: f64, to: f64| {
+    let actor = |zone: &Slug, from: f64, to: f64| {
         let pos = match zone {
             z if z == &kitchen => [5.4, 0.0, 2.4],
             z if z == &lounge => [12.4, 0.0, 2.4],
             z if z == &study => [10.4, 0.0, 2.4],
             _ => [1.5, 0.0, 2.4],
         };
+        Actor {
+            zone: zone.clone(),
+            position_m: pos,
+            active_from_s: from,
+            active_to_s: to,
             motion: walk,
             breathing: Some(breath),
             heart: None,
@@ -1289,9 +1294,9 @@ fn floor_scene() -> SceneScript {
             node(6, &lounge, 7.5),
         ],
         actors: vec![
-            actor(&study, 0.0, 6.0),
-            actor(&kitchen, 6.0, 10.0),
-            actor(&lounge, 8.0, 14.0),
+            actor(&study, 0.0, 5.0),
+            actor(&kitchen, 5.0, 9.0),
+            actor(&lounge, 9.0, 14.0),
         ],
         band: Band::B2G4,
         channel: 6,
@@ -1551,8 +1556,8 @@ fn home_scene() -> SceneScript {
             z if z == &kitchen => [0.4, 0.0, 2.4],
             z if z == &lounge => [5.4, 0.0, 2.4],
             z if z == &study => [10.4, 0.0, 2.4],
-            z if z == &loft => [20.4, 0.0, 2.4],
-            z if z == &landing => [25.4, 0.0, 2.4],
+            z if z == &loft => [15.4, 0.0, 2.4],
+            z if z == &landing => [20.4, 0.0, 2.4],
             _ => [1.5, 0.0, 2.4],
         };
         Actor {

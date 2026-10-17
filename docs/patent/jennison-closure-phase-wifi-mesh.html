@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Patent Application (Draft) — Jennison Closure Phase Wi-Fi Sensing Mesh</title>
+<style>
+  @page { margin: 2cm; }
+  body { font-family: "Times New Roman", Times, serif; font-size: 11pt; line-height: 1.4; color: #000; margin: 0; padding: 0; }
+  h1 { font-size: 16pt; text-align: center; margin: 24px 0 8px 0; }
+  h2 { font-size: 13pt; margin: 20px 0 8px 0; border-bottom: 1px solid #000; padding-bottom: 4px; }
+  h3 { font-size: 11pt; margin: 16px 0 6px 0; }
+  p { margin: 8px 0; text-align: justify; }
+  ul, ol { margin: 8px 0 8px 24px; }
+  li { margin: 4px 0; }
+  table { border-collapse: collapse; margin: 10px 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #000; padding: 4px 6px; text-align: left; }
+  th { background: #f0f0f0; font-weight: bold; }
+  pre { background: #f8f8f8; border: 1px solid #ccc; padding: 8px; font-size: 9pt; overflow: auto; }
+  code { font-family: "Courier New", monospace; font-size: 9pt; }
+  .figure { page-break-inside: avoid; margin: 26px 0; text-align: center; }
+  .figure-caption { font-weight: bold; margin-bottom: 8px; font-size: 12pt; }
+  .figure-svg { border: 1px solid #000; background: #fff; display: inline-block; }
+  .figure-file { font-size: 8.5pt; color: #444; margin-top: 4px; }
+  .header-block { text-align: center; margin-bottom: 20px; }
+  .draft-notice { font-style: italic; text-align: center; margin: 12px 0; font-size: 9.5pt; }
+  hr { border: none; border-top: 1px solid #000; margin: 16px 0; }
+  .page-break { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<div class="header-block">
+  <h1>Patent Application (Draft)</h1>
+  <p><strong>Title:</strong> Wi-Fi Sensing Mesh for Three-Dimensional Scatterer Tracking Using Jennison Closure Phase Across Directed Multi-Node Packet Loops</p>
+  <p><strong>Applicant:</strong> [Applicant name]</p>
+  <p><strong>Inventor(s):</strong> [Inventor name(s)]</p>
+  <p><strong>Priority claim:</strong> [To be completed]</p>
+  <p class="draft-notice">Draft status: For review by qualified patent attorney. Not legal advice.</p>
+</div>
+
+<h1>Patent Application (Draft)</h1>
+
+<p><strong>Title:</strong> Wi-Fi Sensing Mesh for Three-Dimensional Scatterer Tracking Using Jennison Closure Phase Across Directed Multi-Node Packet Loops</p>
+
+<p><strong>Applicant:</strong> [Applicant name]</p>
+<p><strong>Inventor(s):</strong> [Inventor name(s)]</p>
+<p><strong>Priority claim:</strong> [To be completed]</p>
+<p><strong>Draft status:</strong> For review by qualified patent attorney. Not legal advice.</p>
+
+<hr>
+
+<h2>1. Field of the Invention</h2>
+
+<p>The invention relates to passive radio-frequency sensing using Wi-Fi channel state information (CSI), and more particularly to a distributed Wi-Fi sensing mesh that estimates and tracks the three-dimensional position and motion of passive scatterers (e.g., people, animals, objects) by computing Jennison closure phase across directed multi-node packet loops. The technique is applicable to indoor presence detection, occupancy counting, fall detection, vital-sign sensing, and gesture recognition without cameras, wearables, or dedicated radar hardware.</p>
+
+<hr>
+
+<h2>2. Background of the Invention</h2>
+
+<h3>2.1 Wi-Fi CSI sensing and its phase-coherence problem</h3>
+
+<p>Wi-Fi channel state information (CSI) is the complex channel response measured across the OFDM subcarriers of a received 802.11 packet. When a person moves through a Wi-Fi-covered space, their body perturbs the multipath channel, producing measurable changes in CSI amplitude and phase across subcarriers and time. This phenomenon is the basis of "Wi-Fi sensing."</p>
+
+<p>A fundamental limitation of single-node and conventional multi-node Wi-Fi sensing is phase coherence. Each Wi-Fi node (e.g. an ESP32-S3) has its own independent local oscillator and free-running hardware clock. The absolute phase measured at a receiver on one node is not comparable, in any absolute sense, to the absolute phase measured at a receiver on another node, because:</p>
+
+<ul>
+<li>each receiver's local oscillator contributes an unknown, time-varying phase offset;</li>
+<li>each node's sampling clock has independent frequency offset (skew) and drift;</li>
+<li>there is no shared time or phase reference between nodes;</li>
+<li>packets are received asynchronously across nodes.</li>
+</ul>
+
+<p>Consequently, conventional Wi-Fi mesh sensing is generally restricted to per-link amplitude changes or per-node phase time series, and cannot form a phased array, perform interferometry, or measure absolute time-of-flight or angle of arrival across nodes.</p>
+
+<h3>2.2 Closure phase in radio interferometry</h3>
+
+<p>Closure phase (also called phase closure) is a technique from radio interferometry, described by R. C. Jennison (1958) and used extensively in very-long-baseline interferometry (VLBI), including by the Event Horizon Telescope to produce the first images of black holes (M87* and Sagittarius A*).</p>
+
+<p>For three antennas A, B, and C observing a common radio source, the measured phase on each baseline contains both (i) a geometric phase dependent on source position and baseline geometry, and (ii) an antenna-based phase error (clock/local-oscillator phase). By forming the sum of measured phases around a closed triangle of baselines — A→B, B→C, C→A — the antenna-based phase errors cancel exactly, leaving a closure phase that depends only on the source geometry and propagation path. Closure phase is therefore immune to antenna-based phase and clock errors, without requiring phase coherence between antennas.</p>
+
+<h3>2.3 The problem addressed by this invention</h3>
+
+<p>No known Wi-Fi sensing system applies Jennison closure phase to directed multi-node packet loops for 3D scatterer tracking. Conventional Wi-Fi sensing cannot exploit closure phase because:</p>
+
+<ul>
+<li>Wi-Fi nodes are not an interferometric array; they do not share a local oscillator or clock;</li>
+<li>Wi-Fi packet transmission is asynchronous and reception-driven, not simultaneous observation of a common coherent source;</li>
+<li>CSI is measured per-link (transmitter → receiver) and is directional;</li>
+<li>prior art Wi-Fi mesh systems treat phase as unusable across nodes and rely on amplitude only, or on single-node phase time series.</li>
+</ul>
+
+<p>There is a need for a Wi-Fi sensing technique that (a) works across an incoherent multi-node mesh, (b) is immune to per-node clock and local-oscillator phase error, (c) yields three-dimensional scatterer position and motion, and (d) uses only passive, ambient Wi-Fi traffic without active radar-like transmission.</p>
+
+<hr>
+
+<h2>3. Summary of the Invention</h2>
+
+<p>The invention provides a Wi-Fi sensing mesh comprising a plurality of fixed Wi-Fi sensor nodes that exchange CSI frames over directed Wi-Fi links. The nodes are not phase-coherent and share no clock. Each node measures CSI on received packets from other nodes (transmitter → receiver pairs). The sensing core (which may be one of the nodes or a separate host) collects directed CSI measurements and forms directed multi-node packet loops (cycles) among the nodes — for example node A → node B → node C → node A. For each directed loop, the system computes a Jennison closure phase by summing (with appropriate sign for direction) the measured CSI phases on each directed link of the loop across selected subcarriers.</p>
+
+<p>Because each directed link contributes a transmitter-side phase, a propagation phase, and a receiver-side phase, and because the loop returns to its starting node, every node's local oscillator and clock phase appears once as a transmitter term and once as a receiver term with opposite sign, and therefore cancels. The residual closure phase is determined by the geometric path lengths of the links and by any moving scatterer that perturbs those paths.</p>
+
+<p>By forming multiple directed loops of different geometry and orientation among the same nodes, and by tracking closure phase over time and across subcarriers (frequency diversity), the system solves for the three-dimensional position and motion of one or more moving passive scatterers. No phase coherence between nodes is required. No active elicitation waveform is required — the system is passive and uses ambient Wi-Fi traffic (or opportunistic transmissions between mesh nodes).</p>
+
+<hr>
+
+<h2>4. Detailed Description</h2>
+
+<h3>4.1 System architecture</h3>
+
+<p>The system comprises:</p>
+
+<ol>
+<li><strong>A plurality of fixed Wi-Fi sensor nodes</strong>, each comprising:</li>
+<p>   - a Wi-Fi radio capable of measuring and reporting CSI (complex channel coefficients per OFDM subcarrier) on received packets;</p>
+<p>   - a local oscillator and free-running hardware clock, independent of all other nodes;</p>
+<p>   - a transmitter and receiver for Wi-Fi packet exchange with other nodes;</p>
+<p>   - a network interface (e.g. UDP over Wi-Fi) to a sensing core.</p>
+</ul>
+
+<ol>
+<li><strong>A sensing core</strong> (a host or a designated node) that:</li>
+<p>   - collects CSI frames from the nodes, timestamped at reception;</p>
+<p>   - maintains a topology model of the mesh (node positions, floors, rooms, zones);</p>
+<p>   - forms directed multi-node packet loops among the nodes;</p>
+<p>   - computes Jennison closure phase for each directed loop;</p>
+<p>   - estimates scatterer position and motion from closure-phase measurements across loops, subcarriers, and time;</p>
+<p>   - outputs presence, count, pose, and/or tracking results per zone.</p>
+</ul>
+
+<p>The nodes are "dumb sensors" in the sense that they perform no DSP, inference, or fusion; all sensing computation is performed at the sensing core. This is consistent with the Aquila node model, but the invention is not limited to it.</p>
+
+<h3>4.2 Directed CSI measurements</h3>
+
+<p>For each received packet at receiver node R from transmitter node T, the receiver measures:</p>
+
+<ul>
+<li>CSI: a complex coefficient H_{T→R}[k] for each OFDM subcarrier k = 0, ..., N−1;</li>
+<li>phase: φ_{T→R}[k] = arg(H_{T→R}[k]), wrapped to (−π, π];</li>
+<li>metadata: receiver timestamp, transmitter node id, receiver node id, subcarrier layout, centre frequency, bandwidth, RSSI, sequence number.</li>
+</ul>
+
+<p>The measurement is directed: H_{T→R} generally differs from H_{R→T} because the transmitter and receiver hardware chains differ and the channel is reciprocal only in the propagation path, not in the radio front ends.</p>
+
+<p>Each CSI phase contains:</p>
+<ul>
+<li>a transmitter local-oscillator phase θ_T(t);</li>
+<li>a receiver local-oscillator phase θ_R(t);</li>
+<li>a propagation phase −2π f_k · d_{T→R}(t) / c, where d_{T→R}(t) is the effective path length (including multipath) and c is the speed of light;</li>
+<li>scatterer-induced perturbations to d_{T→R}(t);</li>
+<li>noise.</li>
+</ul>
+
+<h3>4.3 Directed multi-node packet loops</h3>
+
+<p>A directed L-node loop is an ordered cycle of distinct nodes (n₀, n₁, ..., n_{L−1}, n₀), where each consecutive pair (nᵢ → nᵢ₊₁) is a directed Wi-Fi link on which CSI is measured (indices mod L). The loop is "directed" because each link has a defined transmitter and receiver, and reversing a link changes the sign of its contribution to closure phase.</p>
+
+<p>The system forms loops of length L ≥ 3 (triangles and larger polygons) among available nodes. Multiple loops may share nodes and links. Loops of different geometry (different node triples, different orientations, different planar areas, including cross-floor loops) provide geometrically diverse closure-phase constraints.</p>
+
+<p>Example: with nodes A, B, C, the directed triangle loop A→B→C→A uses CSI measurements H_{A→B}, H_{B→C}, H_{C→A}.</p>
+
+<h3>4.4 Jennison closure phase computation</h3>
+
+<p>For a directed L-node loop (n₀ → n₁ → ... → n_{L−1} → n₀) and subcarrier k, the closure phase is:</p>
+
+<p>Ψ_loop[k] = Σ_{i=0}^{L−1} s_i · φ_{nᵢ→nᵢ₊₁}[k]  (mod 2π)</p>
+
+<p>where s_i = +1 for a link traversed in its measured direction and −1 for a link traversed opposite to its measured direction (phase conjugation). For a consistently directed loop where every link is measured in the loop direction, all s_i = +1:</p>
+
+<p>Ψ_loop[k] = φ_{n₀→n₁}[k] + φ_{n₁→n₂}[k] + ... + φ_{n_{L−1}→n₀}[k]  (mod 2π)</p>
+
+<p>Substituting the phase model:</p>
+
+<p>Ψ_loop[k] = Σ_i (θ_{nᵢ}(t) − θ_{nᵢ₊₁}(t)) − (2π f_k / c) Σ_i d_{nᵢ→nᵢ₊₁}(t) + perturbations + noise  (mod 2π)</p>
+
+<p>The telescope/local-oscillator terms telescope: each θ_{nᵢ} appears once positively (as receiver of link nᵢ₋₁→nᵢ) and once negatively (as transmitter of link nᵢ→nᵢ₊₁), so they cancel exactly:</p>
+
+<p>Ψ_loop[k] = −(2π f_k / c) · D_loop(t) + Δ_scatterer[k](t) + noise  (mod 2π)</p>
+
+<p>where D_loop(t) = Σ_i d_{nᵢ→nᵢ₊₁}(t) is the total effective path length around the loop, and Δ_scatterer[k](t) is the closure-phase perturbation induced by moving scatterers.</p>
+
+<p>Thus closure phase is independent of per-node clock and local-oscillator phase, requires no inter-node phase coherence, and is a direct observable of the loop's effective geometric path length.</p>
+
+<h3>4.5 Phase unwrapping and frequency diversity</h3>
+
+<p>The measured phase φ is wrapped to (−π, π]. For closure phase across subcarriers, the system:</p>
+
+<ul>
+<li>unwraps phase across subcarrier frequency for each link (correcting 2π wraps as a function of f_k);</li>
+<li>computes closure phase on unwrapped phases, then re-wraps the result;</li>
+<li>exploits frequency diversity: closure phase varies linearly with f_k through D_loop(t), so a slope across subcarriers estimates D_loop(t) robustly, and curvature/deviations from linearity indicate multipath/scatterer structure.</li>
+</ul>
+
+<h3>4.6 Three-dimensional scatterer tracking</h3>
+
+<p>Each moving scatterer j at position p_j(t) perturbs the effective path length of links that pass near it. For a loop, the scatterer-induced closure-phase perturbation is a function of scatterer position relative to the loop geometry:</p>
+
+<p>Δ_scatterer,loop[k](t) ≈ Σ_j (2π f_k / c) · δd_{loop,j}(p_j(t))</p>
+
+<p>where δd_{loop,j} is the path-length perturbation of the loop caused by scatterer j.</p>
+
+<p>By forming multiple loops of different geometry (different node triples, areas, orientations, floor crossings), the system obtains multiple independent closure-phase measurements at the same time. Each loop constrains scatterer position to a surface (analogous to an interferometric fringe). The intersection of surfaces from multiple loops localises the scatterer in 3D.</p>
+
+<p>Tracking over time: as a scatterer moves, D_loop(t) and Δ_scatterer,loop[k](t) change. The time derivative of closure phase across loops yields scatterer velocity; fitting a motion model yields trajectory. Breathing and chest-wall motion produce sub-millimetre path-length perturbations that appear as low-frequency (0.1–0.5 Hz) closure-phase modulation; gross body motion produces larger, faster perturbations.</p>
+
+<h3>4.7 Subcarrier and band selection</h3>
+
+<p>The system operates on HT20 (~64 subcarriers at 20 MHz) or HT40 (~128 subcarriers at 40 MHz) Wi-Fi channels. Not all subcarriers carry equal scatterer information; some are nulls or dominated by hardware ripple. The system selects a subset of subcarriers (e.g. those with highest scatterer sensitivity / SNR) during calibration and freezes the selection for runtime, consistent with a deterministic pipeline.</p>
+
+<h3>4.8 Calibration and baseline</h3>
+
+<p>The system maintains an empty-home baseline: per-link, per-subcarrier CSI phase and amplitude measured with no person present. Closure phase is computed relative to baseline, so static multipath and fixed furniture contribute a constant closure phase that is subtracted. Moving scatterers produce deviations from baseline closure phase. Calibration also learns per-node clock skew models to assist time alignment across nodes (though closure phase itself is clock-error immune).</p>
+
+<h3>4.9 Determinism and reproducibility</h3>
+
+<p>The signal-conditioning and closure-phase pipeline is deterministic and bit-exact for identical inputs on a pinned target: no runtime trigonometric functions outside pinned tables, fixed accumulation order, no parallel reductions, no wall-clock dependence. This permits replay of recorded sessions and commit-keyed measurement ledgers, so closure-phase metrics are reproducible rather than anecdotal.</p>
+
+<h3>4.10 Witness grading</h3>
+
+<p>Every sensing claim (presence, count, position, pose, vitals) carries an evidence grade: Gated, Measured, Claimed, Data-gated, or Hardware-gated (strongest first). Closure-phase-derived claims are graded according to the quality and quantity of loop coverage, baseline availability, and reference-ground-truth support.</p>
+
+<hr>
+
+<h2>5. Brief Description of Drawings</h2>
+
+<p>[Figures to be provided by patent attorney / draftsperson]</p>
+
+<ul>
+<li><strong>Figure 1.</strong> System block diagram: Wi-Fi sensing mesh of fixed nodes, directed links, sensing core, closure-phase computation, scatterer tracking output.</li>
+<li><strong>Figure 2.</strong> Directed three-node packet loop (A→B→C→A) and cancellation of per-node local-oscillator/clock phase in closure phase.</li>
+<li><strong>Figure 3.</strong> Phase model of a directed link showing transmitter phase, propagation phase, receiver phase, and scatterer perturbation.</li>
+<li><strong>Figure 4.</strong> Closure phase vs. subcarrier frequency for a loop, showing linear dependence on effective path length and scatterer-induced deviation.</li>
+<li><strong>Figure 5.</strong> Multiple directed loops of different geometry providing intersecting constraints for 3D scatterer localisation.</li>
+<li><strong>Figure 6.</strong> Time-series of closure phase showing breathing (low-frequency) and gross motion (higher-amplitude) perturbations.</li>
+<li><strong>Figure 7.</strong> Method flowchart: collect directed CSI → form loops → compute closure phase → unwrap → estimate scatterer 3D position → track over time → output per-zone results.</li>
+</ul>
+
+<hr>
+
+<h2>6. Claims</h2>
+
+<p><strong>Claim 1.</strong> A Wi-Fi sensing system for tracking moving passive scatterers in three dimensions, comprising:</p>
+<ul>
+<li>a plurality of fixed Wi-Fi sensor nodes, each node having an independent local oscillator and an independent free-running clock, with no shared phase or time reference between any pair of nodes;</li>
+<li>each node configured to measure channel state information (CSI) on Wi-Fi packets received from other nodes, yielding, for each directed transmitter-to-receiver link and each of a plurality of OFDM subcarriers, a complex channel coefficient and a measured phase;</li>
+<li>a sensing core configured to:</li>
+<p>  - collect the CSI measurements from the nodes;</p>
+<p>  - form one or more directed multi-node packet loops, each loop being an ordered cycle of distinct nodes in which each consecutive pair is a directed link for which CSI is measured;</p>
+<p>  - for each directed loop and each subcarrier, compute a Jennison closure phase by summing the measured phases of the directed links around the loop, wherein each node's local-oscillator phase and clock phase appears once as a transmitter term and once as a receiver term with opposite sign and therefore cancels, so that the closure phase is independent of per-node clock and local-oscillator phase error and requires no inter-node phase coherence;</p>
+<p>  - estimate a three-dimensional position of at least one moving passive scatterer from closure-phase measurements across a plurality of directed loops of different geometry;</p>
+<p>  - output a tracking result for the scatterer.</p>
+</ul>
+
+<p><strong>Claim 2.</strong> The system of claim 1, wherein the sensing core is further configured to unwrap the measured phase across subcarrier frequency for each directed link before computing closure phase, and to estimate the effective loop path length from the slope of closure phase versus subcarrier frequency.</p>
+
+<p><strong>Claim 3.</strong> The system of claim 1, wherein the directed multi-node packet loops include triangular loops of three nodes and polygonal loops of more than three nodes, and wherein loops of different planar area and orientation provide geometrically diverse closure-phase constraints.</p>
+
+<p><strong>Claim 4.</strong> The system of claim 1, wherein the system is passive and uses ambient Wi-Fi traffic or opportunistic transmissions between mesh nodes, and wherein no node transmits a dedicated elicitation waveform for sensing.</p>
+
+<p><strong>Claim 5.</strong> The system of claim 1, further comprising:</p>
+<ul>
+<li>an empty-home baseline of per-link, per-subcarrier CSI phase measured with no scatterer present;</li>
+<li>wherein the sensing core computes closure phase relative to the baseline so that static multipath and fixed obstacles contribute a constant closure phase that is subtracted, and moving scatterers produce deviations from baseline closure phase.</li>
+</ul>
+
+<p><strong>Claim 6.</strong> The system of claim 1, wherein the sensing core tracks the scatterer over time by measuring changes in closure phase across the directed loops, the time derivative of closure phase yielding scatterer velocity, and low-frequency closure-phase modulation yielding breathing or chest-wall motion of a person.</p>
+
+<p><strong>Claim 7.</strong> The system of claim 1, further comprising a calibration module that selects a subset of subcarriers carrying scatterer information and freezes the selection for runtime, such that the signal-conditioning and closure-phase pipeline is deterministic and bit-exact for identical recorded inputs.</p>
+
+<p><strong>Claim 8.</strong> The system of claim 1, wherein every sensing claim carries one of five evidence grades — Gated, Measured, Claimed, Data-gated, or Hardware-gated — derived from a commit-keyed measurement ledger.</p>
+
+<p><strong>Claim 9.</strong> A method of operating a Wi-Fi sensing mesh, the method comprising:</p>
+<ul>
+<li>measuring, at each of a plurality of fixed Wi-Fi nodes having independent local oscillators and independent free-running clocks, CSI on packets received from other nodes, the CSI comprising a measured phase per OFDM subcarrier for each directed transmitter-to-receiver link;</li>
+<li>forming at least one directed multi-node packet loop comprising an ordered cycle of distinct nodes;</li>
+<li>computing a Jennison closure phase for the loop by summing measured link phases around the loop, such that per-node local-oscillator and clock phases cancel;</li>
+<li>estimating a three-dimensional position of a moving passive scatterer from closure-phase measurements across multiple directed loops of different geometry;</li>
+<li>and outputting a per-zone tracking result.</li>
+</ul>
+
+<p><strong>Claim 10.</strong> The method of claim 9, further comprising unwrapping phase across subcarrier frequency and estimating effective loop path length from closure phase versus frequency.</p>
+
+<p><strong>Claim 11.</strong> The method of claim 9, wherein the loops include triangular loops of three nodes and the method requires no phase coherence between nodes and no shared clock.</p>
+
+<p><strong>Claim 12.</strong> A computer-readable storage medium storing instructions that, when executed by a sensing core of a Wi-Fi sensing mesh, cause the core to perform the method of claim 9.</p>
+
+<hr>
+
+<h2>7. Abstract</h2>
+
+<p>A Wi-Fi sensing mesh tracks moving passive scatterers in three dimensions without requiring inter-node phase coherence. Fixed Wi-Fi nodes, each with an independent local oscillator and free-running clock, measure channel state information on received packets from other nodes. A sensing core forms directed multi-node packet loops (ordered cycles of nodes) and computes Jennison closure phase for each loop by summing measured link phases around the loop. Each node's local-oscillator and clock phase appears once as a transmitter term and once as a receiver term with opposite sign and therefore cancels, making closure phase immune to per-node phase and clock error. Multiple directed loops of different geometry provide intersecting constraints from which the three-dimensional position and motion of moving scatterers — including breathing-scale chest-wall motion — are estimated. The system is passive, uses ambient Wi-Fi traffic, requires no dedicated radar-like transmission, and produces deterministic, reproducible results with evidence-graded sensing claims.</p>
+
+<hr>
+
+<h2>8. Prior-art statement (for attorney review)</h2>
+
+<p>The closest prior art comprises:</p>
+<ul>
+<li>Wi-Fi CSI sensing systems using per-link amplitude and single-node phase time series (e.g. RuView, WiVi, and academic presence/vital-sign sensing). These do not form closure phase across directed multi-node loops and do not achieve cross-node interferometric phase cancellation.</li>
+<li>Radio interferometry and VLBI closure phase (Jennison 1958; Event Horizon Telescope black-hole imaging). These apply to coherent or incoherent antenna arrays observing astronomical sources, not to packet-based Wi-Fi meshes with asynchronous, directed transmitter→receiver CSI measurements.</li>
+<li>Wi-Fi mesh positioning and gesture systems using RSSI, CSI amplitude, or time-of-flight. These do not use closure phase and generally require either phase coherence, dedicated transmissions, or calibrated anchors.</li>
+</ul>
+
+<p>The combination of (i) directed packet loops in an incoherent Wi-Fi mesh, (ii) Jennison closure-phase cancellation of per-node clock/LO error, and (iii) 3D scatterer tracking from multi-loop closure-phase geometry is believed to be novel and inventive. The patent attorney should conduct a novelty and inventive-step search, particularly in the intersection of Wi-Fi sensing, interferometric closure phase, and passive indoor localisation.</p>
+
+<hr>
+
+<h2>9. Inventor's note on the physics connection</h2>
+
+<p>Closure phase is the same interferometric observable that enabled the Event Horizon Telescope to image black-hole shadows: it measures structure from phase relationships around closed baselines while rejecting station-based phase corruption. This invention transplants that principle from radio astronomy to indoor Wi-Fi sensing. The "black hole" analogy extends further: a person moving through a multipath Wi-Fi channel perturbs the effective path length of links passing near them, and closure phase around loops enclosing that person encodes the perturbation — in effect, the scatterer's motion is inferred from the way it changes the phase "geometry" of invisible Wi-Fi paths through the home, much as a black hole's mass is inferred from the way it distorts light paths around it. This is an explanatory metaphor only and does not limit the claims.</p>
+
+<hr>
+
+<h2>Appendix A — Figures</h2>
+
+<table border="1" cellspacing="0" cellpadding="4">
+<tr><th>Figure</th><th>File</th><th>Subject</th></tr>
+<tr><td>Fig. 1</td><td>`figures/fig01_system.svg`</td><td>Wi-Fi sensing mesh with Jennison closure-phase processing</td></tr>
+<tr><td>Fig. 2</td><td>`figures/fig02_loop.svg`</td><td>Directed three-node packet loop A&#8594;B&#8594;C&#8594;A</td></tr>
+<tr><td>Fig. 3</td><td>`figures/fig03_link.svg`</td><td>Phase model of a single directed link T&#8594;R</td></tr>
+<tr><td>Fig. 4</td><td>`figures/fig04_freq.svg`</td><td>Closure phase vs. subcarrier frequency</td></tr>
+<tr><td>Fig. 5</td><td>`figures/fig05_localization.svg`</td><td>Multiple loops for 3-D scatterer localisation</td></tr>
+<tr><td>Fig. 6</td><td>`figures/fig06_timeseries.svg`</td><td>Closure phase vs. time: breathing and gross motion</td></tr>
+<tr><td>Fig. 7</td><td>`figures/fig07_method.svg`</td><td>Method flowchart</td></tr>
+</table>
+
+<p>All figures are SVG vector line art in patent-drawing style (black on white, reference numerals, leader lines), suitable for conversion to the raster/TIFF formats required by most patent offices.</p>
+
+<p><strong>End of draft.</strong> Review with a qualified patent attorney before filing. Claims should be tailored to the actual reduction to practice, priority documents, and jurisdiction.</p>
+
+<div class="page-break"></div>
+<h2>Appendix A — Figures</h2>
+<p>All figures are SVG vector line art in patent-drawing style (black on white, reference numerals, leader lines), suitable for conversion to the raster/TIFF formats required by most patent offices.</p>
+
+
+    <div class="figure" style="page-break-inside: avoid; margin: 30px 0; text-align: center;">
+        <div class="figure-caption" style="font-weight: bold; margin-bottom: 8px; font-size: 13px;">Figure 1 — Wi-Fi sensing mesh with Jennison closure-phase processing</div>
+        <div class="figure-svg" style="border: 1px solid #000; background: #fff; display: inline-block;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 1</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">Wi-Fi sensing mesh with Jennison closure-phase processing</text>
+
+  <!-- Nodes column -->
+  <text x="100" y="90" text-anchor="middle" font-size="10" font-weight="bold">incoherent Wi-Fi sensor nodes</text>
+  <g transform="translate(40,110)">
+    <rect x="0" y="0" width="120" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="60" y="18" text-anchor="middle" font-weight="bold">Node 1</text>
+    <text x="60" y="34" text-anchor="middle" font-size="8">Wi-Fi radio + CSI</text>
+    <text x="60" y="46" text-anchor="middle" font-size="8">indep. LO + clock</text>
+  </g>
+  <g transform="translate(40,180)">
+    <rect x="0" y="0" width="120" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="60" y="18" text-anchor="middle" font-weight="bold">Node 2</text>
+    <text x="60" y="34" text-anchor="middle" font-size="8">Wi-Fi radio + CSI</text>
+    <text x="60" y="46" text-anchor="middle" font-size="8">indep. LO + clock</text>
+  </g>
+  <g transform="translate(40,250)">
+    <rect x="0" y="0" width="120" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="60" y="18" text-anchor="middle" font-weight="bold">Node N</text>
+    <text x="60" y="34" text-anchor="middle" font-size="8">Wi-Fi radio + CSI</text>
+    <text x="60" y="46" text-anchor="middle" font-size="8">indep. LO + clock</text>
+  </g>
+  <path d="M160,160 L250,240" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <path d="M160,230 L250,240" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <path d="M160,300 L250,240" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+
+  <!-- Sensing core -->
+  <g transform="translate(250,200)">
+    <rect x="0" y="0" width="220" height="140" fill="#fff" stroke="#000" stroke-width="1.6"/>
+    <text x="110" y="22" text-anchor="middle" font-weight="bold">Sensing core</text>
+    <line x1="0" y1="40" x2="220" y2="40" stroke="#000" stroke-width="0.8"/>
+    <text x="110" y="58" text-anchor="middle" font-size="9">closure-phase engine</text>
+    <text x="110" y="74" text-anchor="middle" font-size="9">(directed packet loops)</text>
+    <line x1="0" y1="90" x2="220" y2="90" stroke="#000" stroke-width="0.8"/>
+    <text x="110" y="108" text-anchor="middle" font-size="9">3-D scatterer tracking</text>
+    <text x="110" y="124" text-anchor="middle" font-size="9">per-zone output</text>
+  </g>
+
+  <!-- Scatterer / person -->
+  <g transform="translate(250,30)">
+    <circle cx="110" cy="40" r="26" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="110" y="45" text-anchor="middle" font-weight="bold">moving</text>
+    <text x="110" y="58" text-anchor="middle" font-weight="bold">scatterer</text>
+    <text x="110" y="70" text-anchor="middle" font-size="8">(person / object)</text>
+  </g>
+  <path d="M220,60 Q180,110 140,120" stroke="#000" stroke-width="1" marker-end="url(#arr)" fill="none"/>
+  <path d="M120,130 Q180,140 250,200" stroke="#000" stroke-width="1" marker-end="url(#arr)" fill="none"/>
+
+  <!-- Home outline -->
+  <path d="M10,420 L840,420 L840,600 L10,600 Z" fill="none" stroke="#000" stroke-width="1.2"/>
+  <text x="425" y="438" text-anchor="middle" font-size="9" font-weight="bold">monitored home (zones)</text>
+  <line x1="150" y1="460" x2="150" y2="570" stroke="#000" stroke-width="0.8" stroke-dasharray="4 4"/>
+  <line x1="425" y1="460" x2="425" y2="570" stroke="#000" stroke-width="0.8" stroke-dasharray="4 4"/>
+  <line x1="700" y1="460" x2="700" y2="570" stroke="#000" stroke-width="0.8" stroke-dasharray="4 4"/>
+  <text x="150" y="472" text-anchor="middle" font-size="8">zone 1</text>
+  <text x="425" y="472" text-anchor="middle" font-size="8">zone 2</text>
+  <text x="700" y="472" text-anchor="middle" font-size="8">zone 3</text>
+</svg>
+        </div>
+        <div class="figure-file" style="font-size: 9px; color: #555; margin-top: 4px;">File: fig01_system.svg</div>
+    </div>
+    
+    <div class="figure" style="page-break-inside: avoid; margin: 30px 0; text-align: center;">
+        <div class="figure-caption" style="font-weight: bold; margin-bottom: 8px; font-size: 13px;">Figure 2 — Directed three-node packet loop A&#8594;B&#8594;C&#8594;A</div>
+        <div class="figure-svg" style="border: 1px solid #000; background: #fff; display: inline-block;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 2</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">directed three-node packet loop A&#8594;B&#8594;C&#8594;A</text>
+
+  <!-- Triangle nodes -->
+  <g transform="translate(250,220)">
+    <circle r="24" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="0" y="5" text-anchor="middle" font-weight="bold">A</text>
+    <text x="0" y="38" text-anchor="middle" font-size="8">LO &#952;<sub>A</sub></text>
+  </g>
+  <g transform="translate(600,220)">
+    <circle r="24" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="0" y="5" text-anchor="middle" font-weight="bold">B</text>
+    <text x="0" y="38" text-anchor="middle" font-size="8">LO &#952;<sub>B</sub></text>
+  </g>
+  <g transform="translate(425,460)">
+    <circle r="24" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="0" y="5" text-anchor="middle" font-weight="bold">C</text>
+    <text x="0" y="38" text-anchor="middle" font-size="8">LO &#952;<sub>C</sub></text>
+  </g>
+
+  <!-- Directed edges -->
+  <path d="M274,220 L576,220" stroke="#000" stroke-width="1.4" marker-end="url(#arr)" fill="none"/>
+  <text x="425" y="208" text-anchor="middle" font-size="9">CSI A&#8594;B</text>
+  <path d="M594,232 Q425,280 425,436" stroke="#000" stroke-width="1.4" marker-end="url(#arr)" fill="none"/>
+  <text x="540" y="330" text-anchor="middle" font-size="9" transform="rotate(-25 540 330)">CSI B&#8594;C</text>
+  <path d="M401,448 Q280,400 274,236" stroke="#000" stroke-width="1.4" marker-end="url(#arr)" fill="none"/>
+  <text x="310" y="360" text-anchor="middle" font-size="9" transform="rotate(25 310 360)">CSI C&#8594;A</text>
+
+  <!-- Closure phase equation -->
+  <g transform="translate(250,520)">
+    <rect x="0" y="0" width="350" height="80" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="175" y="22" text-anchor="middle" font-weight="bold">Jennison closure phase (subcarrier k)</text>
+    <text x="175" y="44" text-anchor="middle" font-size="10" fill="#000">&#932;<sub>ABC</sub>[k] = &#966;<sub>A&#8594;B</sub>[k] + &#966;<sub>B&#8594;C</sub>[k] + &#966;<sub>C&#8594;A</sub>[k] (mod 2&#960;)</text>
+    <text x="175" y="64" text-anchor="middle" font-size="9">&#952;<sub>A</sub>, &#952;<sub>B</sub>, &#952;<sub>C</sub> cancel; only loop path length remains</text>
+  </g>
+</svg>
+        </div>
+        <div class="figure-file" style="font-size: 9px; color: #555; margin-top: 4px;">File: fig02_loop.svg</div>
+    </div>
+    
+    <div class="figure" style="page-break-inside: avoid; margin: 30px 0; text-align: center;">
+        <div class="figure-caption" style="font-weight: bold; margin-bottom: 8px; font-size: 13px;">Figure 3 — Phase model of a single directed link T&#8594;R</div>
+        <div class="figure-svg" style="border: 1px solid #000; background: #fff; display: inline-block;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 3</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">phase model of a single directed link T&#8594;R (subcarrier k)</text>
+
+  <!-- Transmitter and receiver -->
+  <g transform="translate(180,260)">
+    <circle r="24" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="0" y="5" text-anchor="middle" font-weight="bold">T</text>
+    <text x="0" y="38" text-anchor="middle" font-size="8">transmitter</text>
+  </g>
+  <g transform="translate(670,260)">
+    <circle r="24" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="0" y="5" text-anchor="middle" font-weight="bold">R</text>
+    <text x="0" y="38" text-anchor="middle" font-size="8">receiver</text>
+  </g>
+
+  <!-- Link -->
+  <line x1="204" y1="260" x2="646" y2="260" stroke="#000" stroke-width="1.4" marker-end="url(#arr)"/>
+  <text x="425" y="246" text-anchor="middle" font-size="9">directed link T&#8594;R</text>
+  <text x="425" y="260" text-anchor="middle" font-size="8">path length d<sub>T&#8594;R</sub></text>
+
+  <!-- Phase components stacked at top -->
+  <g transform="translate(150,60)">
+    <rect x="0" y="0" width="550" height="150" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="275" y="20" text-anchor="middle" font-weight="bold">measured phase &#966;<sub>T&#8594;R</sub>[k] decomposes into</text>
+    <line x1="20" y1="36" x2="530" y2="36" stroke="#000" stroke-width="0.8"/>
+    <text x="40" y="56" text-anchor="start" font-size="9">&#952;<sub>T</sub> &#8212; transmitter local-oscillator phase</text>
+    <text x="40" y="76" text-anchor="start" font-size="9">&#952;<sub>R</sub> &#8212; receiver local-oscillator phase</text>
+    <text x="40" y="96" text-anchor="start" font-size="9">&#8722;(2&#960; f<sub>k</sub> / c) &#8226; d<sub>T&#8594;R</sub> &#8212; propagation phase</text>
+    <text x="40" y="116" text-anchor="start" font-size="9">&#916;<sub>scatterer</sub>[k] &#8212; perturbation from moving scatterer</text>
+    <text x="40" y="136" text-anchor="start" font-size="9">+ noise</text>
+  </g>
+</svg>
+        </div>
+        <div class="figure-file" style="font-size: 9px; color: #555; margin-top: 4px;">File: fig03_link.svg</div>
+    </div>
+    
+    <div class="figure" style="page-break-inside: avoid; margin: 30px 0; text-align: center;">
+        <div class="figure-caption" style="font-weight: bold; margin-bottom: 8px; font-size: 13px;">Figure 4 — Closure phase vs. subcarrier frequency</div>
+        <div class="figure-svg" style="border: 1px solid #000; background: #fff; display: inline-block;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 4</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">closure phase vs. subcarrier frequency (slope &#8776; effective loop path length)</text>
+
+  <!-- Plot area -->
+  <rect x="150" y="120" width="540" height="330" fill="#fff" stroke="#000" stroke-width="1.2"/>
+  <line x1="150" y1="450" x2="690" y2="450" stroke="#000" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="150" y1="450" x2="150" y2="120" stroke="#000" stroke-width="1.4" marker-end="url(#arr)"/>
+  <text x="420" y="490" text-anchor="middle" font-size="9">subcarrier frequency f<sub>k</sub></text>
+  <text x="60" y="285" text-anchor="middle" font-size="9" transform="rotate(-90 60 285)">closure phase &#932;[k] (rad)</text>
+
+  <!-- Ticks -->
+  <line x1="150" y1="450" x2="150" y2="456" stroke="#000" stroke-width="1"/>
+  <line x1="420" y1="450" x2="420" y2="456" stroke="#000" stroke-width="1"/>
+  <line x1="690" y1="450" x2="690" y2="456" stroke="#000" stroke-width="1"/>
+  <text x="150" y="470" text-anchor="middle" font-size="8">f<sub>lo</sub></text>
+  <text x="420" y="470" text-anchor="middle" font-size="8">f<sub>center</sub></text>
+  <text x="690" y="470" text-anchor="middle" font-size="8">f<sub>hi</sub></text>
+  <line x1="144" y1="450" x2="150" y2="450" stroke="#000" stroke-width="1"/>
+  <line x1="144" y1="285" x2="150" y2="285" stroke="#000" stroke-width="1"/>
+  <line x1="144" y1="120" x2="150" y2="120" stroke="#000" stroke-width="1"/>
+  <text x="132" y="454" text-anchor="end" font-size="8">0</text>
+  <text x="132" y="289" text-anchor="end" font-size="8">&#932;<sub>0</sub></text>
+  <text x="132" y="124" text-anchor="end" font-size="8">&#932;<sub>max</sub></text>
+
+  <!-- Linear closure-phase trace (empty-home baseline) -->
+  <polyline points="150,300 420,180 690,60" fill="none" stroke="#000" stroke-width="1.6"/>
+  <text x="600" y="100" text-anchor="start" font-size="9">baseline (empty home)</text>
+
+  <!-- Deviating trace with moving scatterer (wavy deviation) -->
+  <path d="M150,310 Q285,340 420,200 T690,90" fill="none" stroke="#000" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text x="600" y="130" text-anchor="start" font-size="9">with moving scatterer</text>
+
+  <!-- Annotation: slope = path length -->
+  <line x1="150" y1="300" x2="420" y2="300" stroke="#000" stroke-width="0.8" stroke-dasharray="2 2"/>
+  <line x1="420" y1="300" x2="420" y2="180" stroke="#000" stroke-width="0.8" stroke-dasharray="2 2"/>
+  <text x="440" y="240" text-anchor="start" font-size="9">slope &#8776; loop path length D<sub>loop</sub></text>
+</svg>
+        </div>
+        <div class="figure-file" style="font-size: 9px; color: #555; margin-top: 4px;">File: fig04_freq.svg</div>
+    </div>
+    
+    <div class="figure" style="page-break-inside: avoid; margin: 30px 0; text-align: center;">
+        <div class="figure-caption" style="font-weight: bold; margin-bottom: 8px; font-size: 13px;">Figure 5 — Multiple loops for 3-D scatterer localisation</div>
+        <div class="figure-svg" style="border: 1px solid #000; background: #fff; display: inline-block;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 5</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">multiple directed loops give intersecting closure-phase constraints for 3-D localisation</text>
+
+  <!-- Floor plan -->
+  <rect x="120" y="130" width="610" height="330" fill="#fff" stroke="#000" stroke-width="1.4"/>
+  <text x="425" y="120" text-anchor="middle" font-size="9" font-weight="bold">monitored home (floor plan)</text>
+
+  <!-- Nodes -->
+  <g transform="translate(160,170)">
+    <circle r="16" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="0" y="4" text-anchor="middle" font-weight="bold">n1</text>
+  </g>
+  <g transform="translate(690,170)">
+    <circle r="16" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="0" y="4" text-anchor="middle" font-weight="bold">n2</text>
+  </g>
+  <g transform="translate(160,430)">
+    <circle r="16" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="0" y="4" text-anchor="middle" font-weight="bold">n3</text>
+  </g>
+  <g transform="translate(690,430)">
+    <circle r="16" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="0" y="4" text-anchor="middle" font-weight="bold">n4</text>
+  </g>
+
+  <!-- Loops (triangles) -->
+  <path d="M176,186 L706,186 L425,310 Z" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="3 2"/>
+  <text x="441" y="178" text-anchor="start" font-size="8">loop 1</text>
+  <path d="M176,446 L706,446 L425,310 Z" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="3 2"/>
+  <text x="441" y="438" text-anchor="start" font-size="8">loop 2</text>
+  <path d="M176,186 L176,446 L425,310 Z" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="3 2"/>
+  <text x="162" y="314" text-anchor="end" font-size="8">loop 3</text>
+  <path d="M706,186 L706,446 L425,310 Z" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="3 2"/>
+  <text x="721" y="314" text-anchor="start" font-size="8">loop 4</text>
+
+  <!-- Moving scatterer at intersection -->
+  <circle cx="425" cy="310" r="20" fill="#fff" stroke="#000" stroke-width="1.4"/>
+  <text x="425" y="314" text-anchor="middle" font-weight="bold" font-size="11">S</text>
+  <text x="425" y="332" text-anchor="middle" font-size="8">moving scatterer</text>
+
+  <!-- Constraint surfaces (ellipses) from loops -->
+  <ellipse cx="425" cy="248" rx="260" ry="150" fill="none" stroke="#000" stroke-width="0.9" opacity="0" stroke-dasharray="2 2"/>
+  <path d="M165,248 Q425,120 685,248 Q425,376 165,248 Z" fill="none" stroke="#000" stroke-width="0.9" stroke-dasharray="6 3"/>
+  <text x="425" y="104" text-anchor="middle" font-size="8">fringe surface from loop 1</text>
+</svg>
+        </div>
+        <div class="figure-file" style="font-size: 9px; color: #555; margin-top: 4px;">File: fig05_localization.svg</div>
+    </div>
+    
+    <div class="figure" style="page-break-inside: avoid; margin: 30px 0; text-align: center;">
+        <div class="figure-caption" style="font-weight: bold; margin-bottom: 8px; font-size: 13px;">Figure 6 — Closure phase vs. time: breathing and gross motion</div>
+        <div class="figure-svg" style="border: 1px solid #000; background: #fff; display: inline-block;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 6</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">closure phase vs. time: breathing (low-frequency) and gross motion</text>
+
+  <!-- Plot area -->
+  <rect x="150" y="120" width="620" height="330" fill="#fff" stroke="#000" stroke-width="1.2"/>
+  <line x1="150" y1="450" x2="770" y2="450" stroke="#000" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="150" y1="450" x2="150" y2="120" stroke="#000" stroke-width="1.4" marker-end="url(#arr)"/>
+  <text x="460" y="490" text-anchor="middle" font-size="9">time</text>
+  <text x="60" y="285" text-anchor="middle" font-size="9" transform="rotate(-90 60 285)">closure phase &#932; (rad)</text>
+
+  <!-- Axis ticks -->
+  <line x1="150" y1="450" x2="150" y2="456" stroke="#000" stroke-width="1"/>
+  <line x1="460" y1="450" x2="460" y2="456" stroke="#000" stroke-width="1"/>
+  <line x1="770" y1="450" x2="770" y2="456" stroke="#000" stroke-width="1"/>
+  <text x="150" y="470" text-anchor="middle" font-size="8">t<sub>0</sub></text>
+  <text x="460" y="470" text-anchor="middle" font-size="8">t<sub>breath</sub></text>
+  <text x="770" y="470" text-anchor="middle" font-size="8">t<sub>end</sub></text>
+  <line x1="144" y1="450" x2="150" y2="450" stroke="#000" stroke-width="1"/>
+  <line x1="144" y1="285" x2="150" y2="285" stroke="#000" stroke-width="1"/>
+  <line x1="144" y1="120" x2="150" y2="120" stroke="#000" stroke-width="1"/>
+  <text x="132" y="454" text-anchor="end" font-size="8">0</text>
+  <text x="132" y="289" text-anchor="end" font-size="8">&#932;<sub>0</sub></text>
+  <text x="132" y="124" text-anchor="end" font-size="8">&#932;<sub>max</sub></text>
+
+  <!-- Breathing: slow small-amplitude oscillation around baseline -->
+  <path d="M150,285 Q230,260 310,285 T390,285 T470,285 T550,285 T630,285 T710,285" fill="none" stroke="#000" stroke-width="1.4"/>
+  <text x="780" y="289" text-anchor="start" font-size="8">breathing (0.1&#8211;0.5 Hz)</text>
+
+  <!-- Gross motion: larger, faster deviation -->
+  <path d="M150,300 Q260,150 370,300 Q480,420 590,300 Q700,180 770,300" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="5 4"/>
+  <text x="780" y="330" text-anchor="start" font-size="8">gross motion</text>
+</svg>
+        </div>
+        <div class="figure-file" style="font-size: 9px; color: #555; margin-top: 4px;">File: fig06_timeseries.svg</div>
+    </div>
+    
+    <div class="figure" style="page-break-inside: avoid; margin: 30px 0; text-align: center;">
+        <div class="figure-caption" style="font-weight: bold; margin-bottom: 8px; font-size: 13px;">Figure 7 — Method flowchart</div>
+        <div class="figure-svg" style="border: 1px solid #000; background: #fff; display: inline-block;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 7</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">method of operating a Wi-Fi sensing mesh (Jennison closure phase)</text>
+
+  <!-- Step boxes -->
+  <g transform="translate(120,130)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">1. Measure CSI</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">per directed link, per subcarrier</text>
+  </g>
+  <path d="M300,155 L330,155" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(350,130)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">2. Form directed loops</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">ordered cycles of nodes</text>
+  </g>
+  <path d="M530,155 L560,155" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(580,130)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">3. Compute closure phase</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">sum link phases around loop</text>
+  </g>
+
+  <!-- Branch down -->
+  <path d="M670,180 L670,220" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(580,230)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">4. Unwrap phase</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">across subcarrier frequency</text>
+  </g>
+  <path d="M670,280 L670,320" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(580,330)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">5. Estimate path length</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">from slope of &#932; vs. f<sub>k</sub></text>
+  </g>
+  <path d="M670,380 L670,420" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(580,430)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">6. Localise scatterer</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">intersect multi-loop constraints</text>
+  </g>
+
+  <!-- Output -->
+  <path d="M520,480 L490,480" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(290,430)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">7. Output tracking</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">per-zone position &amp; motion</text>
+  </g>
+  <path d="M290,480 L260,480" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <path d="M230,480 L200,480" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(40,430)">
+    <rect x="0" y="0" width="140" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="70" y="20" text-anchor="middle" font-weight="bold">loop back</text>
+    <text x="70" y="36" text-anchor="middle" font-size="8">continuous tracking</text>
+  </g>
+</svg>
+        </div>
+        <div class="figure-file" style="font-size: 9px; color: #555; margin-top: 4px;">File: fig07_method.svg</div>
+    </div>
+    
+
+<p style="margin-top: 30px; font-style: italic; text-align: center; font-size: 9.5pt;">
+End of draft. Review with a qualified patent attorney before filing. Claims should be tailored to the actual reduction to practice, priority documents, and jurisdiction.
+</p>
+
+</body>
+</html>

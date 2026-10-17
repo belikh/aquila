@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 6</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">closure phase vs. time: breathing (low-frequency) and gross motion</text>
+
+  <!-- Plot area -->
+  <rect x="150" y="120" width="620" height="330" fill="#fff" stroke="#000" stroke-width="1.2"/>
+  <line x1="150" y1="450" x2="770" y2="450" stroke="#000" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="150" y1="450" x2="150" y2="120" stroke="#000" stroke-width="1.4" marker-end="url(#arr)"/>
+  <text x="460" y="490" text-anchor="middle" font-size="9">time</text>
+  <text x="60" y="285" text-anchor="middle" font-size="9" transform="rotate(-90 60 285)">closure phase &#932; (rad)</text>
+
+  <!-- Axis ticks -->
+  <line x1="150" y1="450" x2="150" y2="456" stroke="#000" stroke-width="1"/>
+  <line x1="460" y1="450" x2="460" y2="456" stroke="#000" stroke-width="1"/>
+  <line x1="770" y1="450" x2="770" y2="456" stroke="#000" stroke-width="1"/>
+  <text x="150" y="470" text-anchor="middle" font-size="8">t<sub>0</sub></text>
+  <text x="460" y="470" text-anchor="middle" font-size="8">t<sub>breath</sub></text>
+  <text x="770" y="470" text-anchor="middle" font-size="8">t<sub>end</sub></text>
+  <line x1="144" y1="450" x2="150" y2="450" stroke="#000" stroke-width="1"/>
+  <line x1="144" y1="285" x2="150" y2="285" stroke="#000" stroke-width="1"/>
+  <line x1="144" y1="120" x2="150" y2="120" stroke="#000" stroke-width="1"/>
+  <text x="132" y="454" text-anchor="end" font-size="8">0</text>
+  <text x="132" y="289" text-anchor="end" font-size="8">&#932;<sub>0</sub></text>
+  <text x="132" y="124" text-anchor="end" font-size="8">&#932;<sub>max</sub></text>
+
+  <!-- Breathing: slow small-amplitude oscillation around baseline -->
+  <path d="M150,285 Q230,260 310,285 T390,285 T470,285 T550,285 T630,285 T710,285" fill="none" stroke="#000" stroke-width="1.4"/>
+  <text x="780" y="289" text-anchor="start" font-size="8">breathing (0.1&#8211;0.5 Hz)</text>
+
+  <!-- Gross motion: larger, faster deviation -->
+  <path d="M150,300 Q260,150 370,300 Q480,420 590,300 Q700,180 770,300" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="5 4"/>
+  <text x="780" y="330" text-anchor="start" font-size="8">gross motion</text>
+</svg>
