@@ -27,15 +27,16 @@
 //!     38    1 rssi_dbm (i8)
 //!     39    1 noise_floor_dbm (i8)
 //!     40    2 phy_flags
-//!     42    2 reserved = 0
-//!     44    6 source_mac (wire minor 1 and later)
+//!     42    2 rx_seq (the 802.11 sequence number; 0xFFFF = not reported)
+//!     44    6 source_mac (the transmitting station's MAC address)
 //!     50   2n i_q[0..2n] (i8, interleaved Q,I per subcarrier)
 //! ```
 //!
-//! Wire minor 0 has no `source_mac` field and its I/Q payload starts at body
-//! offset 28; wire minor 1 and later carry the six-byte MAC address of the
-//! transmitting station and start the payload at body offset 34. The codec
-//! reads both, so a node that has not been updated still reports frames.
+//! Wire minor 0 has no `source_mac` and no `rx_seq`, and its I/Q payload
+//! starts at body offset 28; wire minor 1 and later carry the six-byte
+//! transmitter's address and the 802.11 sequence number, and start the
+//! payload at body offset 34. The codec reads both, so a node that has not
+//! been updated still reports frames.
 
 use aquila_types::{Band, CsiFrame, MacAddr, NodeId, PhyFlags};
 
@@ -118,7 +119,12 @@ pub fn encode_datagram(frame: &CsiFrame) -> Vec<u8> {
     w.i8(frame.rssi_dbm);
     w.i8(frame.noise_floor_dbm);
     w.u16(frame.phy.0);
-    w.u16(0); // reserved
+    // The 802.11 sequence number of the received frame. `None` is written as
+    // 0xFFFF, which is not a legal sequence number (they are twelve bits).
+    match frame.rx_seq {
+        Some(sequence) => w.u16(sequence),
+        None => w.u16(0xFFFF),
+    }
 
     // The six-byte MAC address of the transmitting station (wire minor 1).
     // An absent address is written as all zeroes; the core reads it as
@@ -227,7 +233,20 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
     let rssi_dbm = r.i8()?;
     let noise_floor_dbm = r.i8()?;
     let phy = PhyFlags(r.u16()?);
-    let _body_reserved = r.u16()?;
+    // The `u16` at body offset 26 is always present in the 34-byte body: it
+    // is the reserved field of wire minor 1 and the 802.11 sequence number of
+    // wire minor 2 and later. It is always consumed, so the fields after it
+    // stay at the same offset whichever minor is in use.
+    let raw_sequence = r.u16()?;
+    let rx_seq = if minor >= 2 {
+        if raw_sequence == 0xFFFF {
+            None
+        } else {
+            Some(raw_sequence)
+        }
+    } else {
+        None
+    };
 
     // The source MAC of the transmitting station (wire minor 1 and later).
     // An all-zero address means the node did not know the transmitter.
@@ -267,5 +286,6 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         phy,
         first_word_invalid: flags & CSI_FLAG_FIRST_WORD_INVALID != 0,
         source_mac,
+        rx_seq,
     })
 }

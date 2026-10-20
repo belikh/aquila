@@ -66,6 +66,9 @@ class CsiFrame:
     # The transmitting station's MAC address, as "aa:bb:cc:dd:ee:ff", or None
     # when the node did not report one (wire minor 0).
     source_mac: Optional[str]
+    # The 802.11 sequence number of the received frame, or None when the node
+    # did not report one.
+    rx_seq: Optional[int]
     # Complex CSI per subcarrier: re/im in f32 (derived from int8 I/Q).
     csi: List[complex]
     host_arrival_us: int
@@ -192,10 +195,15 @@ class CsiCollector:
         # phy_flags at 24, reserved at 26
 
         source_mac: Optional[str] = None
+        rx_seq: Optional[int] = None
         if wire_minor >= 1:
             raw_mac = body[28:34]
             if raw_mac != b"\x00" * 6:
                 source_mac = ":".join(f"{byte:02x}" for byte in raw_mac)
+        if wire_minor >= 2:
+            raw_seq = struct.unpack_from("<H", body, 26)[0]
+            if raw_seq != 0xFFFF:
+                rx_seq = raw_seq
 
         iq_payload = data[AQCI_HEADER_SIZE + body_size :]
         expected_iq_bytes = 2 * n_subcarriers
@@ -240,6 +248,7 @@ class CsiCollector:
             noise_floor_dbm=noise_floor_dbm,
             first_word_invalid=first_word_invalid,
             source_mac=source_mac,
+            rx_seq=rx_seq,
             csi=csi,
             host_arrival_us=0,  # set by caller
         )

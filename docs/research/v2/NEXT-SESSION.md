@@ -82,6 +82,27 @@ cross-node phase coherence.
 
 **Landmines — these cost hours if rediscovered.**
 
+* **REA cannot analyse the ESP32-S3's binary blobs.** Three independent
+  reasons, each confirmed: its dispatcher rejects Xtensa ("unsupported ELF
+  architecture" — its supported set is x86, x86-64, ARM, ARM64, MIPS); its
+  ELF layout provider requires ELF64 and the ESP32-S3's objects are ELF32;
+  and `rea doctor` reports no analysis engine installed (Ghidra, Hopper and
+  IDA are all absent) and that this host (NixOS 26.11) is itself outside
+  REA's supported list. Use `xtensa-esp32s3-elf-objdump` on the objects
+  extracted from `components/esp_wifi/lib/esp32s3/libpp.a` instead — that is
+  what produced §4 of the research note.
+* **The ±π sign flip is intrinsic to the ESP32-S3.** Two configurations the
+  node controls were tested and eliminated: the `ltf_merge_en` merge (the
+  negation rate is the same in the 64-subcarrier legacy-field-only layout,
+  which the merge cannot touch) and the manual CSI scale (the hardware's own
+  automatic scale negates just as often — and costs eight times the amplitude
+  resolution, so keep `csi_shift = 4`). The callback plumbing does not touch
+  the samples at all. Do not re-open these.
+* **The 802.11 sequence number is on the wire now** (wire minor 2, body
+  offset 26). The node reports it for 100 % of frames and it increments
+  visibly, so the cross-node pairing is exact — pair on
+  `(source_mac, rx_seq)` and keep the arrival-time bound only as a guard
+  against the twelve-bit wrap.
 * **Opening the serial port resets the ESP32.** `idf.py monitor`, `esptool` and
   anything else that opens `/dev/ttyACM*` will reset the board and abort an
   in-flight OTA. Never open it while an OTA is running.

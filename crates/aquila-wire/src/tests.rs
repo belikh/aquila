@@ -33,24 +33,25 @@ fn golden_frame() -> CsiFrame {
         phy: PhyFlags(PhyFlags::HT),
         first_word_invalid: false,
         source_mac: None,
+        rx_seq: None,
     }
 }
 
 /// The exact `AQCI` datagram for [`golden_frame`], laid out byte for byte.
 ///
-/// 16-byte header, 28-byte fixed body, then the interleaved signed int8 I/Q
+/// 16-byte header, 34-byte fixed body, then the interleaved signed int8 I/Q
 /// sample (`1, 2, 3, 4`).
-const GOLDEN: [u8; 48] = [
+const GOLDEN: [u8; 54] = [
     // header
     0x41, 0x51, 0x43, 0x49, // magic "AQCI"
-    0x01, 0x00, // wire major 1, minor 0
+    0x01, 0x02, // wire major 1, minor 2
     0x01, 0x01, // message type 1, subcarrier format 1 (int8 I/Q)
     0x02, 0x01, // node_id 0x0102 (LE)
-    0x20, 0x00, // payload_len 32 (LE)
+    0x26, 0x00, // payload_len 38 (LE)
     0x00, // band 2.4 GHz
     0x06, // channel 6
     0x14, // bandwidth 20 MHz
-    0x00, // reserved
+    0x00, // flags
     // fixed body
     0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, // sequence
     0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, // device_time_us
@@ -60,7 +61,8 @@ const GOLDEN: [u8; 48] = [
     0xD6, // rssi_dbm -42
     0xA1, // noise_floor_dbm -95
     0x01, 0x00, // phy_flags HT
-    0x00, 0x00, // reserved
+    0xFF, 0xFF, // rx_seq: not reported
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // source_mac: not reported
     // interleaved int8 I/Q: 1, 2, 3, 4
     0x01, 0x02, 0x03, 0x04,
 ];
@@ -85,7 +87,43 @@ fn representative_frame() -> CsiFrame {
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
         first_word_invalid: false,
         source_mac: None,
+        rx_seq: None,
     }
+}
+
+/// Wire minor 1 carries the transmitter's address but not the sequence
+/// number, and minor 2 carries both. The two minors have the same body
+/// length, so the codec has to read the minor to tell them apart: reading a
+/// minor 1 node's reserved field as a sequence number would be a silent
+/// misreading.
+#[test]
+fn minor_versions_carry_the_fields_they_declare() {
+    let frame = golden_frame();
+
+    // Minor 1: the source MAC is present, the sequence number is not.
+    let mut minor_one = encode_datagram(&frame);
+    minor_one[5] = 1;
+    minor_one[42] = 0x00; // body offset 26, the reserved field of minor 1
+    minor_one[43] = 0x00;
+    let decoded = decode_datagram(&minor_one).expect("minor 1 decodes");
+    assert_eq!(decoded.source_mac, None);
+    assert_eq!(decoded.rx_seq, None);
+
+    // Minor 2: both are present.
+    let minor_two = encode_datagram(&frame);
+    assert_eq!(minor_two[5], 2);
+    let decoded = decode_datagram(&minor_two).expect("minor 2 decodes");
+    assert_eq!(decoded.source_mac, None);
+    assert_eq!(decoded.rx_seq, None);
+
+    // And a minor 2 node that reports a sequence number round-trips it.
+    let mut with_sequence = frame.clone();
+    with_sequence.rx_seq = Some(1234);
+    with_sequence.source_mac = Some(MacAddr([1, 2, 3, 4, 5, 6]));
+    let bytes = encode_datagram(&with_sequence);
+    let decoded = decode_datagram(&bytes).expect("decode");
+    assert_eq!(decoded.rx_seq, Some(1234));
+    assert_eq!(decoded.source_mac, Some(MacAddr([1, 2, 3, 4, 5, 6])));
 }
 
 // ---------------------------------------------------------------------------
@@ -100,13 +138,13 @@ fn golden_layout_is_pinned() {
         &GOLDEN[..],
         "encode output drifted from the pinned layout"
     );
-    assert_eq!(GOLDEN.len(), 48, "golden datagram length");
+    assert_eq!(GOLDEN.len(), 54, "golden datagram length");
     assert_eq!(
         decode_datagram(&GOLDEN).expect("decode golden"),
         frame,
         "golden datagram does not decode to its frame"
     );
-    assert_eq!(datagram_len(2), Some(48));
+    assert_eq!(datagram_len(2), Some(54));
     // Header offset 15 is the flags byte; a clean frame leaves it zero.
     assert_eq!(GOLDEN[15], 0, "the flags byte must be zero when clean");
 }
@@ -164,7 +202,7 @@ fn representative_frames_round_trip() {
     let mut max = representative_frame();
     max.i_q = vec![1; 2 * n];
     assert_round_trips(&max);
-    assert_eq!(datagram_len(n), Some(16 + 28 + 2 * n));
+    assert_eq!(datagram_len(n), Some(16 + 34 + 2 * n));
 }
 
 #[test]
@@ -260,12 +298,12 @@ fn bad_message_type_and_format_are_rejected() {
 #[test]
 fn inconsistent_payload_length_is_rejected() {
     let mut bytes = GOLDEN;
-    bytes[10] = 0x1E; // declare 30, but n = 2 implies 32
+    bytes[10] = 0x1E; // declare 30, but n = 2 implies 38
     assert_eq!(
         decode_datagram(&bytes),
         Err(WireError::LengthMismatch {
             declared: 30,
-            expected: 32
+            expected: 38
         })
     );
 }
@@ -827,7 +865,7 @@ fn ports_and_limits_are_the_registered_ones() {
     assert_eq!(CONTROL_PORT, 9101);
     assert_eq!(CSI_MAGIC, *b"AQCI");
     assert_eq!(CONTROL_MAGIC, *b"AQCC");
-    assert_eq!(MAX_SUBCARRIERS, 714);
+    assert_eq!(MAX_SUBCARRIERS, 711);
 }
 
 #[test]
@@ -835,14 +873,17 @@ fn generated_c_header_pins_the_layout() {
     let header = generate_c_header();
     for needle in [
         "#define AQ_WIRE_MAJOR 1u",
+        "#define AQ_WIRE_MINOR 2u",
         "#define AQ_CSI_MAGIC_0 0x41u",
         "#define AQ_CSI_HEADER_LEN 16u",
-        "#define AQ_CSI_BODY_FIXED_LEN 28u",
-        "#define AQ_CSI_MAX_SUBCARRIERS 714u",
+        "#define AQ_CSI_BODY_FIXED_LEN 34u",
+        "#define AQ_CSI_MAX_SUBCARRIERS 711u",
         "#define AQ_CSI_OFF_MAGIC 0u",
         "#define AQ_CSI_OFF_FLAGS 15u",
         "#define AQ_CSI_FLAG_FIRST_WORD_INVALID 1u",
-        "#define AQ_CSI_BODY_OFF_IQ 28u",
+        "#define AQ_CSI_BODY_OFF_RX_SEQ 26u",
+        "#define AQ_CSI_BODY_OFF_SOURCE_MAC 28u",
+        "#define AQ_CSI_BODY_OFF_IQ 34u",
         "#define AQ_SUBCARRIER_FORMAT_INT8_IQ 1u",
         "#define AQ_OP_SYNC_ECHO 0x09u",
         "#define AQ_CONTROL_AUTH_LEN 32u",
@@ -881,7 +922,8 @@ prop_compose! {
          noise_floor_dbm: i8,
          phy: u16,
          first_word_invalid: bool,
-         source_mac in prop::option::of(prop::array::uniform6(any::<u8>())))
+         source_mac in prop::option::of(prop::array::uniform6(any::<u8>())),
+         rx_seq in prop::option::of(any::<u16>()))
         -> CsiFrame {
         CsiFrame {
             node_id: NodeId(node_id),
@@ -902,6 +944,9 @@ prop_compose! {
             source_mac: source_mac
                 .map(MacAddr)
                 .filter(|mac| mac.0 != [0u8; 6]),
+            // 0xFFFF means "not reported" on the wire, so it must not be
+            // generated as a known sequence number.
+            rx_seq: rx_seq.filter(|sequence| *sequence != 0xFFFF),
         }
     }
 }

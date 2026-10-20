@@ -2225,6 +2225,7 @@ fn phase_sign_is_imaginary_first_end_to_end() {
         phy: PhyFlags(PhyFlags::HT),
         first_word_invalid: false,
         source_mac: None,
+        rx_seq: None,
     };
     frame.validate().expect("valid frame");
 

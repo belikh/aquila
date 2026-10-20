@@ -423,6 +423,9 @@ impl SimulatorSource {
             phy: PhyFlags(phy),
             first_word_invalid,
             source_mac: Some(self.transmitter_mac()),
+            // The 802.11 sequence number is twelve bits and counts up from
+            // the transmitter, so it wraps.
+            rx_seq: Some((tick % 4096) as u16),
         }
     }
 

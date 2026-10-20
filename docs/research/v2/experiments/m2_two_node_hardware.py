@@ -13,21 +13,20 @@ radian they are not (`m2_characterization.py` defines the bands).
 HOW THE PACKETS ARE PAIRED
 --------------------------
 Pairing is exact, not inferred. The node reports the MAC address of the
-station that transmitted each captured frame, so the frames two nodes captured
-of one transmission share a transmitter address. The remaining question is
-*which* frame of that transmitter corresponds to which, and the answer is the
-arrival time: both nodes capture one transmission within microseconds of each
-other, and each forwards it to the core immediately, so the two frames reach
-the core within a millisecond of each other. A pair is accepted only when
-exactly one candidate on each side falls in that window, so an ambiguous pair
-is dropped rather than guessed.
+station that transmitted each captured frame and the 802.11 sequence number
+of that frame, so two frames of the same transmission share both. The
+remaining check is the arrival time: both nodes capture one transmission
+within microseconds of each other and each forwards it to the core
+immediately, so the two frames reach the core within a millisecond of each
+other. That bound is kept even though the sequence number is the stronger
+key, because the sequence number is twelve bits and wraps.
 
 Earlier attempts to pair on arrival time and received power alone did not
 discriminate: the access point's beacons from two access points interleave at
 about half the beacon interval, and every beacon of one access point arrives
 at nearly the same power, so both heuristics paired the wrong frames and the
-residual came out uniformly random. The transmitter address is what makes the
-pairing exact.
+residual came out uniformly random. The transmitter's address and the
+sequence number are what make the pairing exact.
 
 WHAT THE RESIDUAL IS
 ---------------------
@@ -166,26 +165,51 @@ def match_same_packet(
 ) -> Tuple[List[Tuple[CsiFrame, CsiFrame]], int, int]:
     """Pair the frames two nodes captured of the same transmission.
 
+    The pairing is exact where it can be: the node reports the 802.11
+    sequence number of each frame, so two frames of the same transmission
+    share it, and the pair is accepted only when the two frames also arrived
+    within the window. The time bound is kept even though the sequence number
+    is the stronger key, because the sequence number is twelve bits and wraps.
+
+    Frames whose sequence number the node did not report fall back to the
+    arrival-time window alone, and are accepted only when exactly one
+    candidate on each side falls in it: an ambiguous frame is dropped rather
+    than paired with a guess.
+
     Returns the pairs, the number of candidates and the number of ambiguous
-    frames. A frame is used at most once, and a pair is accepted only when
-    exactly one candidate on each side falls inside the window: an ambiguous
-    frame is dropped rather than paired with a guess.
+    frames.
     """
     pairs: List[Tuple[CsiFrame, CsiFrame]] = []
     used_b: set[int] = set()
     candidates = 0
     ambiguous = 0
 
+    # Index node B's frames by sequence number for the exact pairing.
+    by_sequence: Dict[int, List[int]] = {}
+    for index, frame in enumerate(frames_b):
+        if frame.rx_seq is not None:
+            by_sequence.setdefault(frame.rx_seq, []).append(index)
+
     times_b = [frame.host_arrival_us for frame in frames_b]
     for frame_a in frames_a:
-        matches: List[int] = []
-        low = frame_a.host_arrival_us - MATCH_WINDOW_US
-        high = frame_a.host_arrival_us + MATCH_WINDOW_US
-        for index, moment in enumerate(times_b):
-            if index in used_b:
-                continue
-            if low <= moment <= high:
-                matches.append(index)
+        if frame_a.rx_seq is not None:
+            matches = [
+                index
+                for index in by_sequence.get(frame_a.rx_seq, [])
+                if index not in used_b
+                and abs(times_b[index] - frame_a.host_arrival_us)
+                <= MATCH_WINDOW_US
+            ]
+        else:
+            matches = []
+        if not matches:
+            # No sequence number: fall back to the arrival-time window.
+            matches = [
+                index
+                for index, moment in enumerate(times_b)
+                if index not in used_b
+                and abs(moment - frame_a.host_arrival_us) <= MATCH_WINDOW_US
+            ]
         if len(matches) != 1:
             if len(matches) > 1:
                 ambiguous += 1

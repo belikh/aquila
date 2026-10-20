@@ -178,11 +178,7 @@ pub fn generate_c_header() -> String {
         "AQ_CSI_BODY_OFF_PHY_FLAGS",
         csi_body_offset::PHY_FLAGS,
     );
-    emit_offset(
-        &mut s,
-        "AQ_CSI_BODY_OFF_RESERVED",
-        csi_body_offset::RESERVED,
-    );
+    emit_offset(&mut s, "AQ_CSI_BODY_OFF_RX_SEQ", csi_body_offset::RX_SEQ);
     emit_offset(
         &mut s,
         "AQ_CSI_BODY_OFF_SOURCE_MAC",
@@ -232,7 +228,10 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "    int8_t   rssi_dbm;");
     let _ = writeln!(s, "    int8_t   noise_floor_dbm;");
     let _ = writeln!(s, "    uint16_t phy_flags;");
-    let _ = writeln!(s, "    uint16_t reserved;");
+    let _ = writeln!(
+        s,
+        "    uint16_t rx_seq; /* the 802.11 sequence number; 0xFFFF = not reported */"
+    );
     let _ = writeln!(
         s,
         "    uint8_t  source_mac[6]; /* the transmitting station's MAC address */"

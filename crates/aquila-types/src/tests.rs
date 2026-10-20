@@ -55,6 +55,7 @@ fn csi_frame() -> CsiFrame {
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
         first_word_invalid: false,
         source_mac: None,
+        rx_seq: None,
     }
 }
 

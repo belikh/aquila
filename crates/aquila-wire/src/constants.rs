@@ -22,11 +22,20 @@ pub const WIRE_MAJOR: u8 = 1;
 /// The wire minor version. A datagram with a different minor is accepted
 /// (additive change within a major version).
 ///
-/// Minor 1 adds the transmitting station's source MAC address to the fixed
-/// body (`data-contracts.md` §9.1). The codec knows each minor's body layout:
-/// minor 0 carries no source MAC, minor 1 and later carry it at
-/// [`csi_body_offset::SOURCE_MAC`].
-pub const WIRE_MINOR: u8 = 1;
+/// The minor versions, and what the fixed body carries:
+///
+/// * **minor 0** — no `source_mac`, no `rx_seq`; the fixed body is 28 bytes
+///   and the `u16` at body offset 26 is reserved.
+/// * **minor 1** — `source_mac` at body offset 28; the fixed body is 34 bytes
+///   and the `u16` at body offset 26 is still reserved.
+/// * **minor 2** — `source_mac` at body offset 28 *and* `rx_seq` at body
+///   offset 26; the fixed body is 34 bytes.
+///
+/// The codec knows each minor's body layout, so a node on any of them is
+/// read correctly. The split matters: minor 1 and minor 2 have the same body
+/// length, so a codec that inferred the layout from the length would read a
+/// minor 1 node's reserved field as a sequence number.
+pub const WIRE_MINOR: u8 = 2;
 
 /// The control-framing version byte (`capture-and-firmware.md` §6.1).
 pub const CONTROL_VERSION: u8 = WIRE_MAJOR;
@@ -244,8 +253,9 @@ pub(crate) mod csi_body_offset {
     pub(crate) const NOISE_FLOOR_DBM: usize = 23;
     /// PHY flags (`u16`).
     pub(crate) const PHY_FLAGS: usize = 24;
-    /// Reserved, zero (`u16`).
-    pub(crate) const RESERVED: usize = 26;
+    /// The 802.11 sequence number of the received frame (`u16`), wire minor 1
+    /// and later; `0xFFFF` means the node did not report one.
+    pub(crate) const RX_SEQ: usize = 26;
     /// The six-byte MAC address of the transmitting station (wire minor 1 and
     /// later).
     pub(crate) const SOURCE_MAC: usize = 28;

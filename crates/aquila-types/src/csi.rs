@@ -120,6 +120,16 @@ pub struct CsiFrame {
     /// mixes transmitters produces a phase residual that is an artefact of the
     /// guess rather than of the channel.
     pub source_mac: Option<MacAddr>,
+    /// The 802.11 **sequence number** of the received frame.
+    ///
+    /// `None` when the node did not report one. The sequence number, with the
+    /// transmitting station's address, identifies one transmission exactly:
+    /// the address says *who* sent it and the sequence number says *which* of
+    /// their frames it was. That is what lets the core pair two nodes'
+    /// captures of one ambient packet without inferring the pairing from
+    /// arrival times, which is a guess that goes wrong whenever two
+    /// transmitters are active at once.
+    pub rx_seq: Option<u16>,
 }
 
 impl CsiFrame {

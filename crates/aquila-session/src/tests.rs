@@ -52,6 +52,7 @@ fn demo_datagram(node: u16, sequence: u64) -> Vec<u8> {
         phy: aquila_types::PhyFlags(aquila_types::PhyFlags::HT),
         first_word_invalid: false,
         source_mac: None,
+        rx_seq: None,
     };
     aquila_wire::encode_datagram(&frame)
 }

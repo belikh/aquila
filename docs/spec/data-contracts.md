@@ -923,7 +923,7 @@ application layer.
 | 22 | 1 | `rssi_dbm` (`i8`) |
 | 23 | 1 | `noise_floor_dbm` (`i8`) |
 | 24 | 2 | `phy_flags` (`u16`) |
-| 26 | 2 | reserved = 0 |
+| 26 | 2 | `rx_seq` — the 802.11 sequence number of the received frame (`u16`); `0xFFFF` means "not reported" |
 | 28 | 6 | `source_mac` — the transmitting station's MAC address (wire minor 1 and later; all zeroes means "transmitter unknown") |
 | 34 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
 

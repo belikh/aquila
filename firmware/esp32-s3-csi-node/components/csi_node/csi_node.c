@@ -53,6 +53,10 @@ typedef struct {
      * needs it to tell two nodes' captures of the same ambient packet apart
      * from two different packets. */
     uint8_t source_mac[6];
+    /* The 802.11 sequence number of the frame. The driver reports 0xFFFF when
+     * it does not know it, which is not a legal sequence number (they are
+     * twelve bits), so the sentinel carries through the wire unchanged. */
+    uint16_t rx_seq;
     uint16_t csi_len;
     int8_t csi[CSI_RAW_MAX];
 } csi_slot_t;
@@ -199,6 +203,10 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
      * exact key that lets the core pair two nodes' captures of the same
      * ambient packet, so it is copied verbatim. */
     memcpy(slot->source_mac, info->mac, sizeof(slot->source_mac));
+    /* The 802.11 sequence number: with the transmitting station's address it
+     * identifies one transmission exactly, which is how the core pairs two
+     * nodes' captures of the same ambient packet. */
+    slot->rx_seq = info->rx_seq;
     slot->csi_len = (uint16_t)len;
     memcpy(slot->csi, info->buf, (size_t)len);
 
@@ -298,7 +306,7 @@ static void csi_sender_task(void *arg)
             cfg.node_id, slot.band, slot.channel, cfg.bandwidth_mhz, slot.sequence,
             slot.device_ts_us, s_boot_epoch, subcarrier_offset, n, slot.rssi,
             slot.noise_floor, slot.phy_flags, slot.first_word_invalid,
-            slot.source_mac, slot.csi, datagram, sizeof(datagram));
+            slot.rx_seq, slot.source_mac, slot.csi, datagram, sizeof(datagram));
         if (length > 0u && s_sock >= 0) {
             sendto(s_sock, datagram, length, 0, (struct sockaddr *)&s_core,
                    sizeof(s_core));

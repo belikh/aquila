@@ -15,10 +15,11 @@ The measurement scripts are in `docs/research/v2/experiments/`:
 
 | script | what it measures |
 | --- | --- |
-| `m2_two_node_hardware.py` | the cross-node phase residual, paired by transmitter address |
+| `m2_two_node_hardware.py` | the cross-node phase residual, paired by transmitter address and 802.11 sequence number |
 | `m2_metric_audit.py` | whether the simulated red band survives a corrected residual |
 | `phase_ambiguity_probe.py` | the structure of the per-frame phase ambiguity |
 | `phase_rotation_probe.py` | the per-frame phase rotation, at one node and across two |
+| `layout_flip_probe.py` | the negation rate per CSI layout, used to test the merge and scale hypotheses |
 | `group_delay_hardware.py` | the per-link group delay from the phase slope |
 | `sign_resolution_probe.py` | whether the sign flip can be resolved from the data |
 
@@ -51,6 +52,14 @@ six-byte `source_mac` to the AQCI body; the Rust codec and the generated
 `node_wire.h` were changed together and the firmware copies the driver's
 address verbatim. With it, the pairing is exact: 546 packets paired for one
 node pair with **0 ambiguous**.
+
+The pairing was made exact still further by the 802.11 **sequence number**.
+The node now reports it (see §4), so two frames of the same transmission are
+identified by the pair of the transmitter's address and the sequence number,
+with an arrival-time bound kept as a guard because the sequence number is
+twelve bits and wraps. The pairing is no longer an inference from timing at
+all: every frame carried a sequence number, and no link produced an ambiguous
+pair.
 
 The change is documented in `docs/spec/capture-and-firmware.md` §5.1 and
 `docs/spec/data-contracts.md` §9.1. Wire minor 0 is still read, so a node that
@@ -120,9 +129,18 @@ frames are.**
 
 ### 2.4 The verdict
 
-Every measured subcarrier of every measured link sits at zero or π: 529 of
-529, 532 of 532 and 581 of 581 for the three node pairs, with a p95 of
-3.1416 rad against a red-band threshold of 1.0 rad.
+Every measured subcarrier of every measured link sits at zero or π: 639 of
+639, 532 of 532 and 532 of 532 for the three node pairs, with a p95 of
+3.1416 rad against a red-band threshold of 1.0 rad. The signs agree on 49 to
+50 % of packets.
+
+The measurement was then repeated with the exact pairing — the 802.11
+sequence number, added to the wire after the reverse engineering of §4 — and
+it gave the same answer with 15 % more pairs (1290, 1253 and 1594 against
+1106, 990 and 1206): every subcarrier still at zero or π, the signs still
+agreeing on 49 to 50 %. Every frame carried a sequence number, and no link
+produced an ambiguous pair. **The verdict is not an artefact of the
+pairing.**
 
 **M2 is red on ESP32-S3. Cross-node coherent absolute phase — closure-phase
 tomography, BCPT, RCIA — is not available from this hardware's raw CSI.** The
@@ -204,7 +222,123 @@ quantity the gauge-invariant approaches in `21-3d-imaging-concepts.md` need —
 approach 4 (the phase slope `dφ/df`, which needs no common transmitter and no
 reciprocity) and approach 7 (per-link group delay). Neither is gated on M2.
 
-## 4. What this means for the project
+## 4. Reverse-engineering the ESP32-S3's CSI path
+
+Two questions were put to the binary: *why* does the vector get negated, and
+is the negation resolvable? The first is now answered — it is intrinsic — and
+the second is answered: it is not.
+
+### 4.1 What REA could and could not do
+
+REA was pointed at the ESP32-S3's WiFi driver blobs
+(`components/esp_wifi/lib/esp32s3/libpp.a`, the closed PHY and MAC objects
+the node links against) and could not analyse them, for three independent
+reasons, each confirmed rather than assumed:
+
+* `open_binary` rejects the objects with *"unsupported ELF architecture"* —
+  REA's supported set is x86, x86-64, ARM, ARM64 and MIPS, and Xtensa is not
+  in it. The check is in REA's own dispatcher, before any provider runs.
+* `inspect-binary-layout` — the one provider that does not need a decompiler —
+  reports *"Initial layout profile requires ELF64 little-endian objects"*.
+  The ESP32-S3's objects are ELF32, so its ELF parser will not take them
+  either.
+* `rea doctor` reports no analysis engine at all (Ghidra, Hopper and IDA are
+  all absent) and that the host itself is unsupported: *"REA supports macOS
+  12+, Ubuntu 24.04+, Fedora 41+, Nobara 44+, 64-bit Arch Linux, CachyOS,
+  Omarchy"*, and this is NixOS 26.11.
+
+The `pwntools-elf` provider was prepared properly for it — a caller-supplied
+Python 3.12 with pyelftools 0.33, pwntools 4.15.0 and Unicorn 2.1.2 — and the
+ELF32 rejection stands regardless.
+
+So the instruction-level work was done with the toolchain that matches the
+target: `xtensa-esp32s3-elf-objdump` on the extracted objects
+(`libpp.a:wdev.o`, `hal_mac.o`, `if_hwctrl.o`) and on the ESP32-S3 ROM ELF.
+
+### 4.2 What the disassembly showed
+
+* **`wifi_csi_info_t.rx_seq` is the 802.11 sequence number.** In
+  `wdev_csi_rx_process` the field at body offset 82 is filled from the
+  receive descriptor: a 16-bit word at descriptor offset 22, shifted right by
+  four. The 802.11 sequence-control field is sixteen bits with the fragment
+  number in the low four, so the shift extracts the twelve-bit sequence
+  number. The ESP-IDF header confirms the layout the disassembly derived
+  (`rx_ctrl` at 0, `mac` at 48, `dmac` at 54, `first_word_invalid` at 60,
+  `buf` at 64, `len` at 68, `hdr` at 72, `payload` at 76, `payload_len` at 80,
+  `rx_seq` at 82).
+
+  This is the actionable outcome of the reverse engineering: the node already
+  had the exact key for "which of this station's frames is this one", and the
+  wire now carries it. Wire **minor 2** adds `rx_seq` at body offset 26,
+  replacing the reserved field. Minor 1 carries only the transmitter's
+  address, and the two minors have the same body length, so the codec reads
+  the minor to tell them apart rather than inferring the layout from the
+  length — reading a minor 1 node's reserved field as a sequence number would
+  be a silent misreading.
+
+* **The callback plumbing does not touch the CSI data.** `wdev_csi_rx_process`
+  copies 48 bytes of receive metadata, the two MAC addresses, the buffer
+  pointer and the length into the `wifi_csi_info_t`, and calls the node's
+  callback. The samples themselves arrive already formed. The negation is
+  therefore upstream of everything the node can see or set.
+
+* **`wdev_csi_len_align`** (in the ROM) takes a ten-bit field from the
+  descriptor at offset 28, adds three and rounds down to a multiple of four.
+  That is where the ESP32-S3's 376, 380 and 384-byte CSI lengths come from.
+
+* **`wdev_csi_hw_bug_check` is a zero-length stub** on the ESP32-S3, so the
+  driver's CSI hardware-bug check is compiled out for this target.
+
+* **`ic_csi_set_config`** is a thin wrapper: it calls `phy_chan_dump_cfg` and
+  `phy_chan_filt_set` and writes two PHY registers. The ESP-IDF header
+  documents the field it writes — `ltf_merge_en`, *"enable to generate htlft
+  data by averaging lltf and ht_ltf data when receiving HT packet"* — which
+  suggested a hypothesis worth testing (§4.3).
+
+### 4.3 Two hypotheses, tested and eliminated
+
+**The LLTF/HT-LTF merge.** If the merge averages two independently estimated
+pilot responses and they disagree in sign, the merged result is corrupted.
+The merge cannot touch the 64-subcarrier layout, which is the legacy training
+field alone. Measured per layout on the live nodes, the whole-vector negation
+rate is the same in both:
+
+| layout | whole-vector negated | unchanged | mixed |
+| --- | --- | --- | --- |
+| 64 (legacy field alone) | 211–240 of 410–469 | 177–217 | 10–49 |
+| 128 (legacy + high-throughput) | 67–94 of 162–230 | 75–118 | 4–15 |
+
+**The manual CSI scale.** The node sets `manu_scale` with a shift of four,
+because the automatic scale leaves the samples in about thirty int8 levels
+and that costs phase precision. If the manual scale were the negation, the
+automatic scale would fix it. Node 1 was re-provisioned with `csi_shift =
+255`, which the firmware reads as *"use the hardware's automatic scale"*:
+
+| scale | amplitude (core units) | whole-vector negated, layout 64 |
+| --- | --- | --- |
+| manual, shift 4 | 0.805 | 227 of 425 (53.4 %) |
+| automatic | **0.101** | **211 of 410 (51.5 %)** |
+
+The amplitude fell by almost exactly the eightfold the three lost shift bits
+predict, and the negation rate did not move. The manual scale is not the
+cause either, and it is worth keeping, because it is worth eight times the
+amplitude resolution.
+
+### 4.4 What follows
+
+Neither hypothesis survives, and the callback plumbing does not touch the
+samples, so the negation is intrinsic to the ESP32-S3's channel estimate: a
+property of the receiver, applied per frame, independent at each receiver, and
+with no reference in the data that could resolve it. That is the same verdict
+§2 reaches from the measurement, and the reverse engineering is what rules out
+"it is something we configured".
+
+The remaining question is where in the closed PHY the sign comes from. The
+CSI samples are produced below anything the node can reach, so answering it
+means reading the RF path rather than the MAC path — which is a larger
+undertaking than this question has earned so far.
+
+## 5. What this means for the project
 
 1. **Everything gated on M2 is gated.** Closure-phase tomography (BCPT), RCIA
    and NSDT are off the table on ESP32-S3 raw CSI, and now on a measurement
@@ -220,17 +354,18 @@ reciprocity) and approach 7 (per-link group delay). Neither is gated on M2.
    wired into the campaign, so the ledger's M2 entries record the hardware
    source and the hardware number.
 
-## 5. Caveats
+## 6. Caveats
 
 * The nodes were all in the same room on the same channel, with the other
   nodes' own CSI traffic as the dominant ambient signal. A different traffic
   mix would change the pair counts, not the ambiguity.
 * The measurement covers three nodes on one channel. Nothing here says
   anything about a wider channel plan.
-* The sign ambiguity is a property of the ESP32-S3's reporting. Whether it is
-  the receiver's phase reference, a hardware sign flip, or a consequence of
-  the manual CSI scale (`csi_shift = 4`) was not separated; the sweep in
-  `scripts/sweep-csi-shift.sh` would test the last of those.
+* The sign ambiguity is a property of the ESP32-S3's reporting. §4 rules out
+  the two configurations the node controls — the LLTF/HT-LTF merge and the
+  manual CSI scale — and the callback plumbing does not touch the samples, so
+  the negation is intrinsic to the receiver's channel estimate. Exactly where
+  in the closed PHY it comes from was not established.
 * The group-delay figure is a path *difference* from the phase slope, not a
   range. It is a relative quantity and it needs a common reference to become
   an absolute position.

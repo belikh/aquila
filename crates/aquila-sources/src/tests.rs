@@ -68,6 +68,7 @@ fn frame(node: u16, sequence: u64) -> CsiFrame {
         phy: PhyFlags(PhyFlags::HT),
         first_word_invalid: false,
         source_mac: None,
+        rx_seq: None,
     }
 }
 

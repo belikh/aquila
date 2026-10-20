@@ -56,6 +56,7 @@
 //!     phy: PhyFlags(PhyFlags::HT),
 //!     first_word_invalid: false,
 //!     source_mac: None,
+//!     rx_seq: None,
 //! };
 //!
 //! let bytes = encode_datagram(&frame);

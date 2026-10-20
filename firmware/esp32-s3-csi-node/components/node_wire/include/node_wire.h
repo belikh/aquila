@@ -7,7 +7,7 @@
 
 /* Versions and magics. */
 #define AQ_WIRE_MAJOR 1u
-#define AQ_WIRE_MINOR 1u
+#define AQ_WIRE_MINOR 2u
 #define AQ_CSI_MAGIC_0 0x41u /* 'A' */
 #define AQ_CSI_MAGIC_1 0x51u /* 'Q' */
 #define AQ_CSI_MAGIC_2 0x43u /* 'C' */
@@ -84,7 +84,7 @@
 #define AQ_CSI_BODY_OFF_RSSI_DBM 22u
 #define AQ_CSI_BODY_OFF_NOISE_FLOOR_DBM 23u
 #define AQ_CSI_BODY_OFF_PHY_FLAGS 24u
-#define AQ_CSI_BODY_OFF_RESERVED 26u
+#define AQ_CSI_BODY_OFF_RX_SEQ 26u
 #define AQ_CSI_BODY_OFF_SOURCE_MAC 28u
 #define AQ_CSI_BODY_OFF_IQ 34u
 
@@ -121,7 +121,7 @@ typedef struct {
     int8_t   rssi_dbm;
     int8_t   noise_floor_dbm;
     uint16_t phy_flags;
-    uint16_t reserved;
+    uint16_t rx_seq; /* the 802.11 sequence number; 0xFFFF = not reported */
     uint8_t  source_mac[6]; /* the transmitting station's MAC address */
 } aq_csi_body_fixed_t;
 

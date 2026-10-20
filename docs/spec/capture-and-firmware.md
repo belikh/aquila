@@ -285,7 +285,7 @@ the application layer.
 | 22 | 1 | `rssi_dbm` (`i8`) |
 | 23 | 1 | `noise_floor_dbm` (`i8`) |
 | 24 | 2 | `phy_flags` (`u16`) |
-| 26 | 2 | reserved = 0 |
+| 26 | 2 | `rx_seq` — the 802.11 sequence number of the received frame (`u16`); `0xFFFF` means the node did not report one |
 | 28 | 6 | `source_mac` — the MAC address of the station that transmitted the frame (wire minor 1 and later; all zeroes means "transmitter unknown") |
 | 34 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
 
@@ -318,6 +318,18 @@ interleave at about half the beacon interval and every beacon of one access
 point arrives at nearly the same power — and a pairing that mixes transmitters
 produces a phase residual that is an artefact of the guess rather than of the
 channel.
+
+`rx_seq` is the 802.11 **sequence number** of the received frame, copied from
+the driver's `wifi_csi_info_t.rx_seq`, which the ESP32-S3 driver extracts from
+the receive descriptor's sequence-control field (the fragment number occupies
+the low four bits, so the sequence number is the field shifted right by four).
+With the transmitter's address it identifies one transmission exactly: the
+address says *who* sent it and the sequence number says *which* of their
+frames it was. The core pairs on the pair, keeping an arrival-time bound as a
+guard because the sequence number is twelve bits and wraps.
+
+Wire minor 0 carries neither field: its fixed body is 28 bytes and the
+`u16` at body offset 26 is reserved.
 
 ### 5.2 Sequence
 
