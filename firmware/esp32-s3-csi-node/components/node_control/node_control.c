@@ -38,7 +38,7 @@
 
 static const char *TAG = "node_control";
 
-#define CONTROL_STACK 4096u
+#define CONTROL_STACK 16384u
 #define CONTROL_PRIO 6u
 #define CONTROL_RECV_TIMEOUT_MS 200
 #define JOIN_RETRY_MS 3000
