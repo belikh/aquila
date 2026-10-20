@@ -225,7 +225,41 @@ quantity the gauge-invariant approaches in `21-3d-imaging-concepts.md` need —
 approach 4 (the phase slope `dφ/df`, which needs no common transmitter and no
 reciprocity) and approach 7 (per-link group delay). Neither is gated on M2.
 
-### 3.1 The noise floor, and the experiment that is now ready
+### 3.1 The nodes can range to each other
+
+The phase slope is the power-weighted mean path delay of a link — the delay
+from the transmitter's packet start to the receiver — and that is an
+*absolute* quantity, not a relative one. The model agrees: a link of 0.93 m
+gives a modelled group delay of 0.939 m. The ESP32-S3's sign flip does not
+touch it, because a whole-vector negation shifts every subcarrier's phase by
+the same pi and leaves the slope alone.
+
+So the nodes can range to each other. `node_geometry.py` measures it, and
+three checks make the claim falsifiable rather than merely plausible:
+
+* **Reciprocity.** Node A ranging node B and node B ranging node A are two
+  independent measurements of the same path.
+* **The triangle inequality.** Three measured distances must close.
+* **Run to run.** The measurement must repeat.
+
+| pair | distance | the two directions | asymmetry | a second run |
+| --- | --- | --- | --- | --- |
+| node 1 ↔ node 2 | 0.938 m | −0.944 m, −0.933 m | 1.1 cm | 0.945 m |
+| node 1 ↔ node 3 | 1.296 m | −1.295 m, −1.297 m | 0.2 cm | 1.292 m |
+| node 2 ↔ node 3 | 0.687 m | −0.701 m, −0.672 m | 2.9 cm | 0.707 m |
+
+And the triangle closes: 95 cm, 129 cm and 71 cm satisfy every inequality
+(95 + 71 = 165 > 129, 95 + 129 = 224 > 71, 129 + 71 = 200 > 95). A
+measurement that was only relative — that said how the three links differed
+from each other rather than how long they were — would place the three nodes
+anywhere, and the triangle would not close.
+
+**The nodes can find each other to about a decimetre, over the air, with no
+cross-node phase coherence and no added reference.** That is a capability the
+project did not have when this started, and it comes from the same quantity
+that survives the sign flip.
+
+### 3.2 The noise floor, and the experiment that is now ready
 
 `scatterer_response.py` measures the group delay of every link twice — a
 baseline and an after-window — and reports the change against the
@@ -283,8 +317,7 @@ weakly scattering, where the change can fall below the floor. The interactive
 mode reports the links that moved separately from the controls, so that case
 would show up as a null on the affected link rather than as a failure.
 
-### 3.2 The amplitude path is a precise observable
-
+### 3.4 The amplitude path is a precise observable
 `atsi_live.py` measures the same way for the receive-only ambient path: the
 log of the received power over each frame's usable subcarriers, per node.
 Over consecutive 40-second windows with nothing moving:

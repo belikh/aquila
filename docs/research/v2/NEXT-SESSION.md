@@ -40,13 +40,15 @@ simulated red band that used to be recorded was a metric artefact (it measured
 the arbitrary static path phase instead of the phase's stability) and has been
 fixed.
 
-**What still works, and is the direction to take.** The phase *slope* across
-subcarriers is exactly invariant to the sign flip, and it is the per-link
-group delay. It is measured on the live nodes and validated: two nodes
-independently measuring each other agree on the path length to about two
-centimetres, with a per-frame spread of about a decimetre. This is the
-quantity to build on. It is gauge-invariant, needs no common reference, and no
-cross-node phase coherence.
+**What the project has instead, and it is not nothing.** The phase *slope*
+across subcarriers is exactly invariant to the sign flip, and it is the
+per-link group delay. It is an *absolute* path length, not a relative one:
+the nodes range to each other to about a decimetre — 0.94 m, 1.29 m and
+0.69 m between the three — and the measurement is checked three ways:
+reciprocity, the triangle inequality, and run to run. The amplitude is the
+other precise instrument: the node-local power is stable to 0.03 dB. So the
+hardware measures path length and received power precisely, and cannot
+measure absolute cross-node phase. The project does not need the phase.
 
 **Your task, in priority order.**
 

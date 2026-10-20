@@ -174,6 +174,45 @@ def _hardware_characterisation_claims() -> List[dict]:
     except OSError:
         pass
 
+    # 3. The nodes' geometry, measured by radio: the pairwise distances from
+    #    the group delay, their reciprocity, and the closure of the triangle.
+    try:
+        from node_geometry import check_triangle, measure_geometry
+
+        geometry = measure_geometry(duration_s=45.0)
+    except OSError:
+        geometry = None
+    if geometry is not None and geometry.distances:
+        worst_asymmetry = max(
+            distance.asymmetry_m for distance in geometry.distances
+        )
+        claims.append({
+            "claim_id": "CLM-node-geometry-reciprocity",
+            "metric_name": "node_geometry_asymmetry_cm",
+            "metric_value": worst_asymmetry * 100.0,
+            "metric_threshold": 10.0,
+            "passed": worst_asymmetry * 100.0 < 10.0,
+            "note": (
+                "the largest disagreement between two nodes ranging each "
+                "other from the phase slope; the group delay is an absolute "
+                "path length, not a relative one, and the measured distances "
+                "must also form a triangle"
+            ),
+        })
+        triangle = check_triangle(geometry)
+        if triangle:
+            claims.append({
+                "claim_id": "CLM-node-geometry-closure",
+                "metric_name": "node_geometry_triangles",
+                "metric_value": float(len(triangle)),
+                "metric_threshold": 1.0,
+                "passed": len(triangle) > 0,
+                "note": (
+                    "the measured node distances form a triangle: "
+                    + "; ".join(triangle)
+                ),
+            })
+
     return claims
 
 
