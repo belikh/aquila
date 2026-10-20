@@ -27,25 +27,25 @@ fn golden_frame() -> CsiFrame {
         channel: 6,
         bandwidth_mhz: 20,
         subcarrier_offset: -3,
-        amplitude: vec![1.0, 2.0],
-        phase: vec![0.0, -0.5],
+        i_q: vec![1, 2, 3, 4],
         rssi_dbm: -42,
         noise_floor_dbm: -95,
         phy: PhyFlags(PhyFlags::HT),
+        first_word_invalid: false,
     }
 }
 
 /// The exact `AQCI` datagram for [`golden_frame`], laid out byte for byte.
 ///
-/// 16-byte header, 28-byte fixed body, then `f32` amplitude (`1.0`, `2.0`) and
-/// `f32` phase (`0.0`, `-0.5`).
-const GOLDEN: [u8; 60] = [
+/// 16-byte header, 28-byte fixed body, then the interleaved signed int8 I/Q
+/// sample (`1, 2, 3, 4`).
+const GOLDEN: [u8; 48] = [
     // header
     0x41, 0x51, 0x43, 0x49, // magic "AQCI"
     0x01, 0x00, // wire major 1, minor 0
-    0x01, 0x00, // message type 1, subcarrier format 0
+    0x01, 0x01, // message type 1, subcarrier format 1 (int8 I/Q)
     0x02, 0x01, // node_id 0x0102 (LE)
-    0x2C, 0x00, // payload_len 44 (LE)
+    0x20, 0x00, // payload_len 32 (LE)
     0x00, // band 2.4 GHz
     0x06, // channel 6
     0x14, // bandwidth 20 MHz
@@ -60,9 +60,8 @@ const GOLDEN: [u8; 60] = [
     0xA1, // noise_floor_dbm -95
     0x01, 0x00, // phy_flags HT
     0x00, 0x00, // reserved
-    // amplitude f32: 1.0, 2.0
-    0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x40, // phase f32: 0.0, -0.5
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xBF,
+    // interleaved int8 I/Q: 1, 2, 3, 4
+    0x01, 0x02, 0x03, 0x04,
 ];
 
 /// A representative live-looking frame: 64 subcarriers at 20 MHz HT.
@@ -77,11 +76,13 @@ fn representative_frame() -> CsiFrame {
         channel: 1,
         bandwidth_mhz: 20,
         subcarrier_offset: -32,
-        amplitude: (0..n).map(|k| (k as f32) * 0.5).collect(),
-        phase: (0..n).map(|k| (k as f32 / n as f32) - 0.5).collect(),
+        i_q: (0..2 * n)
+            .map(|i| ((i * 7 + 11) % 256) as u8 as i8)
+            .collect(),
         rssi_dbm: -38,
         noise_floor_dbm: -92,
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
+        first_word_invalid: false,
     }
 }
 
@@ -97,13 +98,37 @@ fn golden_layout_is_pinned() {
         &GOLDEN[..],
         "encode output drifted from the pinned layout"
     );
-    assert_eq!(GOLDEN.len(), 60, "golden datagram length");
+    assert_eq!(GOLDEN.len(), 48, "golden datagram length");
     assert_eq!(
         decode_datagram(&GOLDEN).expect("decode golden"),
         frame,
         "golden datagram does not decode to its frame"
     );
-    assert_eq!(datagram_len(2), Some(60));
+    assert_eq!(datagram_len(2), Some(48));
+    // Header offset 15 is the flags byte; a clean frame leaves it zero.
+    assert_eq!(GOLDEN[15], 0, "the flags byte must be zero when clean");
+}
+
+#[test]
+fn first_word_invalid_rides_the_flags_byte() {
+    let mut frame = golden_frame();
+    frame.first_word_invalid = true;
+    let bytes = encode_datagram(&frame);
+    assert_eq!(
+        bytes[15], CSI_FLAG_FIRST_WORD_INVALID,
+        "bit 0 of the header flags byte carries first_word_invalid"
+    );
+    let decoded = decode_datagram(&bytes).expect("decode flagged");
+    assert!(decoded.first_word_invalid);
+    // Clearing the flag clears the bit and round-trips.
+    frame.first_word_invalid = false;
+    let bytes = encode_datagram(&frame);
+    assert_eq!(bytes[15], 0);
+    assert!(
+        !decode_datagram(&bytes)
+            .expect("decode clean")
+            .first_word_invalid
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -124,8 +149,7 @@ fn representative_frames_round_trip() {
 
     // A single-subcarrier frame is the smallest legal frame.
     let mut tiny = golden_frame();
-    tiny.amplitude = vec![0.0];
-    tiny.phase = vec![0.0];
+    tiny.i_q = vec![7, -7];
     assert_round_trips(&tiny);
 
     // Unknown band and an unrecognised band byte both survive.
@@ -136,32 +160,32 @@ fn representative_frames_round_trip() {
     // The maximum subcarrier count fits and round-trips.
     let n = MAX_SUBCARRIERS as usize;
     let mut max = representative_frame();
-    max.amplitude = vec![1.0; n];
-    max.phase = vec![-1.0; n];
+    max.i_q = vec![1; 2 * n];
     assert_round_trips(&max);
-    assert_eq!(datagram_len(n), Some(16 + 28 + 8 * n));
+    assert_eq!(datagram_len(n), Some(16 + 28 + 2 * n));
 }
 
 #[test]
 fn over_budget_frame_is_clamped_not_panicked() {
     let n = MAX_SUBCARRIERS as usize + 32;
     let mut frame = representative_frame();
-    frame.amplitude = vec![1.0; n];
-    frame.phase = vec![0.0; n];
+    frame.i_q = vec![1; 2 * n];
 
     let decoded = decode_datagram(&encode_datagram(&frame)).expect("decode clamped");
     assert_eq!(decoded.n_subcarriers(), MAX_SUBCARRIERS as usize);
 }
 
 #[test]
-fn short_phase_is_padded_not_panicked() {
+fn odd_sample_is_truncated_not_panicked() {
+    // An odd-length interleaved sample is not whole I/Q pairs; the encoder
+    // clamps to the whole pairs it can carry and the decoder round-trips that.
     let mut frame = representative_frame();
-    frame.phase.truncate(3);
+    let pairs = frame.n_subcarriers();
+    frame.i_q.push(7);
 
-    let decoded = decode_datagram(&encode_datagram(&frame)).expect("decode padded");
-    assert_eq!(decoded.amplitude, frame.amplitude);
-    assert_eq!(decoded.phase.len(), frame.amplitude.len());
-    assert!(decoded.phase[3..].iter().all(|p| *p == 0.0));
+    let decoded = decode_datagram(&encode_datagram(&frame)).expect("decode truncated");
+    assert_eq!(decoded.n_subcarriers(), pairs);
+    assert_eq!(decoded.i_q, frame.i_q[..2 * pairs]);
 }
 
 // ---------------------------------------------------------------------------
@@ -224,22 +248,22 @@ fn bad_message_type_and_format_are_rejected() {
     assert_eq!(decode_datagram(&msg), Err(WireError::UnknownMessageType(2)));
 
     let mut fmt = GOLDEN;
-    fmt[7] = 1;
+    fmt[7] = 0;
     assert_eq!(
         decode_datagram(&fmt),
-        Err(WireError::UnknownSubcarrierFormat(1))
+        Err(WireError::UnknownSubcarrierFormat(0))
     );
 }
 
 #[test]
 fn inconsistent_payload_length_is_rejected() {
     let mut bytes = GOLDEN;
-    bytes[10] = 0x28; // declare 40, but n = 2 implies 44
+    bytes[10] = 0x1E; // declare 30, but n = 2 implies 32
     assert_eq!(
         decode_datagram(&bytes),
         Err(WireError::LengthMismatch {
-            declared: 40,
-            expected: 44
+            declared: 30,
+            expected: 32
         })
     );
 }
@@ -295,7 +319,7 @@ fn control_fixtures() -> Vec<ControlMessage> {
             request_id: 1,
             body: ControlBody::JoinRequest(JoinRequest {
                 node: sample_mac(1),
-                boot: 0x1122_3344,
+                boot: 0x1122,
                 pairing_code: 0x0000_ABCD,
                 fw_version: "aquila-node 1.0.0".to_string(),
             }),
@@ -382,7 +406,166 @@ fn control_fixtures() -> Vec<ControlMessage> {
                 detail: "ring overflow".to_string(),
             }),
         },
+        ControlMessage {
+            request_id: 14,
+            body: ControlBody::OtaBegin(OtaBegin {
+                image_id: 0x0000_00A1,
+                size: 65_536,
+                sha256: [0xAB; 32],
+                signature: [0xCD; 64],
+                version: "1.2.3".to_string(),
+                chunk_size: 1024,
+                window: 8,
+            }),
+        },
+        ControlMessage {
+            request_id: 15,
+            body: ControlBody::OtaChunk(OtaChunk {
+                offset: 2048,
+                len: 3,
+                crc32: 0x1234_5678,
+                bytes: vec![0xDE, 0xAD, 0xBE],
+            }),
+        },
+        ControlMessage {
+            request_id: 16,
+            body: ControlBody::OtaAck(OtaAck {
+                received_upto: 64_512,
+                status: OtaAckStatus::Ok,
+            }),
+        },
+        ControlMessage {
+            request_id: 17,
+            body: ControlBody::OtaStatus(OtaStatus {
+                state: OtaState::Receiving,
+                received_upto: 64_512,
+                size: 65_536,
+            }),
+        },
+        ControlMessage {
+            request_id: 18,
+            body: ControlBody::OtaEnd(OtaEnd {
+                image_id: 0x0000_00A1,
+                sha256: [0xAB; 32],
+            }),
+        },
+        ControlMessage {
+            request_id: 19,
+            body: ControlBody::OtaAbort(OtaAbort {
+                reason: "operator aborted".to_string(),
+            }),
+        },
+        ControlMessage {
+            request_id: 20,
+            body: ControlBody::OtaResult(OtaResult {
+                outcome: OtaOutcome::Activated,
+                reason: String::new(),
+            }),
+        },
     ]
+}
+
+#[test]
+fn ota_opcodes_are_stable() {
+    assert_eq!(Opcode::OtaBegin.to_u8(), 0x0E);
+    assert_eq!(Opcode::OtaChunk.to_u8(), 0x0F);
+    assert_eq!(Opcode::OtaAck.to_u8(), 0x10);
+    assert_eq!(Opcode::OtaStatus.to_u8(), 0x11);
+    assert_eq!(Opcode::OtaEnd.to_u8(), 0x12);
+    assert_eq!(Opcode::OtaAbort.to_u8(), 0x13);
+    assert_eq!(Opcode::OtaResult.to_u8(), 0x14);
+    assert_eq!(Opcode::from_u8(0x0E), Some(Opcode::OtaBegin));
+    assert_eq!(Opcode::from_u8(0x14), Some(Opcode::OtaResult));
+}
+
+/// Golden vectors pin the exact OTA bytes so the C header and the firmware
+/// cannot drift from this codec (`capture-and-firmware.md` §9.4).
+#[test]
+fn ota_golden_vectors_round_trip() {
+    // `OTA_BEGIN`: a fixed, fully specified message.
+    let begin = encode_control(&ControlMessage {
+        request_id: 0x0102_0304,
+        body: ControlBody::OtaBegin(OtaBegin {
+            image_id: 1,
+            size: 3,
+            sha256: [0x11; 32],
+            signature: [0x22; 64],
+            version: "9.9".to_string(),
+            chunk_size: 1024,
+            window: 8,
+        }),
+    })
+    .expect("encode begin");
+    // Header: "AQCC", version 1, opcode 0x0E, body_len = 4+4+32+64+1+3+2+1 = 111.
+    assert_eq!(&begin[..6], b"AQCC\x01\x0e");
+    assert_eq!(u16::from_le_bytes([begin[6], begin[7]]), 111);
+    assert_eq!(
+        decode_control(&begin).expect("decode begin"),
+        ControlMessage {
+            request_id: 0x0102_0304,
+            body: ControlBody::OtaBegin(OtaBegin {
+                image_id: 1,
+                size: 3,
+                sha256: [0x11; 32],
+                signature: [0x22; 64],
+                version: "9.9".to_string(),
+                chunk_size: 1024,
+                window: 8,
+            }),
+        }
+    );
+
+    // `OTA_CHUNK`: offset 0x0000_0800, len 4, crc32 0xDEAD_BEEF, four bytes.
+    let chunk = encode_control(&ControlMessage {
+        request_id: 5,
+        body: ControlBody::OtaChunk(OtaChunk {
+            offset: 0x0000_0800,
+            len: 4,
+            crc32: 0xDEAD_BEEF,
+            bytes: vec![0x01, 0x02, 0x03, 0x04],
+        }),
+    })
+    .expect("encode chunk");
+    assert_eq!(&chunk[..6], b"AQCC\x01\x0f");
+    assert_eq!(u16::from_le_bytes([chunk[6], chunk[7]]), 4 + 2 + 4 + 4);
+    assert_eq!(
+        &chunk[12..12 + 14],
+        &[
+            0x00, 0x08, 0x00, 0x00, // offset LE
+            0x04, 0x00, // len LE
+            0xEF, 0xBE, 0xAD, 0xDE, // crc32 LE
+            0x01, 0x02, 0x03, 0x04, // payload
+        ]
+    );
+
+    // `OTA_ACK`: cumulative offset 0x0000_0800, status Ok.
+    let ack = encode_control(&ControlMessage {
+        request_id: 6,
+        body: ControlBody::OtaAck(OtaAck {
+            received_upto: 0x0000_0800,
+            status: OtaAckStatus::Ok,
+        }),
+    })
+    .expect("encode ack");
+    assert_eq!(&ack[..6], b"AQCC\x01\x10");
+    assert_eq!(&ack[12..17], &[0x00, 0x08, 0x00, 0x00, 0x00]);
+
+    // The authenticated framing is additive and round-trips too.
+    let token = [0x5Au8; 32];
+    for message in control_fixtures() {
+        let bytes = encode_control_authenticated(&message, &token).expect("encode auth");
+        let decoded = decode_control_authenticated(&bytes, &token).expect("decode auth");
+        assert_eq!(decoded, message, "authenticated OTA round trip mismatch");
+    }
+}
+
+#[test]
+fn ota_unknown_enum_bytes_are_preserved() {
+    // An unknown ACK status, OTA state and outcome decode to the sentinel
+    // rather than being reinterpreted.
+    assert_eq!(OtaAckStatus::from_u8(0x42), OtaAckStatus::Unknown);
+    assert_eq!(OtaState::from_u8(0x42), OtaState::Unknown);
+    assert_eq!(OtaOutcome::from_u8(0x42), OtaOutcome::Unknown);
 }
 
 #[test]
@@ -529,6 +712,68 @@ fn control_encode_limits_are_typed_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// Control-plane authentication (capture-and-firmware.md §6.3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn authenticated_control_round_trips_with_an_extra_trailer() {
+    let token = [0x5Au8; 32];
+    for message in control_fixtures() {
+        let plain = encode_control(&message).expect("plain encode");
+        let authed = encode_control_authenticated(&message, &token).expect("auth encode");
+        assert_eq!(authed.len(), plain.len() + CONTROL_AUTH_LEN);
+        assert_eq!(&authed[..plain.len()], plain.as_slice());
+        assert_eq!(
+            decode_control_authenticated(&authed, &token).expect("auth decode"),
+            message
+        );
+    }
+}
+
+#[test]
+fn authenticated_control_rejects_tampering_wrong_key_and_plain_frames() {
+    let token = [0x5Au8; 32];
+    let message = control_fixtures()[5].clone(); // SET_CONFIG
+    let authed = encode_control_authenticated(&message, &token).expect("encode");
+
+    // A plain (untagged) frame is not accepted as authenticated.
+    let plain = encode_control(&message).expect("plain");
+    assert_eq!(
+        decode_control_authenticated(&plain, &token),
+        Err(WireError::AuthenticationFailed)
+    );
+
+    // A tampered body changes the tag input.
+    let mut tampered = authed.clone();
+    tampered[CONTROL_HEADER_LEN + 4] ^= 0xFF;
+    assert_eq!(
+        decode_control_authenticated(&tampered, &token),
+        Err(WireError::AuthenticationFailed)
+    );
+
+    // A tampered trailer fails.
+    let mut bad_tag = authed.clone();
+    let last = bad_tag.len() - 1;
+    bad_tag[last] ^= 0x01;
+    assert_eq!(
+        decode_control_authenticated(&bad_tag, &token),
+        Err(WireError::AuthenticationFailed)
+    );
+
+    // A different token fails.
+    assert_eq!(
+        decode_control_authenticated(&authed, &[0x00u8; 32]),
+        Err(WireError::AuthenticationFailed)
+    );
+
+    // A buffer shorter than the trailer cannot be split.
+    assert!(matches!(
+        decode_control_authenticated(&authed[..CONTROL_AUTH_LEN - 1], &token),
+        Err(WireError::Truncated { .. })
+    ));
+}
+
+// ---------------------------------------------------------------------------
 // Identity mapping
 // ---------------------------------------------------------------------------
 
@@ -580,7 +825,7 @@ fn ports_and_limits_are_the_registered_ones() {
     assert_eq!(CONTROL_PORT, 9101);
     assert_eq!(CSI_MAGIC, *b"AQCI");
     assert_eq!(CONTROL_MAGIC, *b"AQCC");
-    assert_eq!(MAX_SUBCARRIERS, 178);
+    assert_eq!(MAX_SUBCARRIERS, 714);
 }
 
 #[test]
@@ -591,16 +836,19 @@ fn generated_c_header_pins_the_layout() {
         "#define AQ_CSI_MAGIC_0 0x41u",
         "#define AQ_CSI_HEADER_LEN 16u",
         "#define AQ_CSI_BODY_FIXED_LEN 28u",
-        "#define AQ_CSI_MAX_SUBCARRIERS 178u",
+        "#define AQ_CSI_MAX_SUBCARRIERS 714u",
         "#define AQ_CSI_OFF_MAGIC 0u",
-        "#define AQ_CSI_BODY_OFF_AMPLITUDE 28u",
+        "#define AQ_CSI_OFF_FLAGS 15u",
+        "#define AQ_CSI_FLAG_FIRST_WORD_INVALID 1u",
+        "#define AQ_CSI_BODY_OFF_IQ 28u",
+        "#define AQ_SUBCARRIER_FORMAT_INT8_IQ 1u",
         "#define AQ_OP_SYNC_ECHO 0x09u",
+        "#define AQ_CONTROL_AUTH_LEN 32u",
         "#define AQ_CSI_DATA_PORT 9100u",
         "_Static_assert(sizeof(aq_csi_header_t) == AQ_CSI_HEADER_LEN",
         "#define AQ_CSI_FRAME_SIZE(n_subcarriers)",
-        "float payload[];",
-        "#define AQ_CSI_AMPLITUDE(body)",
-        "#define AQ_CSI_PHASE(body)",
+        "int8_t payload[];",
+        "#define AQ_CSI_IQ(body)",
         "_Static_assert(offsetof(aq_csi_body_t, payload) == AQ_CSI_BODY_FIXED_LEN",
     ] {
         assert!(
@@ -626,11 +874,11 @@ prop_compose! {
          channel: u8,
          bandwidth_mhz: u8,
          subcarrier_offset: i16,
-         amplitude in prop::collection::vec(0.0f32..1000.0, n..=n),
-         phase in prop::collection::vec(-core::f32::consts::PI..core::f32::consts::PI, n..=n),
+         i_q in prop::collection::vec(any::<i8>(), 2 * n..=2 * n),
          rssi_dbm: i8,
          noise_floor_dbm: i8,
-         phy: u16)
+         phy: u16,
+         first_word_invalid: bool)
         -> CsiFrame {
         CsiFrame {
             node_id: NodeId(node_id),
@@ -641,11 +889,11 @@ prop_compose! {
             channel,
             bandwidth_mhz,
             subcarrier_offset,
-            amplitude,
-            phase,
+            i_q,
             rssi_dbm,
             noise_floor_dbm,
             phy: PhyFlags(phy),
+            first_word_invalid,
         }
     }
 }

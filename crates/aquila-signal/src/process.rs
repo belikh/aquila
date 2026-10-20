@@ -19,9 +19,7 @@ use crate::phase::{sanitise_phase, unwrap_phase};
 use crate::resample::resample_uniform;
 use crate::selection::{select_subcarriers, SubcarrierFeatureMatrix};
 use crate::spectrogram::{bvp_track, stft, BvpSample, StftConfig};
-use crate::vitals::{
-    estimate_vitals, VitalEstimate, VitalsConfig, VitalsEstimates, VitalsParams,
-};
+use crate::vitals::{estimate_vitals, VitalEstimate, VitalsConfig, VitalsEstimates, VitalsParams};
 
 /// A sequence anomaly surfaced from the transport, never enforced destructively
 /// (`signal.md` §4.2).
@@ -84,7 +82,10 @@ fn anomalies_for(seqs: &[u32]) -> Vec<SeqAnomaly> {
                     });
                 }
             } else if seq > prev + 1 {
-                out.push(SeqAnomaly::Gap { from: prev, to: seq });
+                out.push(SeqAnomaly::Gap {
+                    from: prev,
+                    to: seq,
+                });
             }
         }
         previous = Some(seq);
@@ -184,12 +185,24 @@ pub struct NodeFeatures {
     pub amplitude_rms: Vec<f32>,
     /// Per-usable-subcarrier motion energy, in usable order.
     pub motion_energy: Vec<f32>,
+    /// Per-usable-subcarrier noise-floor power, in usable order: the out-of-band
+    /// residual power the motion bandpass left behind. This is the real noise
+    /// term behind the SNR subcarrier selection (`signal.md` §4.11,
+    /// `sister-issues-core.md` S6); it is never a hardcoded zero.
+    pub noise_power: Vec<f32>,
     /// Breathing-rate candidates over time.
     pub breathing: Vec<BvpSample>,
     /// Heart-rate candidates over time.
     pub heart: Vec<BvpSample>,
     /// The deterministic breathing and heart rate estimates for the chunk.
     pub vitals: VitalsEstimates,
+    /// Whether every usable subcarrier resampled onto the uniform grid.
+    ///
+    /// `false` means at least one subcarrier could not be resampled (a
+    /// non-monotone timestamp, an over-large gap or a too-short span), so the
+    /// series was carried through un-resampled. That is **unknown**, and is
+    /// flagged rather than silently substituted (`sister-issues-core.md` S16).
+    pub grid_is_uniform: bool,
 }
 
 impl NodeFeatures {
@@ -248,6 +261,7 @@ impl Features {
             push_bvp(&mut out, &node.heart);
             push_vital(&mut out, &node.vitals.breathing);
             push_vital(&mut out, &node.vitals.heart);
+            out.push(u8::from(node.grid_is_uniform));
         }
         push_len(&mut out, self.anomalies.len());
         for anomaly in &self.anomalies {
@@ -371,8 +385,11 @@ pub fn process(
         cfg.band_breathing.hi_hz,
         cfg.uniform_fs_hz,
     )?;
-    let heart_coeffs =
-        BiquadCoeffs::bandpass(cfg.band_heart.lo_hz, cfg.band_heart.hi_hz, cfg.uniform_fs_hz)?;
+    let heart_coeffs = BiquadCoeffs::bandpass(
+        cfg.band_heart.lo_hz,
+        cfg.band_heart.hi_hz,
+        cfg.uniform_fs_hz,
+    )?;
     let stft_cfg = StftConfig {
         window: cfg.stft_window,
         hop: cfg.stft_hop,
@@ -421,38 +438,51 @@ pub fn process(
 
         let mut amplitude_rms = Vec::with_capacity(n_use);
         let mut motion_energy = Vec::with_capacity(n_use);
+        let mut noise_power = Vec::with_capacity(n_use);
         let mut motion_series: Vec<Vec<f32>> = Vec::with_capacity(n_use);
+        // A resample failure is flagged, not hidden: the raw series is carried
+        // through but `grid_is_uniform` records that the grid is unknown
+        // (`sister-issues-core.md` S16).
+        let mut grid_is_uniform = true;
         for b in 0..n_use {
-            let amp_grid = resample_uniform(&amp_series[b], &t_us, cfg.uniform_fs_hz)
-                .unwrap_or_else(|_| amp_series[b].clone());
-            let phase_grid = resample_uniform(&phase_series[b], &t_us, cfg.uniform_fs_hz)
-                .unwrap_or_else(|_| phase_series[b].clone());
+            let amp_grid = match resample_uniform(&amp_series[b], &t_us, cfg.uniform_fs_hz) {
+                Ok(grid) => grid,
+                Err(_) => {
+                    grid_is_uniform = false;
+                    amp_series[b].clone()
+                }
+            };
+            let phase_grid = match resample_uniform(&phase_series[b], &t_us, cfg.uniform_fs_hz) {
+                Ok(grid) => grid,
+                Err(_) => {
+                    grid_is_uniform = false;
+                    phase_series[b].clone()
+                }
+            };
             amplitude_rms.push(rms(&amp_grid));
             let motion = bandpass(&phase_grid, &motion_coeffs);
             let energy: f32 = motion_features(&motion, cfg.stft_window).into_iter().sum();
             motion_energy.push(energy);
+            // A real per-subcarrier noise floor: the out-of-band residual power
+            // of the phase series, i.e. what the motion bandpass left behind
+            // (`sister-issues-core.md` S6). The old code passed a hardcoded zero,
+            // so the documented SNR score degenerated to raw band power.
+            noise_power.push(residual_noise_power(&phase_grid, &motion));
             motion_series.push(motion);
         }
 
         let matrix = SubcarrierFeatureMatrix::new(
             usable.clone(),
             motion_energy.clone(),
-            vec![0.0; n_use],
+            noise_power.clone(),
         );
         let selected = select_subcarriers(&matrix, cfg.select_k).selected;
 
         // Mean motion series across the selected bins, band-limited per band.
         let (breathing, heart, vitals) = if selected.is_empty() {
-            (
-                Vec::new(),
-                Vec::new(),
-                estimate_vitals(&[], &vitals_cfg),
-            )
+            (Vec::new(), Vec::new(), estimate_vitals(&[], &vitals_cfg))
         } else {
-            let grid_len = motion_series
-                .first()
-                .map(|s| s.len())
-                .unwrap_or_default();
+            let grid_len = motion_series.first().map(|s| s.len()).unwrap_or_default();
             let mut mean_series = vec![0.0_f32; grid_len];
             for &index in &selected {
                 if let Some(pos) = usable.iter().position(|&u| u == index) {
@@ -481,9 +511,11 @@ pub fn process(
             selected,
             amplitude_rms,
             motion_energy,
+            noise_power,
             breathing,
             heart,
             vitals,
+            grid_is_uniform,
         });
     }
 
@@ -492,4 +524,32 @@ pub fn process(
         anomalies,
         calibration: cal.state,
     })
+}
+
+/// The out-of-band residual power of a phase series, a real per-subcarrier
+/// noise-floor estimate (`signal.md` §4.11).
+///
+/// `residual = signal − filtered` is what the motion bandpass left behind; its
+/// variance is the power the signal band does not explain, so `band / noise` in
+/// [`select_subcarriers`] is a genuine SNR, not a raw-power fallback.
+#[must_use]
+fn residual_noise_power(signal: &[f32], filtered: &[f32]) -> f32 {
+    let n = signal.len().min(filtered.len());
+    if n == 0 {
+        return 0.0;
+    }
+    let mut mean = 0.0_f64;
+    let mut sumsq = 0.0_f64;
+    for i in 0..n {
+        let residual = f64::from(signal[i] - filtered[i]);
+        mean += residual;
+        sumsq += residual * residual;
+    }
+    let mean = mean / n as f64;
+    let variance = (sumsq / n as f64) - mean * mean;
+    if variance.is_finite() && variance > 0.0 {
+        variance as f32
+    } else {
+        0.0
+    }
 }

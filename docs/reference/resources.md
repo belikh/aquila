@@ -25,6 +25,7 @@ Cite by `id`. Licences are as reported by the source and should be re-verified b
 | id | Resource | Licence | Notes |
 | --- | --- | --- | --- |
 | `esp-csi` | https://github.com/espressif/esp-csi | Apache-2.0 | Espressif CSI examples |
+| `esp-csi-csi` | https://github.com/espressif/esp-csi/blob/master/examples/get-started/README.md | Apache-2.0 | CSI data format: int8 pairs, imaginary byte first (`[Im, Re]` per subcarrier) |
 | `espectre` | https://github.com/francescopace/espectre | see repo | On-device motion via ESPHome/MQTT |
 | `espargos` | https://espargos.net + https://github.com/ESPARGOS/esp-sdr | see repo | Phase-coherent ESP32 array; RX-only raw I/Q |
 | `openmac` | https://github.com/ESPARGOS/esp32-open-mac | see repo | Reverse-engineered Wi-Fi MAC |

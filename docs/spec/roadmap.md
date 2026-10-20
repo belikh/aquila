@@ -23,33 +23,17 @@ Each slice has the same shape:
   move, recorded in the ledger.
 - **Ledger rows** — the `MetricSink` records that prove the slice landed.
 
-## Seam and crate map (proposed)
+## Seam and crate map
 
-Crate names are `aquila-<english-descriptor>`; the set is provisional and may be
-revised by ADR. A crate exists only once a slice needs it.
-
-| Crate | Role | Seam owned |
-| --- | --- | --- |
-| `aquila-source` | CSI ingestion; recorded-fixture and live-UDP adapters | `CsiSource` |
-| `aquila-clock` | software time base and per-node drift estimation | `Clock` |
-| `aquila-signal` | conditioning: subcarrier selection, filtering, phase handling | — |
-| `aquila-presence` | presence/occupancy and person count | — |
-| `aquila-vitals` | breathing and heart rate | `VitalsModel` |
-| `aquila-pose` | coarse pose | `PoseModel` |
-| `aquila-model` | ONNX inference adapter plus deterministic fakes | `PoseModel`/`VitalsModel` |
-| `aquila-calibration` | global whole-home calibration artefacts | — |
-| `aquila-fusion` | node-pair and multi-node fusion | — |
-| `aquila-home` | home → floor → room → node → node-pair model | — |
-| `aquila-groundtruth` | reference labels and fixtures | `GroundTruth` |
-| `aquila-sink` | outputs to Home Assistant, files, in-memory | `Sink` |
-| `aquila-metrics` | commit-keyed metric ledger | `MetricSink` |
-| `aquila-sensing` | pipeline assembly and orchestration | — |
-| `aquila-host` | add-on private HTTP + WS, direct node control channel | — |
-| `aquila-dashboard` | Rust → WASM management UI | — |
+The crate graph is settled, not proposed: `docs/spec/interface-register.md` is
+the single canonical list of crates, layers, public interfaces, seams, ports and
+dependency edges (ADR-0003). This document names those crates but does not define
+a second map; a crate name not in the register is a defect, and `tools/dag.toml`
+enforces the edges via `cargo run -p xtask -- dag-check`.
 
 The add-on image and the HACS custom component are packaging artefacts, not
 crates: the component is Python/YAML under the add-on's supervision and speaks
-only to the host.
+only to the core, and the composition-root binary is `aquila-addon`.
 
 ## Slice sequence
 
@@ -62,10 +46,10 @@ that every later slice widens.
 **Entry.** Repo scaffold and CI (tests only, no metric gating); a small recorded
 in-domain CSI fixture set with labels.
 
-**Exercises.** `aquila-source` (replay adapter), `aquila-clock` (logical clock),
-`aquila-signal`, `aquila-presence`, `aquila-groundtruth` (fixture labels),
-`aquila-sink` (in-memory), `aquila-metrics`. First appearance of `CsiSource`,
-`Clock`, `GroundTruth`, `Sink`, `MetricSink`.
+**Exercises.** `aquila-sources` (replay adapter), `aquila-sensing` (logical
+clock, the `Sink` seam), `aquila-signal`, `aquila-inference` (presence/count
+head), `aquila-evaluation` (fixture labels), `aquila-metrics`. First appearance
+of `CsiSource`, `Clock`, `GroundTruth`, `Sink`, `MetricSink`.
 
 **Exit criteria.**
 - Deterministic replay: identical input produces byte-identical output.
@@ -73,7 +57,7 @@ in-domain CSI fixture set with labels.
 - A ledger row is written per commit, keyed by commit, and diffable.
 - TDD throughout; fake adapters and fixtures, no hardware.
 
-**Ledger rows.** `presence.f1`, `presence.count.mae`, `replay.digest`.
+**Ledger rows.** `accuracy.presence_f1`, `presence.count.mae`, `replay.digest`.
 
 ### Slice 2 — Vitals tracer bullet
 
@@ -82,8 +66,8 @@ output, measured against a reference trace.
 
 **Entry.** Slice 1 exit.
 
-**Exercises.** `aquila-vitals`, `aquila-model` (`VitalsModel` with fake then
-ONNX adapter), `aquila-clock` (window timing).
+**Exercises.** `aquila-inference` (`VitalsModel` with fake then ONNX adapter),
+`aquila-sensing` (window timing).
 
 **Exit criteria.**
 - Breathing MAE ≤ 2 brpm against the fixture reference.
@@ -92,7 +76,7 @@ ONNX adapter), `aquila-clock` (window timing).
 - Vitals are computed on the same frames and clock as presence, not a parallel
   path.
 
-**Ledger rows.** `breathing.mae`, `heart.mae`, `vitals.window.count`.
+**Ledger rows.** `accuracy.breathing.mae_brpm`, `heart.mae`, `vitals.window.count`.
 
 ### Slice 3 — Global whole-home calibration
 
@@ -102,8 +86,9 @@ and per-session offsets.
 
 **Entry.** Slice 2 exit; fixtures spanning at least two sessions and two nodes.
 
-**Exercises.** `aquila-calibration`, `aquila-home` (nodes as calibration
-subjects), `aquila-clock` (per-node drift estimation), `aquila-metrics`.
+**Exercises.** `aquila-sensing` (the internal `calibration` module, per-node
+drift estimation), `aquila-geometry` (nodes as calibration subjects),
+`aquila-metrics`.
 
 **Exit criteria.**
 - Calibration is a versioned artefact referenced by commit, never an implicit
@@ -124,9 +109,9 @@ spatial diversity raises pose and steadies presence.
 
 **Entry.** Slice 3 exit; fixtures with a genuine node pair in one room.
 
-**Exercises.** `aquila-fusion` (node-pair first), `aquila-pose` (`PoseModel`,
-fake then ONNX), `aquila-home` (room boundaries), `aquila-clock` (inter-node
-drift).
+**Exercises.** `aquila-sensing` (internal `fusion` module, node-pair first;
+inter-node drift), `aquila-inference` (`PoseModel`, fake then ONNX),
+`aquila-geometry` (room boundaries).
 
 **Exit criteria.**
 - Coarse torso PCK@20 ≥ 65% in-domain for the single-room fixture set.
@@ -134,7 +119,7 @@ drift).
 - Inter-node drift is estimated and applied, not assumed away.
 - Fusion is feature-level, per the settled brief.
 
-**Ledger rows.** `pose.pck20.torso`, `presence.f1.room`, `fusion.node_pair.count`.
+**Ledger rows.** `accuracy.torso_pck_at_20`, `presence.f1.room`, `fusion.node_pair.count`.
 
 ### Slice 5 — Floor aggregation
 
@@ -143,8 +128,8 @@ attribution as the model grows room → floor.
 
 **Entry.** Slice 4 exit; fixtures spanning at least two rooms on one floor.
 
-**Exercises.** `aquila-fusion` (room → floor), `aquila-home` (floor tier),
-`aquila-metrics`.
+**Exercises.** `aquila-sensing` (internal `fusion`/`escalation` modules,
+room → floor), `aquila-geometry` (floor tier), `aquila-metrics`.
 
 **Exit criteria.**
 - Floor-level presence F1 ≥ 0.90.
@@ -161,8 +146,8 @@ cross-floor fusion and calibration intact.
 
 **Entry.** Slice 5 exit; fixtures spanning three floors.
 
-**Exercises.** `aquila-fusion` (cross-floor), `aquila-home` (home tier),
-`aquila-calibration` (whole-home re-application).
+**Exercises.** `aquila-sensing` (cross-floor fusion, `escalation` and whole-home
+calibration re-application), `aquila-geometry` (home tier).
 
 **Exit criteria.**
 - Whole-home presence F1 ≥ 0.90 at the reference ~9+ node scale.
@@ -180,10 +165,11 @@ Assistant entities.
 
 **Entry.** Slice 6 exit; reference ESP32-S3 nodes; Linux host only.
 
-**Exercises.** `aquila-source` (live UDP adapter), `aquila-clock` (live drift),
-`aquila-host` (private HTTP + WS, direct node control channel), `aquila-sink`
-(HA state adapter). The replay adapter and live adapter now both satisfy
-`CsiSource`, making the seam real.
+**Exercises.** `aquila-sources` (live UDP adapter and the `NodeControl`
+channel), `aquila-sensing` (live drift estimation), `aquila-api` (private HTTP +
+WS), `aquila-ha` (HA state adapter), `aquila-addon` (composition root). The
+replay adapter and live adapter now both satisfy `CsiSource`, making the seam
+real.
 
 **Exit criteria.**
 - A real node streams CSI over UDP to the core; presence appears as an HA
@@ -203,9 +189,9 @@ read the metric ledger.
 
 **Entry.** Slice 7 exit; add-on serving ingress.
 
-**Exercises.** `aquila-dashboard` (WASM build target), `aquila-host` (ingress
-and API), `aquila-home` (topology editing), `aquila-calibration` (trigger),
-`aquila-metrics` (read view).
+**Exercises.** `aquila-dashboard` (WASM build target), `aquila-api` (ingress
+and API), `aquila-geometry` (topology editing), `aquila-sensing` (calibration
+trigger), `aquila-metrics` (read view).
 
 **Exit criteria.**
 - Dashboard loads via HA sidebar ingress with no separate port.
@@ -223,7 +209,7 @@ install, and the honest-claims statement — everything needed to call v1 shippe
 
 **Entry.** Slice 8 exit; all prior exit criteria green.
 
-**Exercises.** `aquila-host` (packaging), release tooling, documentation.
+**Exercises.** `aquila-addon` (packaging), release tooling, documentation.
 
 **Exit criteria.**
 - A clean Home Assistant OS (Linux) install adds the repository, installs the
@@ -304,7 +290,10 @@ inform later ADRs but are run separately, with their own honest write-ups:
 
 Every slice writes `MetricSink` rows keyed to the commit, classified as
 **deterministic** (replay digests, schema, reproducibility), **statistical**
-(F1, MAE, PCK, attribution), or **gated** (none in CI yet). The workflow is
+(F1, MAE, PCK, attribution), or **gated** (none in CI yet). The three v1 gated
+bar rows use the canonical ids `accuracy.torso_pck_at_20`, `accuracy.presence_f1`
+and `accuracy.breathing.mae_brpm` (`data-contracts.md` §7.3); scoped rows append
+a scope suffix (e.g. `presence.f1.room`, `presence.f1.home`). The workflow is
 record-and-diff: a slice is not done until its rows exist at the target bar and
 a diff against the previous commit is available. This is the mechanism that
 keeps "measured from commit one" true.

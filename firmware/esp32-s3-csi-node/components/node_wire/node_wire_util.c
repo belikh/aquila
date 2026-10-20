@@ -12,7 +12,7 @@ size_t aq_csi_datagram_len(uint16_t n_subcarriers)
         return 0u;
     }
     return (size_t)AQ_CSI_HEADER_LEN + (size_t)AQ_CSI_BODY_FIXED_LEN +
-           (size_t)8u * (size_t)n_subcarriers;
+           (size_t)2u * (size_t)n_subcarriers;
 }
 
 void aq_put_u16_le(uint8_t *out, uint16_t value)
@@ -71,12 +71,12 @@ size_t aq_frame_csi(uint16_t node_id, uint8_t band, uint8_t channel,
                     uint64_t device_time_us, uint16_t boot_epoch,
                     int16_t subcarrier_offset, uint16_t n_subcarriers,
                     int8_t rssi_dbm, int8_t noise_floor_dbm, uint16_t phy_flags,
-                    const float *amplitude, const float *phase, uint8_t *out,
+                    bool first_word_invalid, const int8_t *i_q, uint8_t *out,
                     size_t out_cap)
 {
-    const size_t payload_len = (size_t)AQ_CSI_BODY_FIXED_LEN + (size_t)8u * (size_t)n_subcarriers;
+    const size_t payload_len = (size_t)AQ_CSI_BODY_FIXED_LEN + (size_t)2u * (size_t)n_subcarriers;
     const size_t total = (size_t)AQ_CSI_HEADER_LEN + payload_len;
-    if (amplitude == NULL || phase == NULL || out == NULL) {
+    if (i_q == NULL || out == NULL) {
         return 0u;
     }
     if (n_subcarriers == 0u || n_subcarriers > AQ_CSI_MAX_SUBCARRIERS ||
@@ -92,13 +92,14 @@ size_t aq_frame_csi(uint16_t node_id, uint8_t band, uint8_t channel,
     out[AQ_CSI_OFF_WIRE_MAJOR] = AQ_WIRE_MAJOR;
     out[AQ_CSI_OFF_WIRE_MINOR] = AQ_WIRE_MINOR;
     out[AQ_CSI_OFF_MESSAGE_TYPE] = AQ_CSI_MESSAGE_TYPE;
-    out[AQ_CSI_OFF_SUBCARRIER_FORMAT] = AQ_SUBCARRIER_FORMAT_F32;
+    out[AQ_CSI_OFF_SUBCARRIER_FORMAT] = AQ_SUBCARRIER_FORMAT_INT8_IQ;
     aq_put_u16_le(&out[AQ_CSI_OFF_NODE_ID], node_id);
     aq_put_u16_le(&out[AQ_CSI_OFF_PAYLOAD_LEN], (uint16_t)payload_len);
     out[AQ_CSI_OFF_BAND] = band;
     out[AQ_CSI_OFF_CHANNEL] = channel;
     out[AQ_CSI_OFF_BANDWIDTH_MHZ] = bandwidth_mhz;
-    out[AQ_CSI_OFF_RESERVED] = 0u;
+    out[AQ_CSI_OFF_FLAGS] =
+        first_word_invalid ? AQ_CSI_FLAG_FIRST_WORD_INVALID : 0u;
 
     /* Fixed body, relative to the start of the body. */
     uint8_t *body = out + AQ_CSI_HEADER_LEN;
@@ -113,14 +114,12 @@ size_t aq_frame_csi(uint16_t node_id, uint8_t band, uint8_t channel,
     aq_put_u16_le(&body[AQ_CSI_BODY_OFF_RESERVED], 0u);
 
     /*
-     * Amplitude, then phase: `4 * n` bytes each, little-endian f32. The
-     * ESP32-S3 is little-endian, so a byte copy of each float is the wire
-     * representation.
+     * Raw signed int8 I/Q, interleaved Q then I (imaginary first) per
+     * subcarrier: `2 * n` bytes. The receive buffer is copied verbatim; the
+     * node does no floating-point conversion (ADR-0005).
      */
-    uint8_t *accum = body + AQ_CSI_BODY_OFF_AMPLITUDE;
-    memcpy(accum, amplitude, sizeof(float) * (size_t)n_subcarriers);
-    accum += sizeof(float) * (size_t)n_subcarriers;
-    memcpy(accum, phase, sizeof(float) * (size_t)n_subcarriers);
+    memcpy(body + AQ_CSI_BODY_OFF_IQ, i_q,
+           sizeof(int8_t) * 2u * (size_t)n_subcarriers);
 
     return total;
 }

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 7</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">method of operating a Wi-Fi sensing mesh (Jennison closure phase)</text>
+
+  <!-- Step boxes -->
+  <g transform="translate(120,130)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">1. Measure CSI</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">per directed link, per subcarrier</text>
+  </g>
+  <path d="M300,155 L330,155" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(350,130)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">2. Form directed loops</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">ordered cycles of nodes</text>
+  </g>
+  <path d="M530,155 L560,155" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(580,130)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">3. Compute closure phase</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">sum link phases around loop</text>
+  </g>
+
+  <!-- Branch down -->
+  <path d="M670,180 L670,220" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(580,230)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">4. Unwrap phase</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">across subcarrier frequency</text>
+  </g>
+  <path d="M670,280 L670,320" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(580,330)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">5. Estimate path length</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">from slope of &#932; vs. f<sub>k</sub></text>
+  </g>
+  <path d="M670,380 L670,420" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(580,430)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">6. Localise scatterer</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">intersect multi-loop constraints</text>
+  </g>
+
+  <!-- Output -->
+  <path d="M520,480 L490,480" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(290,430)">
+    <rect x="0" y="0" width="180" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="90" y="20" text-anchor="middle" font-weight="bold">7. Output tracking</text>
+    <text x="90" y="36" text-anchor="middle" font-size="8">per-zone position &amp; motion</text>
+  </g>
+  <path d="M290,480 L260,480" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <path d="M230,480 L200,480" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <g transform="translate(40,430)">
+    <rect x="0" y="0" width="140" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="70" y="20" text-anchor="middle" font-weight="bold">loop back</text>
+    <text x="70" y="36" text-anchor="middle" font-size="8">continuous tracking</text>
+  </g>
+</svg>

@@ -1,5 +1,5 @@
 name: Aquila Core
-version: 0.1.0
+version: 0.1.4
 slug: aquila_core
 description: WiFi CSI sensing core for Aquila — DSP, inference, fusion, calibration
 url: https://github.com/belikh/aquila
@@ -24,8 +24,11 @@ ports_description:
 options:
   log_level: info
   calibration_profile: default
-  retention_days: 30
+  # 0 = retain indefinitely. G9 forbids an imposed retention window, so the
+  # default is to keep everything; a positive value is an explicit opt-in to
+  # automatic expiry.
+  retention_days: 0
 schema:
   log_level: list(trace|debug|info|notice|warning|error|fatal)
   calibration_profile: str
-  retention_days: int(1,365)
+  retention_days: int(0,3650)

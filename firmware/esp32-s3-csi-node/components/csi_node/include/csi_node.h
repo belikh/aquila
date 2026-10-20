@@ -19,7 +19,7 @@ extern "C" {
 /* The CSI configuration the node applies (`capture-and-firmware.md` §9.1). */
 typedef struct {
     uint16_t node_id;      /* dense on-air node id (AQCI node_id) */
-    uint32_t boot;         /* random boot epoch, u32 on the control plane */
+    uint16_t boot;         /* random boot epoch, u16 on the wire and control plane */
     uint8_t channel;       /* 802.11 primary channel */
     uint8_t bandwidth_mhz; /* 20, 40, 80 or 160 */
     uint8_t secondary;     /* 0 none, 1 above, 2 below */
@@ -27,8 +27,9 @@ typedef struct {
     bool lltf_enable;
     bool ht_ltf_enable;
     bool stbc_ht_ltf_enable;
-    uint16_t csi_len_cap;  /* maximum CSI payload in bytes */
+    uint16_t csi_len_cap;  /* maximum raw int8 CSI bytes (2 per subcarrier) */
     uint32_t max_tx_rate_hz; /* transmit-rate cap; frames over it are dropped */
+    uint32_t heartbeat_ms; /* STATUS cadence in ms; SET_CONFIG may override */
 } csi_node_config_t;
 
 /* The v1 defaults for a freshly booted node. */
@@ -48,6 +49,9 @@ void csi_node_apply_config(const csi_node_config_t *config);
 
 /* Enable or disable CSI streaming (`SET_CSI`). */
 void csi_node_set_streaming(bool enable);
+
+/* Whether CSI streaming is currently enabled, for the OTA health window. */
+bool csi_node_is_streaming(void);
 
 /* The assignable (raw int8) CSI length cap for the current bandwidth. */
 uint16_t csi_node_phy_cap(void);

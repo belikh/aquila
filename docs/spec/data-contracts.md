@@ -25,7 +25,7 @@ There are exactly **two version numbers**, and they move together:
 
 | Version | Carried by | Scope |
 | --- | --- | --- |
-| **Contract version** | `ContractVersion` on every `Session`, `LedgerRecord`, session archive | The set of serde types in `aquila-contracts` |
+| **Contract version** | `ContractVersion` on every `Session`, `LedgerRecord`, session archive | The set of serde types in `aquila-types` |
 | **Wire version** | Bytes 4–5 of every UDP header | The on-air binary layout only |
 
 The **one rule**: *a contract is append-only within a major version.* You may add
@@ -40,7 +40,7 @@ field or variant. Anything else is a **major** bump.
   `Unknown` fallback (see §0.3). Old readers ignore what they don't know.
 - **MAJOR (`1.x` → `2.0`)**: any removal, retype, unit change, meaning change,
   reordering, or change to an invariant. Requires: this document revised, the
-  `aquila-contracts` crate major-bumped, the wire header major-bumped, and a
+  `aquila-types` crate major-bumped, the wire header major-bumped, and a
   migration note. A core receiving a mismatched **wire major** MUST reject the
   datagram and record it once per `(node_id, boot_epoch)`. It MUST NOT guess.
 - **Units and semantics are part of the contract.** Changing `f32` metres to
@@ -50,11 +50,12 @@ field or variant. Anything else is a **major** bump.
 
 ### 0.2 Single crate, no forks
 
-All types live in **`aquila-contracts`** (a `no_std`-friendly, `serde` crate).
-Every other crate — `aquila-csi`, `aquila-fusion`, `aquila-pose`,
-`aquila-vitals`, `aquila-topology`, `aquila-measure` — imports them. Adapters may
-*wrap* a contract type (e.g. `CsiEnvelope`), never re-declare it. A repository
-check asserts that the canonical struct names are declared in exactly one crate.
+All types live in **`aquila-types`** — the L0 vocabulary crate (ADR-0003 §2).
+Every other crate — `aquila-wire`, `aquila-signal`, `aquila-geometry`,
+`aquila-metrics`, `aquila-session`, `aquila-inference`, `aquila-sources`,
+`aquila-sensing` and the L4 edges — imports them. Adapters may *wrap* a contract
+type (e.g. `CsiEnvelope`), never re-declare it. A repository check asserts that
+the canonical struct names are declared in exactly one crate.
 
 ### 0.3 Unknown values are preserved, never invented
 
@@ -92,9 +93,10 @@ pub struct Slug(pub String);           // e.g. "kitchen-01", "ground-floor"
 pub type HomeId    = Slug;
 pub type FloorId   = Slug;
 pub type RoomId    = Slug;
-/// In v1 a Zone *is* a Room; v1 emits one zone per room. A future declared
-/// sub-region zone would be an additive change, not a new parallel identity.
-pub type ZoneId    = RoomId;
+/// Identity of a virtual detection region. A zone may be coextensive with a
+/// room, a sub-region of a room (for example "bed" inside the bedroom), or span
+/// multiple rooms (`Zone.room` is `None` when it spans rooms).
+pub type ZoneId    = Slug;
 pub type PairId    = Slug;
 pub type SessionId = Slug;
 pub type MetricId  = Slug;
@@ -185,60 +187,70 @@ missing input is hardware (`evaluation.md` §5.1–§5.2).
 
 ## 2. `CsiFrame` — the raw sensing sample
 
-One received 802.11 packet's complex channel state information from a single
-node: a complex coefficient per subcarrier plus capture metadata. A modem output,
-not raw I/Q.
+One received 802.11 packet's raw channel state information from a single node:
+the esp-csi **signed int8 I/Q** sample per subcarrier plus capture metadata. The
+modem's native form, carried verbatim; the sample is interleaved
+**imaginary-first** (`[Q0, I0, Q1, I1, …]`), as esp-csi emits it (ADR-0006).
+Amplitude and phase are **derived** in the core, never stored (ADR-0005).
 
 **Fields**
 
 | Field | Type | Unit | Notes |
 | --- | --- | --- | --- |
 | `node_id` | `NodeId` | — | On-air identity; see §1 |
-| `boot_epoch` | `u16` | — | Incremented every boot; persisted in node NVS |
+| `boot_epoch` | `u16` | — | A fresh value each boot from the node RNG; **not** persisted (`capture-and-firmware.md` §9.1.5). The core treats a change as a reboot |
 | `sequence` | `u64` | count | Monotonic within `(node, boot_epoch, band, channel)` |
 | `device_time_us` | `u64` | µs | Node-local monotonic; **not** synchronised |
 | `band` | `Band` | — | 2.4 / 5 GHz / Unknown |
 | `channel` | `u8` | channel | 1–14 (2.4 GHz); 32–177 (5 GHz) |
 | `bandwidth_mhz` | `u8` | MHz | 20 or 40 |
-| `subcarrier_offset` | `i16` | index | Index of first element below |
-| `amplitude` | `Vec<f32>` | linear, arbitrary | Non-negative, finite |
-| `phase` | `Vec<f32>` | radians | Wrapped to `[-π, π]`; per-frame phase is uncalibrated |
+| `subcarrier_offset` | `i16` | index | Index of the first interleaved sample below |
+| `i_q` | `Vec<i8>` | raw counts | Interleaved `Q, I` per subcarrier (**imaginary first**), ascending index |
 | `rssi_dbm` | `i8` | dBm | Whole-frame RSSI |
 | `noise_floor_dbm` | `i8` | dBm | Whole-frame noise floor |
 | `phy` | `PhyFlags` | bitset | See below |
+| `first_word_invalid` | `bool` | — | ESP32 quirk: the leading complex sample (two bytes) is unreliable. Carried on the wire as header `flags` bit 0 (§9.1) |
 
-`n_subcarriers` is **derived** (`amplitude.len()`) and is not a separate stored
-field, so it cannot disagree with the arrays.
+`n_subcarriers` is **derived** (`i_q.len() / 2`) and is not a separate stored
+field, so it cannot disagree with the sample. Amplitude (`√(I²+Q²)`) and phase
+(`atan2(Q, I)`) are derived accessors on the frame, not stored fields; they read
+the in-phase byte as the *second* byte of each pair and the quadrature byte as
+the *first* (imaginary-first).
 
 ```rust
 bitflags-like newtype (u16):
 pub struct PhyFlags(pub u16);
 // bit 0: HT (11n), bit 1: secondary present, bit 2: STBC, bit 3: LDPC,
-// bit 4: short GI, bit 5: sounding/NDP.
+// bit 4: short GI, bit 5: sounding/NDP, bit 6: IQ saturated (capture/simulator
+// diagnostic), bit 7: VHT (11ac), bit 8: HE (11ax). Bits 9–15 reserved.
 ```
 
-**Invariants (enforced by `aquila-csi` on ingest; violations are rejected and counted)**
+**Invariants (enforced by `aquila-sources` on ingest; violations are rejected and counted)**
 
-1. `amplitude.len() == phase.len() >= 1`.
-2. `amplitude` and `phase` are in **ascending subcarrier index** order, contiguous,
-   starting at `subcarrier_offset`. Null/guard subcarriers may appear with
-   `amplitude == 0.0`; downstream DSP decides whether to use them.
-3. Every `amplitude[i] >= 0.0` and finite; every `phase[i]` finite and in `[-π, π]`.
+1. `i_q.len()` is even and `>= 2` (`n_subcarriers >= 1`).
+2. `i_q` is in **ascending subcarrier index** order, contiguous, starting at
+   `subcarrier_offset`: `[Q0, I0, Q1, I1, …]` (imaginary first). Null/guard
+   subcarriers may appear as the pair `(0, 0)`; downstream DSP decides whether to
+   use them.
+3. Every element is a signed int8, so its derived amplitude and phase are finite
+   by construction; there is no range check to fail.
 4. `device_time_us` is non-decreasing within a `boot_epoch`.
 5. `sequence` strictly increases within a `(node, boot_epoch, band, channel)`
    stream modulo loss. Gaps quantify loss; duplicates (`sequence` seen twice) are
    dropped by the ingest deduplicator.
 6. A reboot is detected when `boot_epoch` changes, or `device_time_us`/`sequence`
    goes backwards. On reboot the core opens a new epoch; it never splices across it.
-7. `phase` is **per-frame uncalibrated** (independent PLL/AGC phase per frame).
+7. Per-frame phase is **uncalibrated** (independent PLL/AGC phase per frame).
    Cross-frame phase comparison is out of scope for v1 and MUST NOT be inferred
-   from this field alone.
+   from the derived phase alone.
 
 **Serialisation**
 
 - **Wire (UDP):** fixed little-endian header, then body. See §9.
-- **On disk:** postcard-encoded `CsiEnvelope` inside a session archive (§9).
-- **JSON (fixtures/debug only):** `f32` arrays as arrays of numbers; never the
+- **On disk:** inside a `.aqs` session archive, the **exact on-wire `AQCI`
+  datagram bytes** plus a host-arrival stamp (§9.2, `capture-and-firmware.md`
+  §8). `postcard` is **not** used for the frame stream.
+- **JSON (fixtures/debug only):** `i8` samples as arrays of integers; never the
   production transport.
 
 **Rust sketch**
@@ -254,13 +266,17 @@ pub struct CsiFrame {
     pub channel: u8,
     pub bandwidth_mhz: u8,
     pub subcarrier_offset: i16,
-    pub amplitude: Vec<f32>,
-    pub phase: Vec<f32>,
+    pub i_q: Vec<i8>, // interleaved Q, I (imaginary first) per subcarrier
     pub rssi_dbm: i8,
     pub noise_floor_dbm: i8,
     pub phy: PhyFlags,
+    pub first_word_invalid: bool,
 }
-impl CsiFrame { pub fn n_subcarriers(&self) -> usize { self.amplitude.len() } }
+impl CsiFrame {
+    pub fn n_subcarriers(&self) -> usize { self.i_q.len() / 2 }
+    pub fn amplitude(&self) -> Vec<f32> { /* √(I²+Q²) */ }
+    pub fn phase(&self) -> Vec<f32> { /* atan2(Q, I) */ }
+}
 ```
 
 **`CsiEnvelope`** — the core-side wrapper. The node frame stays pure; the core
@@ -304,12 +320,15 @@ a declared pair.
 
 ---
 
-## 3. Home topology — `Home`, `Floor`, `Room`, `Node`, `NodePair`
+## 3. Home topology — `Home`, `Floor`, `Room`, `Zone`, `Node`, `NodePair`
 
 The physical model, defined from day one: **Home → Floors → Rooms → Nodes →
-NodePairs**. Stored as JSON in `config/topology.json` and loaded by the
-`aquila-topology` module. Nodes and rooms are *configured*, not inferred. A
-**Zone** is a Room in v1 (`ZoneId == RoomId`).
+NodePairs → Zones**. Stored as JSON in `config/topology.json` and loaded by the
+`aquila-geometry` module. Rooms describe where nodes are physically installed;
+zones are virtual detection regions — the unit of sensing output. Nodes, rooms
+and zones are *configured*, not inferred. A zone may be coextensive with a
+room, a sub-region of a room (for example "bed" inside the bedroom, or "shower"
+versus "toilet" inside the bathroom), or span multiple rooms.
 
 ### 3.1 Coordinate model (one frame, no ambiguity)
 
@@ -397,12 +416,26 @@ pub struct NodePair {
 #[serde(rename_all = "snake_case")]
 pub enum PairScope { Room, SameFloor, CrossFloor }
 
+/// A virtual detection region. A zone may be coextensive with a room (zone
+/// `lounge` inside room `lounge`), a sub-region of a room (zone `bed` inside
+/// room `bedroom`, or zone `shower` vs zone `toilet` inside room `bathroom`),
+/// or span multiple rooms (`room` is `None`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Zone {
+    pub id: ZoneId,
+    /// The room this zone sits within, when it is a sub-region of one room.
+    /// `None` when the zone spans rooms or covers the whole home.
+    pub room: Option<RoomId>,
+    pub name: String,
+}
+
 /// The whole configured model. Referential integrity is an invariant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Topology {
     pub home: Home,
     pub floors: Vec<Floor>,
     pub rooms: Vec<Room>,
+    pub zones: Vec<Zone>,
     pub nodes: Vec<Node>,
     pub pairs: Vec<NodePair>,
 }
@@ -412,7 +445,8 @@ pub struct Topology {
 
 1. All `*Id` values are unique within their collection and non-empty.
 2. Every `Floor.home` matches `Home.id`; every `Room.floor` exists; every
-   `Node.room` exists; every `NodePair.tx`/`.rx` exist.
+   `Zone.room`, when `Some`, exists; every `Node.room` exists; every
+   `NodePair.tx`/`.rx` exist.
 3. `NodePair.tx != NodePair.rx`; the **ordered** pair `(tx, rx)` is unique (one
    directed sensing link per ordered pair per Home in v1).
 4. `PairScope` is **derived**, not free input: `Room` iff `tx` and `rx` share a
@@ -477,9 +511,9 @@ pub struct Pose {
    `Sink` but is still recorded for scoring. Withholding is a gate, not a
    `Witness` value.
 
-**Serialisation** — serde; postcard inside session archives, JSON for fixtures
-and for the private ingress channel. Keypoint order is authoritative; never emit
-a map keyed by name.
+**Serialisation** — serde; a typed `0x02` ground-truth record inside the `.aqs`
+session archive (exact wire bytes only for CSI frames); JSON for fixtures.
+Keypoint order is authoritative; never emit a map keyed by name.
 
 ---
 
@@ -534,7 +568,8 @@ pub struct VitalsReading {
 6. `confidence` is the model's own certainty; `witness` is evidence strength.
    They are independent and both are carried.
 
-**Serialisation** — serde; postcard in session archives; JSON for fixtures/ingress.
+**Serialisation** — serde; a typed `0x02` record inside the `.aqs` session
+archive; JSON for fixtures/ingress.
 
 ---
 
@@ -722,7 +757,13 @@ pub struct GroundTruthRecord {
 ### 7.2 `LedgerRecord` — commit-keyed measurement
 
 Measurement is first-class: **record and diff, no CI gating yet.** Every metric
-result is appended to `measure/ledger.jsonl` as one `LedgerRecord` per line.
+result is appended to `.aquila/metrics/ledger.jsonl` as one `LedgerRecord` per
+line.
+
+`LedgerRecord` is the **frozen, on-disk ledger row** and the only canonical one
+(§8). `aquila-metrics` also carries an in-memory `Measurement` record
+(`measurement.md` §2) that serialises into a `LedgerRecord`; where this document
+and `measurement.md` describe the same field the frozen name here wins.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -800,21 +841,33 @@ UTF-8, LF endings. Diffable with `git diff --word-diff`. No pretty-printing.
 
 ### 7.3 The v1 bars (context)
 
-Recorded as `MetricKind::Gated` records, not CI gates: in-domain torso-PCK@20
-≥ 65 %, presence F1 ≥ 0.9, breathing rate MAE ≤ 2 brpm vs reference. A claim
-without a `LedgerRecord` is `Claimed`, and no headline claim may carry that grade.
+Recorded as `MetricKind::Gated` records, not CI gates. The **canonical metric-id
+vocabulary** for the three v1 gated bars — the single set every spec and the
+ledger cite — is:
+
+| Bar | Canonical metric id | Unit | Direction |
+| --- | --- | --- | --- |
+| In-domain torso PCK@20 (≥ 65 %) | `accuracy.torso_pck_at_20` | % | higher is better |
+| Presence F1 (≥ 0.9) | `accuracy.presence_f1` | ratio | higher is better |
+| Breathing rate MAE (≤ 2 brpm) | `accuracy.breathing.mae_brpm` | brpm | lower is better |
+
+Heart rate (`accuracy.heart_rate.mae_bpm`) is reported but ungated in v1. These
+are the ids `measurement.md` §4.6 owns and `evaluation.md` §6 and `core-api.md`
+§13 render; a differently spelled id is a defect. A claim without a
+`LedgerRecord` is `Claimed`, and no headline claim may carry that grade.
 
 ---
 
 ## 8. Types that must NEVER be redefined
 
-These are frozen names owned by `aquila-contracts`. A second declaration anywhere
+These are frozen names owned by `aquila-types`. A second declaration anywhere
 (in the firmware, a Python model I/O class, an adapter, a test fixture type) is a
 defect:
 
-1. **`CsiFrame`** — and its subcarrier representation (ordered `amplitude`/`phase`
-   in linear/radian, ascending index). The firmware emits the wire form; it does
-   not own a competing struct.
+1. **`CsiFrame`** — and its subcarrier representation (raw signed int8 `i_q`,
+   interleaved `Q, I` — **imaginary first** — ascending index), plus the
+   `first_word_invalid` impairment flag. Amplitude and phase are derived, never
+   stored. The firmware emits the wire form; it does not own a competing struct.
 2. **`CsiEnvelope`**, **`SensingFrame`**, `SensingScope`, `ClockGrid` — the only
    core-side wrappers; do not add second versions.
 3. **`NodeId`**, `HomeId`/`FloorId`/`RoomId`/`ZoneId`/`PairId`, `MacAddr`,
@@ -846,19 +899,19 @@ application layer.
 
 | Offset | Size | Field | Encoding |
 | --- | --- | --- | --- |
-| 0 | 4 | magic | ASCII `AQCS` |
+| 0 | 4 | magic | ASCII `AQCI` |
 | 4 | 1 | `wire_major` | `u8` |
 | 5 | 1 | `wire_minor` | `u8` |
 | 6 | 1 | `msg_type` | `u8` (1 = `CsiFrame`) |
-| 7 | 1 | `sc_format` | `u8` (0 = `f32` amplitude+phase) |
+| 7 | 1 | `sc_format` | `u8` (1 = raw signed int8 I/Q, imaginary first) |
 | 8 | 2 | `node_id` | `u16` |
 | 10 | 2 | `payload_len` | `u16` (bytes after the header) |
 | 12 | 1 | `band` | `u8` (0 = 2.4 GHz, 1 = 5 GHz, 255 = unknown) |
 | 13 | 1 | `channel` | `u8` |
 | 14 | 1 | `bandwidth_mhz` | `u8` |
-| 15 | 1 | `reserved` | `u8` = 0 |
+| 15 | 1 | `flags` | `u8`; bit 0 = `first_word_invalid` (leading complex sample unreliable); other bits reserved = 0 |
 
-**Body (msg_type 1) — 28-byte fixed part, then `8 × n` bytes**
+**Body (msg_type 1) — 28-byte fixed part, then `2 × n` bytes**
 
 | Offset | Size | Field |
 | --- | --- | --- |
@@ -871,52 +924,65 @@ application layer.
 | 23 | 1 | `noise_floor_dbm` (`i8`) |
 | 24 | 2 | `phy_flags` (`u16`) |
 | 26 | 2 | reserved = 0 |
-| 28 | 4n | `amplitude[0..n]` (`f32` LE) |
-| 28+4n | 4n | `phase[0..n]` (`f32` LE) |
+| 28 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
 
 Rules: a receiver validates `magic`, `wire_major`, `payload_len` and
-`payload_len == 28 + 8 * n_subcarriers` before trusting any field. `wire_minor`
-mismatches are accepted (additive); `wire_major` mismatches are rejected. The
-`aquila-contracts` crate provides `encode_datagram`/`decode_datagram`; `postcard`
-is **not** used on the wire.
+`payload_len == 28 + 2 * n_subcarriers` before trusting any field. `wire_minor`
+mismatches are accepted (additive); `wire_major` mismatches are rejected and
+counted once per `(node_id, boot_epoch)`. The `magic` is `AQCI` and the payload
+is the raw signed int8 I/Q sample, **imaginary byte first** (ADR-0005,
+ADR-0006). Header `flags` bit 0 (`first_word_invalid`) marks a frame whose
+leading complex sample (two bytes) the driver reported unreliable. The
+`aquila-wire` crate provides `encode_datagram`/`decode_datagram`; `postcard` is
+**not** used on the wire.
 
 ### 9.2 On disk
 
 | Artefact | Format | Location |
 | --- | --- | --- |
 | Topology | JSON, pretty, declaration-order keys | `config/topology.json` |
-| Session archive | `.aqs` directory (below) | `sessions/<session-id>/` |
-| Ledger | JSONL, canonical key order | `measure/ledger.jsonl` |
-| Ground truth | JSONL | `sessions/<session-id>/ground_truth.jsonl` |
-| Event stream | JSONL | `sessions/<session-id>/events.jsonl` |
+| Session archive | `.aqs` single-file container (AQS/AQE; below) | `sessions/<session-id>.aqs` |
+| Ledger | JSONL, canonical key order | `.aquila/metrics/ledger.jsonl` |
+| Ground truth | typed `0x02` record inside the `.aqs` container | `sessions/<session-id>.aqs` |
+| Event stream | typed `0x03` record inside the `.aqs` container | `sessions/<session-id>.aqs` |
 
-**`.aqs` session archive directory**
+**`.aqs` session container.** The durable session representation is the
+`aquila-session` container (`capture-and-firmware.md` §8 is authoritative for the
+byte layout): a fixed AQS header, a canonical-JSON typed manifest, a stream of
+typed, length-prefixed records, and an AQE digest trailer.
 
 ```
-sessions/<session-id>/
-  session.json         # Session (serde JSON)
-  manifest.json        # SessionManifest (contract, codec, counts, digests)
-  stream.bin           # repeated: u32 LE len + postcard(CsiEnvelope)
-  events.jsonl         # optional Event stream
-  ground_truth.jsonl   # optional, research-only
+"AQS" magic | u8 version | u32 metadata_len (LE) | metadata (canonical JSON)
+record*    (u8 type | u32 body_len LE | body)
+"AQE"       | u64 record_count (LE) | sha256(record stream)
 ```
 
-```rust
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SessionManifest {
-    pub contract: ContractVersion,
-    pub codec: String,          // "postcard-1"
-    pub frames: u64,
-    pub files: Vec<SessionArtifact>,   // path + sha256 + bytes
-}
-```
-
-Postcard is used **only** for on-disk frame streams (compact, deterministic for a
-fixed schema). JSON is used wherever humans diff, edit or debug.
+A CSI-frame record (`0x01`) stores a `u64 host_arrival_us` followed by the
+**exact on-wire `AQCI` datagram bytes**, so replay runs the real `aquila-wire`
+decoder and the codec cannot drift from live. Records `0x02` (ground truth),
+`0x03` (event) and `0x04` (annotation) carry JSON bodies. The container-level
+manifest (`aquila-session/1`) wraps the frozen `Session` contract (§7.1) with the
+capture-tool, core-version, elicitation and licence facts; it is **not** a
+second contract type. `postcard` is not used anywhere in the session container.
+JSON is used wherever humans diff, edit or debug.
 
 ---
 
 ## 10. Time, calibration, baseline and their contracts
+
+**Units bridge (µs ↔ ns).** The wire and contract carry `device_time_us` in
+**microseconds** (§2); the core's `CoreTime`/`DeviceTime` and the time-sync maths
+(`fusion-sync.md` §1) are in **nanoseconds**. The one conversion is
+`ns = us × 1000` at the ingest seam; it is stated here once so offset and drift
+maths is never ambiguous.
+
+**`Calibration` (canonical).** `aquila_types::Calibration` below is the **one**
+runtime contract named `Calibration`; `data-contracts.md` §8 freezes the name.
+`aquila-signal`'s per-node multiplier is an internal type (renamed
+`NodeCorrection` in `signal.md` §2, pending the same rename in the crate), and the
+on-disk calibration artefact in `geometry-calibration.md` §13 is a distinct
+serialisation (`CalibrationArtefact`) that cites this contract. Neither is a second
+`Calibration`.
 
 ```rust
 /// Per-node software time-sync estimate produced by the Clock seam.
@@ -987,12 +1053,12 @@ contract additively, they do not replace it.
 1. Decide MINOR or MAJOR with §0.1.
 2. Update this document **first** (fields, units, invariants, serialisation).
 3. Check the change against `CONTEXT.md` vocabulary; use its terms and no others.
-4. Update `aquila-contracts`; keep derives and defaults consistent with §0.3.
+4. Update `aquila-types`; keep derives and defaults consistent with §0.3.
 5. If the wire changed, bump `wire_minor`/`wire_major` and update §9.1.
-6. Add a fixture in `aquila-contracts` that round-trips the new shape and pins it.
+6. Add a fixture in `aquila-types` that round-trips the new shape and pins it.
 7. If MAJOR: add a migration note and update `CONTRACT_VERSION`.
 8. Never touch a name on the §8 frozen list except by a MAJOR bump.
 
 _This document is canonical. Where it and any code disagree, this document and the
-`aquila-contracts` crate are the tie-breakers — and if they disagree with each
+`aquila-types` crate are the tie-breakers — and if they disagree with each
 other, that is a bug._

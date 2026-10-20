@@ -44,26 +44,30 @@ calibration. The unit of installation and of global calibration.
 _Avoid_: site, installation, deployment, house, property.
 
 **Floor**:
-A storey of a home, containing rooms. Cross-floor sensing is a staged
+A storey of a home, containing rooms and zones. Cross-floor sensing is a staged
 capability, not a v1 guarantee.
 _Avoid_: level, storey.
 
 **Room**:
-A named physical partition of a floor. Rooms are the v1 spatial scope of a
-sensing result.
+A named physical partition of a floor. Rooms are where nodes are installed;
+they describe physical placement, not the unit of sensing output.
 _Avoid_: area, space, location.
 
 **Zone**:
-A named spatial region that a sensing result is attributed to. Rooms are zones;
-a zone may also be a declared sub-region of a room. v1 emits one zone per room.
+A named spatial region that a sensing result is attributed to. A zone is a
+virtual detection region: it may be coextensive with a room (for example the
+whole lounge), a sub-region of a room (for example "bed" inside the bedroom, or
+"shower" versus "toilet" inside the bathroom), or span multiple rooms. v1
+emits per-zone results.
 _Avoid_: region, area, location, sector.
 
 ### Hardware and topology
 
 **Node**:
 A single fixed ESP32-S3 endpoint that streams raw CSI. A dumb sensor: it performs
-no DSP, inference or fusion. Identified by a stable node id and assigned to
-exactly one room.
+no DSP, inference or fusion. Identified by a stable node id and installed in
+exactly one room (its physical placement); nodes contribute to zone detection
+collaboratively via node-pairs, not by each node "owning" a room's detection.
 _Avoid_: sensor, device, client, STA, AP, access point, gateway, endpoint, radio.
 
 **Node-pair**:
@@ -129,12 +133,19 @@ _Avoid_: baseline, truth, label.
 
 **Witness**:
 The evidence grade recording how a result was established. Every sensing claim
-carries exactly one grade:
+carries exactly one of **five** grades, strongest first (the single authoritative
+set, declared by `aquila_types::Witness` and `data-contracts.md` §1; `evaluation.md`
+§5 refines the same five):
+- **Gated**: measured and passing a defined v1 bar; the only grade a headline
+  claim may carry.
 - **Measured**: computed from real, replayed or simulated input and recorded in
   the commit-keyed ledger.
 - **Claimed**: asserted without a recorded measurement.
-- **Gated**: measured and passing a defined v1 bar; the only grade a headline
-  claim may carry.
+- **Data-gated** (`DataGated`): blocked on missing input (fixture, labels,
+  reference recording or paired samples); a blocked sub-grade of Claimed.
+- **Hardware-gated** (`HardwareGated`): blocked on missing hardware (reference
+  device, belt, camera rig or the reference-scale node deployment); a blocked
+  sub-grade of Claimed.
 _Avoid_: proven, verified, validated, certified, trusted, ground truth.
 
 ## Explicitly not used

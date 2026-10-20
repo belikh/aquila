@@ -150,11 +150,12 @@ impl SessionWriter {
     /// Returns [`SessionError::LengthOutOfRange`] if the manifest JSON is too
     /// large for its four-byte length field.
     pub fn finish(self) -> Result<Vec<u8>, SessionError> {
-        let metadata_len =
-            u32::try_from(self.manifest_json.len()).map_err(|_| SessionError::LengthOutOfRange {
+        let metadata_len = u32::try_from(self.manifest_json.len()).map_err(|_| {
+            SessionError::LengthOutOfRange {
                 field: "metadata_len",
                 value: self.manifest_json.len() as u64,
-            })?;
+            }
+        })?;
 
         let mut out = Vec::with_capacity(
             HEADER_FIXED_LEN + self.manifest_json.len() + self.record_stream.len() + TRAILER_LEN,
@@ -434,13 +435,12 @@ fn parse_records(stream: &[u8]) -> Result<Vec<Record>, SessionError> {
         let body_len =
             u32::from_le_bytes(stream[pos + 1..pos + 5].try_into().expect("4 bytes")) as usize;
         let body_start = pos + RECORD_PREFIX_LEN;
-        let body_end =
-            body_start
-                .checked_add(body_len)
-                .ok_or(SessionError::LengthOutOfRange {
-                    field: "record body_len",
-                    value: body_len as u64,
-                })?;
+        let body_end = body_start
+            .checked_add(body_len)
+            .ok_or(SessionError::LengthOutOfRange {
+                field: "record body_len",
+                value: body_len as u64,
+            })?;
         if body_end > stream.len() {
             return Err(SessionError::Truncated {
                 needed: body_end,

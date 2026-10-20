@@ -2,9 +2,20 @@
 /target
 **/target
 
+# Build/release artefacts (never committed)
+/aquila.zip
+/aquila-dashboard.zip
+/SHA256SUMS
+crates/aquila-dashboard/dist/
+
 # Nix
 /result
 /result-*
+
+# ESP-IDF firmware build output
+firmware/**/build/
+firmware/**/sdkconfig
+firmware/**/sdkconfig.old
 
 # Agent scaffolding (repo policy: never committed)
 .claude/
@@ -14,6 +25,11 @@
 # OS / editor
 .DS_Store
 *.swp
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
 
 # v2 experiment virtualenv
 .venv/

@@ -30,6 +30,13 @@ pub enum Authority {
     Measured,
     /// Produced from committed recorded fixtures or replay (sim-first).
     Replayed,
+    /// Produced from a **synthetic** fixture generator, never real hardware.
+    ///
+    /// This is the honest provenance for a headline metric measured only against
+    /// a deterministic simulator: the number is real and reproducible, but it is
+    /// not hardware evidence and cannot be read as a real-world accuracy claim
+    /// (`evaluation.md` §5, `testing.md`; `sister-issues-core.md` S4, S5).
+    Synthetic,
     /// Computed from other measurements, for example a mutation score.
     Derived,
     /// Brought in from an external system, for example an OpenTelemetry feed.
@@ -39,16 +46,11 @@ pub enum Authority {
 }
 
 /// The epistemic class that governs how [`diff`](crate::diff) reads a change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Grade {
-    /// Same inputs imply a byte-identical value on a pinned toolchain.
-    Deterministic,
-    /// Run-to-run variance; compared as a distribution, never asserted exactly.
-    Statistical,
-    /// Statistical in nature, plus an explicit threshold bar.
-    Gated,
-}
+///
+/// This is [`aquila_types::MetricKind`], re-exported under the name the
+/// measurement module uses. The two used to be identical, hand-maintained
+/// enums; there is now exactly one (`sister-issues-core.md` S19).
+pub use aquila_types::MetricKind as Grade;
 
 /// A tagged observation value: never a bare `f64`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

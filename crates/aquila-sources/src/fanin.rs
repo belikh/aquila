@@ -49,11 +49,7 @@ impl FanInSource {
 
     /// The ordering key for a buffered envelope.
     fn key(env: &CsiEnvelope) -> (u64, aquila_types::NodeId, u64) {
-        (
-            env.host_rx_mono_ns,
-            env.frame.node_id,
-            env.frame.sequence,
-        )
+        (env.host_rx_mono_ns, env.frame.node_id, env.frame.sequence)
     }
 }
 
@@ -91,9 +87,7 @@ impl CsiSource for FanInSource {
         }
 
         match best {
-            Some(i) => Ok(FrameOrEnd::Frame(
-                self.pending[i].take().expect("buffered"),
-            )),
+            Some(i) => Ok(FrameOrEnd::Frame(self.pending[i].take().expect("buffered"))),
             None => Ok(FrameOrEnd::End),
         }
     }

@@ -1,14 +1,20 @@
 /*
  * main.c — the Aquila ESP32-S3 CSI node entry point.
  *
- * Joins the home wireless network, enables promiscuous reception so ambient
- * frames not addressed to the node still produce CSI, then starts the CSI data
- * plane and the node control channel. It confers no Aquila role on the node and
- * performs no DSP, inference or clock discipline
+ * Loads the node's provisioning (network credentials, core endpoint, node
+ * identity) from NVS, joins the home wireless network, enables promiscuous
+ * reception so ambient frames not addressed to the node still produce CSI, then
+ * starts the CSI data plane and the node control channel. It confers no Aquila
+ * role on the node and performs no DSP, inference or clock discipline
  * (docs/spec/capture-and-firmware.md §9).
  *
- * Reference implementation; NOT compiled, flashed or tested in this repository
- * (see the firmware README).
+ * Credentials live in NVS, written by `aquila-capture provision`
+ * (capture-and-firmware.md §8.3, §9.1.8, G13). The Kconfig values in
+ * `Kconfig.projbuild` are factory defaults used only when a key is absent from
+ * NVS; the WiFi password is never required to be baked into the image (F1/F23).
+ *
+ * Compile-verified with ESP-IDF v5.5.2 (`nix develop .#esp`); not flashed or
+ * run on hardware (see the firmware README).
  */
 
 #include <string.h>
@@ -21,16 +27,30 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 
 #include "csi_node.h"
 #include "node_control.h"
+#include "node_ota.h"
 
 static const char *TAG = "aquila_node";
 
 #define WIFI_CONNECTED_BIT BIT0
+#define NVS_NAMESPACE "aquila"
 
 static EventGroupHandle_t s_wifi_events;
+
+/* The node's provisioning, loaded from NVS over the Kconfig factory defaults. */
+typedef struct {
+    char ssid[33];
+    char password[65];
+    char core_host[16];
+    uint16_t data_port;
+    uint16_t control_port;
+    uint16_t node_id;
+    uint32_t pairing_code;
+} provisioning_t;
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id,
                                void *data)
@@ -48,7 +68,53 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id,
     }
 }
 
-static void wifi_start(void)
+/*
+ * Load provisioning from NVS, falling back to the Kconfig factory defaults for
+ * any key the operator has not provisioned. A value read from NVS always wins.
+ */
+static void load_provisioning(provisioning_t *out)
+{
+    strncpy(out->ssid, CONFIG_AQUILA_WIFI_SSID, sizeof(out->ssid) - 1);
+    out->ssid[sizeof(out->ssid) - 1] = '\0';
+    strncpy(out->password, CONFIG_AQUILA_WIFI_PASSWORD, sizeof(out->password) - 1);
+    out->password[sizeof(out->password) - 1] = '\0';
+    strncpy(out->core_host, CONFIG_AQUILA_CORE_HOST, sizeof(out->core_host) - 1);
+    out->core_host[sizeof(out->core_host) - 1] = '\0';
+    out->data_port = (uint16_t)CONFIG_AQUILA_CORE_DATA_PORT;
+    out->control_port = (uint16_t)CONFIG_AQUILA_CORE_CONTROL_PORT;
+    out->node_id = (uint16_t)CONFIG_AQUILA_NODE_ID;
+    out->pairing_code = (uint32_t)CONFIG_AQUILA_PAIRING_CODE;
+
+    nvs_handle_t handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
+        return;
+    }
+    /* A successful read overwrites the Kconfig default; a failed one leaves it
+     * in place, so the factory default is used only when NVS is empty. */
+    size_t len = sizeof(out->ssid);
+    (void)nvs_get_str(handle, "wifi_ssid", out->ssid, &len);
+    len = sizeof(out->password);
+    (void)nvs_get_str(handle, "wifi_pass", out->password, &len);
+    len = sizeof(out->core_host);
+    (void)nvs_get_str(handle, "core_host", out->core_host, &len);
+    uint16_t port = 0;
+    if (nvs_get_u16(handle, "core_data_port", &port) == ESP_OK && port != 0u) {
+        out->data_port = port;
+    }
+    if (nvs_get_u16(handle, "core_control_port", &port) == ESP_OK && port != 0u) {
+        out->control_port = port;
+    }
+    if (nvs_get_u16(handle, "node_id", &port) == ESP_OK && port != 0u) {
+        out->node_id = port;
+    }
+    uint32_t code = 0;
+    if (nvs_get_u32(handle, "pairing_code", &code) == ESP_OK) {
+        out->pairing_code = code;
+    }
+    nvs_close(handle);
+}
+
+static void wifi_start(const provisioning_t *provisioning)
 {
     s_wifi_events = xEventGroupCreate();
 
@@ -65,9 +131,9 @@ static void wifi_start(void)
                                                &wifi_event_handler, NULL));
 
     wifi_config_t wifi_config = {0};
-    strncpy((char *)wifi_config.sta.ssid, CONFIG_AQUILA_WIFI_SSID,
+    strncpy((char *)wifi_config.sta.ssid, provisioning->ssid,
             sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, CONFIG_AQUILA_WIFI_PASSWORD,
+    strncpy((char *)wifi_config.sta.password, provisioning->password,
             sizeof(wifi_config.sta.password) - 1);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
@@ -80,7 +146,24 @@ static void wifi_start(void)
 
     xEventGroupWaitBits(s_wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE,
                         portMAX_DELAY);
-    ESP_LOGI(TAG, "associated with %s", CONFIG_AQUILA_WIFI_SSID);
+    ESP_LOGI(TAG, "associated with %s", provisioning->ssid);
+}
+
+/*
+ * The OTA pending-verify health probe (firmware-ota.md §6): the new image is
+ * healthy only while the node is associated, streaming CSI and the control
+ * channel is responsive. Composed here because it spans the three subsystems.
+ */
+static bool node_ota_health(void *ctx)
+{
+    (void)ctx;
+    if ((xEventGroupGetBits(s_wifi_events) & WIFI_CONNECTED_BIT) == 0) {
+        return false;
+    }
+    if (!csi_node_is_streaming()) {
+        return false;
+    }
+    return node_control_is_responsive();
 }
 
 void app_main(void)
@@ -91,28 +174,48 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
-    wifi_start();
+    provisioning_t provisioning;
+    load_provisioning(&provisioning);
+
+    wifi_start(&provisioning);
 
     csi_node_config_t csi = csi_node_default_config();
-    csi.node_id = (uint16_t)CONFIG_AQUILA_NODE_ID;
-    csi.boot = esp_random();
+    csi.node_id = provisioning.node_id;
+    csi.boot = (uint16_t)esp_random();
     csi.channel = 6u;
     csi.bandwidth_mhz = 20u;
     csi.csi_enable = true;
     csi.max_tx_rate_hz = 200u;
+    csi.heartbeat_ms = 5000u;
 
-    if (csi_node_start(&csi, CONFIG_AQUILA_CORE_HOST,
-                       (uint16_t)CONFIG_AQUILA_CORE_DATA_PORT) != 0) {
+    if (csi_node_start(&csi, provisioning.core_host, provisioning.data_port) != 0) {
         ESP_LOGE(TAG, "CSI data plane failed to start");
+        return;
+    }
+
+    /*
+     * The firmware OTA agent. Started before the control channel so the
+     * dispatch in node_control can never reach an uninitialised agent; it owns
+     * no socket and replies through the control channel's send path.
+     */
+    node_ota_config_t ota = {
+        .node_id = csi.node_id,
+        .send = node_control_send_reply,
+        .health = node_ota_health,
+        .health_ctx = NULL,
+        .health_window_ms = 0u, /* use CONFIG_AQUILA_OTA_HEALTH_WINDOW_S */
+    };
+    if (node_ota_start(&ota) != 0) {
+        ESP_LOGE(TAG, "OTA agent failed to start");
         return;
     }
 
     node_control_config_t control = {
         .node_id = csi.node_id,
         .boot = csi.boot,
-        .core_host = CONFIG_AQUILA_CORE_HOST,
-        .core_port = (uint16_t)CONFIG_AQUILA_CORE_CONTROL_PORT,
-        .pairing_code = (uint32_t)CONFIG_AQUILA_PAIRING_CODE,
+        .core_host = provisioning.core_host,
+        .core_port = provisioning.control_port,
+        .pairing_code = provisioning.pairing_code,
         .fw_version = "0.0.0",
         .csi = csi,
     };

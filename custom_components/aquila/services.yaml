@@ -1,0 +1,37 @@
+# Aquila services (firmware-ota.md §7).
+#
+# The component registers `aquila.install_firmware`; Home Assistant expects a
+# `services.yaml` describing a registered service, and logs
+# "Failed to load services.yaml for integration: aquila" without one.
+install_firmware:
+  name: Install firmware
+  description: Begin a signed A/B OTA on one Aquila node.
+  fields:
+    node:
+      name: Node
+      description: The node to update (its MAC address or numeric id).
+      required: true
+      example: "aa:bb:cc:dd:ee:ff"
+      selector:
+        text:
+    image_id:
+      name: Image id
+      description: >-
+        The stored firmware image id to install. Defaults to the newest image
+        the core offers for the node.
+      required: false
+      selector:
+        text:
+    version:
+      name: Version
+      description: The firmware version to install (an alternative to image_id).
+      required: false
+      selector:
+        text:
+    force:
+      name: Force
+      description: Install even if the node already runs this version.
+      required: false
+      default: false
+      selector:
+        boolean:

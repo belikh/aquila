@@ -3,8 +3,8 @@
 use aquila_geometry::Topology;
 use aquila_sensing::{Sink, SinkError};
 use aquila_types::{
-    DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Floor, Home, MacAddr,
-    Node, NodeId, Room, RoomId, RoomKind, Slug, Witness, CONTRACT_VERSION,
+    DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Home, MacAddr, Node,
+    NodeId, Slug, Witness, Zone, ZoneId, CONTRACT_VERSION,
 };
 
 use crate::{EntityKind, EntityModel, HaSink};
@@ -13,14 +13,13 @@ fn slug(value: &str) -> Slug {
     Slug(value.to_string())
 }
 
-/// A minimal one-floor, one-room, one-node contract topology.
+/// A minimal one-zone, one-node contract topology.
 fn topology() -> Topology {
     let home = slug("home");
-    let floor = slug("ground");
-    let room = slug("living-room");
+    let zone = slug("living-room");
     let firmware = FirmwareRef {
         version: "test".to_string(),
-        sha256: [0u8; 32],
+        sha256: None,
     };
     Topology::load(aquila_types::Topology {
         home: Home {
@@ -29,30 +28,20 @@ fn topology() -> Topology {
             time_zone: "Australia/Sydney".to_string(),
             contract: CONTRACT_VERSION,
         },
-        floors: vec![Floor {
-            id: floor.clone(),
-            home: home.clone(),
-            name: "Ground".to_string(),
-            level: 0,
-            elevation_m: 0.0,
-        }],
-        rooms: vec![Room {
-            id: room.clone(),
-            floor: floor.clone(),
-            name: "Living".to_string(),
-            kind: RoomKind::Living,
+        zones: vec![aquila_types::Zone {
+            id: zone.clone(),
             origin_home_m: [0.0, 0.0, 0.0],
-            yaw_deg: 0.0,
-            area_m2: None,
+            extent_home_m: [5.0, 5.0, 5.0],
+            name: "Living".to_string(),
         }],
         nodes: vec![Node {
             id: NodeId(1),
-            room: room.clone(),
+            zone: zone.clone(),
             name: "node-1".to_string(),
             mac: MacAddr([0, 0, 0, 0, 0, 1]),
             device: DeviceType::Esp32S3,
             firmware,
-            pos_room_m: Some([0.0, 0.0, 2.4]),
+            pos_home_m: [0.0, 0.0, 2.4],
             installed_unix_ms: 0,
         }],
         pairs: vec![],
@@ -87,7 +76,7 @@ fn events_project_to_ha_entities() {
     let mut model = EntityModel::from_topology(&topology(), "inst");
 
     model.apply(&event(
-        EventScope::Room(room.clone()),
+        EventScope::Zone(room.clone()),
         EventKind::PresenceChanged,
         EventPayload::Presence {
             occupied: true,
@@ -95,7 +84,7 @@ fn events_project_to_ha_entities() {
         },
     ));
     model.apply(&event(
-        EventScope::Room(room.clone()),
+        EventScope::Zone(room.clone()),
         EventKind::VitalAlert,
         EventPayload::Vitals {
             metric: "breathing_rate".to_string(),
@@ -150,7 +139,7 @@ fn the_sink_updates_a_shared_model() {
     let mut sink = sink;
 
     let err: Result<(), SinkError> = sink.emit(&event(
-        EventScope::Room(room.clone()),
+        EventScope::Zone(room.clone()),
         EventKind::PresenceChanged,
         EventPayload::Presence {
             occupied: false,
@@ -165,10 +154,10 @@ fn the_sink_updates_a_shared_model() {
 
 #[test]
 fn snapshot_is_json_with_zones_and_health() {
-    let room: RoomId = slug("living-room");
+    let zone: ZoneId = slug("living-room");
     let mut model = EntityModel::from_topology(&topology(), "inst");
     model.apply(&event(
-        EventScope::Room(room),
+        EventScope::Zone(zone),
         EventKind::CountChanged,
         EventPayload::Count { people: 2 },
     ));

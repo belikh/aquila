@@ -63,7 +63,7 @@ fn decode_d1_structural_accept_rule() {
             let err = result.expect_err("should reject").clone();
             let expected = if len == 0 {
                 DecodeError::EmptyRecord
-            } else if len > 612 {
+            } else if len > 1428 {
                 DecodeError::TooLarge(len)
             } else if len % 2 == 1 {
                 DecodeError::OddLength(len)
@@ -127,21 +127,53 @@ fn decode_csi_bridges_the_contract_frame() {
         channel: 6,
         bandwidth_mhz: 20,
         subcarrier_offset: 1,
-        amplitude: vec![2.0, 0.0],
-        phase: vec![0.0, 0.0],
+        // Imaginary-first interleaved sample: (Q, I) pairs. Subcarrier 0 is
+        // (Q=0, I=64) and subcarrier 1 is (Q=64, I=0).
+        i_q: vec![0, 64, 64, 0],
         rssi_dbm: -50,
         noise_floor_dbm: -90,
         phy: PhyFlags::empty(),
+        first_word_invalid: false,
     };
     let decoded = decode_csi(&frame).expect("a valid contract frame decodes");
     assert_eq!(decoded.meta.node, NodeId(7));
     assert_eq!(decoded.meta.seq, 5);
     assert_eq!(decoded.meta.bandwidth, Bandwidth::Ht20);
     assert_eq!(decoded.bins.len(), 2);
-    // amplitude 2 at phase 0 is real 2, imaginary 0.
-    assert!((decoded.bins[0].re - 2.0).abs() < 1e-4);
+    // The imaginary-first order maps the first byte to Q and the second to I.
+    assert!((decoded.bins[0].re - 1.0).abs() < 1e-4);
     assert!(decoded.bins[0].im.abs() < 1e-4);
-    assert_eq!(decoded.bins[1], Complex32::ZERO);
+    assert!(decoded.bins[1].re.abs() < 1e-4);
+    assert!((decoded.bins[1].im - 1.0).abs() < 1e-4);
+    assert!(!decoded.flags.first_word_zeroed);
+}
+
+#[test]
+fn decode_csi_zeroes_first_pair_when_flagged() {
+    use aquila_types::{Band, PhyFlags};
+    let mut frame = aquila_types::CsiFrame {
+        node_id: NodeId(1),
+        boot_epoch: 0,
+        sequence: 0,
+        device_time_us: 0,
+        band: Band::B2G4,
+        channel: 6,
+        bandwidth_mhz: 20,
+        subcarrier_offset: 0,
+        i_q: vec![10, 20, 30, 40],
+        rssi_dbm: -50,
+        noise_floor_dbm: -90,
+        phy: PhyFlags::empty(),
+        first_word_invalid: false,
+    };
+    let clean = decode_csi(&frame).expect("clean decodes");
+    assert_eq!(clean.bins.len(), 2);
+    frame.first_word_invalid = true;
+    let zeroed = decode_csi(&frame).expect("flagged decodes");
+    assert_eq!(zeroed.bins[0], Complex32::ZERO);
+    assert!(zeroed.meta.first_word_invalid);
+    assert!(zeroed.flags.first_word_zeroed);
+    assert_eq!(zeroed.bins[1..], clean.bins[1..]);
 }
 
 #[test]
@@ -156,23 +188,18 @@ fn decode_csi_rejects_malformed_contract_frames() {
         channel: 0,
         bandwidth_mhz: 20,
         subcarrier_offset: 0,
-        amplitude: vec![1.0, 1.0],
-        phase: vec![0.0],
+        i_q: vec![1, 1, 1],
         rssi_dbm: -50,
         noise_floor_dbm: -90,
         phy: PhyFlags::empty(),
+        first_word_invalid: false,
     };
+    // An odd-length interleaved sample is not whole I/Q pairs.
     assert!(matches!(
         decode_csi(&frame),
-        Err(DecodeError::LengthMismatch { .. })
+        Err(DecodeError::OddIqLength(3))
     ));
-    frame.phase = vec![0.0, f32::NAN];
-    assert!(matches!(
-        decode_csi(&frame),
-        Err(DecodeError::NonFiniteSample { .. })
-    ));
-    frame.phase = vec![0.0, 0.0];
-    frame.amplitude.clear();
+    frame.i_q.clear();
     assert!(matches!(decode_csi(&frame), Err(DecodeError::EmptyFrame)));
 }
 
@@ -336,7 +363,11 @@ fn bandpass_f2_linearity() {
     let x: Vec<f32> = (0..64).map(|i| ((i % 9) as f32 - 4.0) * 0.3).collect();
     let y: Vec<f32> = (0..64).map(|i| ((i % 5) as f32 - 2.0) * 0.2).collect();
     let (alpha, beta) = (0.75_f32, -0.4_f32);
-    let combined: Vec<f32> = x.iter().zip(y.iter()).map(|(a, b)| alpha * a + beta * b).collect();
+    let combined: Vec<f32> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(a, b)| alpha * a + beta * b)
+        .collect();
     let lhs = bandpass(&combined, &coeffs);
     let bx = bandpass(&x, &coeffs);
     let by = bandpass(&y, &coeffs);
@@ -399,11 +430,19 @@ fn tone(n: usize, bin: usize, amp: f32, window: usize) -> Vec<f32> {
 
 #[test]
 fn stft_b1_linearity() {
-    let cfg = StftConfig { window: 8, hop: 4, fs_hz: 20.0 };
+    let cfg = StftConfig {
+        window: 8,
+        hop: 4,
+        fs_hz: 20.0,
+    };
     let x: Vec<f32> = (0..16).map(|i| ((i % 7) as f32 - 3.0) * 0.3).collect();
     let y: Vec<f32> = (0..16).map(|i| ((i % 5) as f32 - 2.0) * 0.2).collect();
     let (alpha, beta) = (0.6_f32, -0.35_f32);
-    let combined: Vec<f32> = x.iter().zip(y.iter()).map(|(a, b)| alpha * a + beta * b).collect();
+    let combined: Vec<f32> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(a, b)| alpha * a + beta * b)
+        .collect();
     let lhs = stft(&combined, &cfg);
     let sx = stft(&x, &cfg);
     let sy = stft(&y, &cfg);
@@ -418,7 +457,11 @@ fn stft_b1_linearity() {
 
 #[test]
 fn stft_b5_monotone_tone_response() {
-    let cfg = StftConfig { window: 16, hop: 16, fs_hz: 20.0 };
+    let cfg = StftConfig {
+        window: 16,
+        hop: 16,
+        fs_hz: 20.0,
+    };
     let small = stft(&tone(16, 4, 0.5, 16), &cfg);
     let large = stft(&tone(16, 4, 2.0, 16), &cfg);
     let a = small.value(0, 4).magnitude();
@@ -428,7 +471,11 @@ fn stft_b5_monotone_tone_response() {
 
 #[test]
 fn bvp_track_finds_in_band_bin() {
-    let cfg = StftConfig { window: 64, hop: 64, fs_hz: 20.0 };
+    let cfg = StftConfig {
+        window: 64,
+        hop: 64,
+        fs_hz: 20.0,
+    };
     // A 1.25 Hz tone: bin = 1.25 * 64 / 20 = 4.
     let spec = stft(&tone(64, 4, 1.0, 64), &cfg);
     let track = bvp_track(&spec, Band::new(0.8, 2.5));
@@ -475,11 +522,8 @@ fn selection_k6_permutation_invariance() {
 
 #[test]
 fn selection_nonfinite_excluded() {
-    let matrix = SubcarrierFeatureMatrix::new(
-        vec![1, 2, 3],
-        vec![f32::NAN, 2.0, 3.0],
-        vec![1.0, 1.0, 1.0],
-    );
+    let matrix =
+        SubcarrierFeatureMatrix::new(vec![1, 2, 3], vec![f32::NAN, 2.0, 3.0], vec![1.0, 1.0, 1.0]);
     let mask = select_subcarriers(&matrix, 3);
     assert!(!mask.contains(1));
 }
@@ -653,9 +697,42 @@ fn process_packs_the_canonical_feature_vector() {
     let mut expected = source.amplitude_rms.clone();
     expected.extend_from_slice(&source.motion_energy);
     assert_eq!(vector.values(), expected.as_slice());
-    assert_eq!(vector.len(), source.amplitude_rms.len() + source.motion_energy.len());
+    assert_eq!(
+        vector.len(),
+        source.amplitude_rms.len() + source.motion_energy.len()
+    );
     assert!(!vector.is_empty());
     assert!(features.feature_vector(NodeId(999)).is_none());
+}
+
+#[test]
+fn process_computes_a_real_noise_floor() {
+    let cfg = Config::default_reference(SubcarrierLayout::ht20());
+    let cal = Calibration {
+        per_node: vec![Complex32::ONE; 64],
+        state: CalibrationState::Calibrated,
+    };
+    // A chunk whose bins alternate sign each frame: pure high-frequency content
+    // the motion bandpass removes, so the out-of-band residual is non-zero.
+    let chunk: Vec<ComplexFrame> = (0..16u32)
+        .map(|k| ComplexFrame {
+            meta: meta(1, k, u64::from(k) * 50_000),
+            bins: (0..64)
+                .map(|b| {
+                    let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+                    Complex32::new(1.0 + sign * 0.5 * (b as f32 * 0.01), sign * 0.5)
+                })
+                .collect(),
+            flags: FrameFlags::default(),
+        })
+        .collect();
+    let features = process(&chunk, &cal, &cfg).unwrap();
+    let node = &features.nodes[0];
+    assert_eq!(node.noise_power.len(), node.motion_energy.len());
+    assert!(
+        node.noise_power.iter().any(|p| *p > 0.0),
+        "the per-subcarrier noise floor must be computed from the data, not hardcoded zero (S6)"
+    );
 }
 
 #[test]
@@ -683,7 +760,9 @@ fn process_calibration_shape_mismatch_errors() {
 
 #[test]
 fn config_default_is_valid() {
-    assert!(Config::default_reference(SubcarrierLayout::ht20()).validate().is_ok());
+    assert!(Config::default_reference(SubcarrierLayout::ht20())
+        .validate()
+        .is_ok());
     assert!(SubcarrierLayout::ht20().validate().is_ok());
     assert!(SubcarrierLayout::ht40().validate().is_ok());
 }

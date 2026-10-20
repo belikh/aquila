@@ -43,7 +43,7 @@ Out of scope, and explicitly *not* to be smuggled in:
   filters, no auto-tuned parameters in v1.
 
 Language: Australian English. `crate aquila-signal`; no other aquila crate may
-be imported except `aquila-core`'s plain identifier types if needed (enforced by
+be imported except `aquila-types`'s plain identifier types if needed (enforced by
 the workspace dependency DAG).
 
 ## 2. Public surface
@@ -53,8 +53,8 @@ Small interface, no traits. All items are pure.
 ```rust
 // aquila-signal
 
-/// One ESP32-S3 node. Identity only; no behaviour.
-pub struct NodeId(pub u32);
+// Node identity is the one canonical `aquila_types::NodeId` (`data-contracts.md`
+// §1); this crate does not declare its own.
 
 /// Channel width; determines the expected subcarrier count.
 pub enum Bandwidth { Ht20, Ht40 }
@@ -65,7 +65,7 @@ pub struct Complex32 { pub re: f32, pub im: f32 }
 
 /// Receive metadata carried alongside the CSI record.
 pub struct RxMeta {
-    pub node: NodeId,
+    pub node: aquila_types::NodeId,
     pub seq: u32,
     pub t_device_us: u64,          // raw device clock; NOT drift-corrected here
     pub centre_freq_hz: u32,
@@ -82,8 +82,9 @@ pub struct SubcarrierLayout {
 }
 
 /// The pipeline's internal decoded frame. NOT the contract frame: the one
-/// canonical on-air/on-disk frame is `aquila_types::CsiFrame` (amplitude/phase
-/// arrays, `data-contracts.md` §2). `decode_csi` is the single conversion.
+/// canonical on-air/on-disk frame is `aquila_types::CsiFrame` (raw signed int8
+/// I/Q, `data-contracts.md` §2, ADR-0005). `decode_csi` is the single
+/// conversion, deriving the complex bins from that sample.
 pub struct ComplexFrame {
     pub meta: RxMeta,
     pub bins: Vec<Complex32>,      // len == layout.expected_bins
@@ -92,7 +93,12 @@ pub struct ComplexFrame {
 
 /// Per-node (and, later, per-pair) hardware normalisation, precomputed.
 /// Runtime hot path is a complex multiply: no `sin`/`cos` at runtime.
-pub struct Calibration {
+/// Signal-internal only: this is **not** the frozen contract `Calibration`
+/// (`aquila_types::Calibration`, `data-contracts.md` §10), which is why it
+/// carries a non-colliding internal name. (The crate still exports it as
+/// `aquila_signal::Calibration` pending the same rename — register §"Canonical
+/// types" flags that second declaration; the rename is out of this docs sweep.)
+pub struct NodeCorrection {
     pub per_node: Vec<Complex32>,  // length == expected_bins; identity if empty
     pub state: CalibrationState,   // Calibrated | Uncalibrated | Partial
 }
@@ -100,16 +106,19 @@ pub struct Calibration {
 /// The single frozen reference configuration.
 pub struct Config {
     pub layout: SubcarrierLayout,
-    pub band_breathing: Band,      // default 0.10..0.60 Hz
-    pub band_heart: Band,          // default 0.80..2.50 Hz
-    pub band_motion: Band,         // default 0.10..5.00 Hz
+    pub band_breathing: FreqBand,  // default 0.10..0.60 Hz
+    pub band_heart: FreqBand,      // default 0.80..2.50 Hz
+    pub band_motion: FreqBand,     // default 0.10..5.00 Hz
     pub uniform_fs_hz: f32,        // resample grid for STFT
     pub stft_window: usize,
     pub stft_hop: usize,
     pub select_k: usize,
 }
 
-pub struct Band { pub lo_hz: f32, pub hi_hz: f32 }
+/// A frequency interval for a filter band. Deliberately **not** named `Band`:
+/// the frozen contract `Band` is the 2.4/5 GHz RF enum (`data-contracts.md`
+/// §1, §8); this internal type is a frequency interval.
+pub struct FreqBand { pub lo_hz: f32, pub hi_hz: f32 }
 
 // --- stage functions (each pure) -------------------------------------------
 
@@ -123,7 +132,7 @@ pub fn decode_record(raw: &[u8], meta: &RxMeta, layout: &SubcarrierLayout)
 
 pub fn validate_sequence(frames: &[ComplexFrame]) -> Vec<SeqAnomaly>; // gaps/reorder/regression
 
-pub fn normalise(frame: &ComplexFrame, cal: &Calibration) -> NormalisedFrame;
+pub fn normalise(frame: &ComplexFrame, cal: &NodeCorrection) -> NormalisedFrame;
 
 pub fn unwrap_phase(wrapped: &[f32]) -> Vec<f32>;
 
@@ -135,7 +144,7 @@ pub fn resonator(x: &[f32], at_hz: f32, fs_hz: f32) -> Complex32; // sliding Goe
 pub fn motion_features(x: &[f32], window: usize) -> Vec<f32>;
 
 pub fn stft(x: &[f32], cfg: &StftConfig) -> Spectrogram;
-pub fn bvp_track(spec: &Spectrogram, band: Band) -> Vec<BvpSample>;
+pub fn bvp_track(spec: &Spectrogram, band: FreqBand) -> Vec<BvpSample>;
 
 pub fn resample_uniform(x: &[f32], t_us: &[u64], fs_hz: f32)
     -> Result<Vec<f32>, ResampleError>;
@@ -144,7 +153,7 @@ pub fn select_subcarriers(features: &SubcarrierFeatureMatrix, k: usize)
     -> SubcarrierMask;
 
 // Top-level reference composition (thin; calls the stages above in order).
-pub fn process(chunk: &[ComplexFrame], cal: &Calibration, cfg: &Config)
+pub fn process(chunk: &[ComplexFrame], cal: &NodeCorrection, cfg: &Config)
     -> Result<Features, SignalError>;
 ```
 
@@ -181,8 +190,8 @@ pinned as follows.
    permitted. `sin`, `cos`, `atan2`, `exp`, `ln`, `powf` are *not* called at
    runtime in the reference path; where a stage needs them it uses a pinned
    `const` table (Hann window, twiddle factors) or the in-crate `atan2`
-   approximation with documented coefficients and operation order. Calibration
-   stores complex multipliers, so phase rotation is a multiply.
+   approximation with documented coefficients and operation order. The per-node
+   `NodeCorrection` stores complex multipliers, so phase rotation is a multiply.
 5. **Fixed accumulation order.** All sums iterate in ascending index order.
    Length-sensitive sums accumulate in `f64` and narrow to `f32` at one stated
    point per stage. Variance uses a stable two-pass form (§4.6).
@@ -211,40 +220,47 @@ tests (proptest-style). "P-" identifiers are the consolidated invariants in §6.
 contract frame, and reject structurally invalid input before any DSP touches it.
 
 **Contract.** `decode_csi(frame: &aquila_types::CsiFrame) -> Result<ComplexFrame,
-DecodeError>` converts the one contract frame (`amplitude`/`phase` arrays,
-`data-contracts.md` §2) into per-subcarrier `Complex32` bins via the
-deterministic `cos`/`sin` approximations. `decode_record(raw, meta, layout) ->
+DecodeError>` derives the one contract frame's per-subcarrier `Complex32` bins
+from its raw signed int8 I/Q sample (`i_q`, interleaved `Q, I` — **imaginary
+first**, `[Q0, I0, Q1, I1, …]`; `data-contracts.md` §2, ADR-0006), dividing each
+count by the nominal `IQ_COUNTS_PER_UNIT`. The frame's derived accessors apply
+the imaginary-first order, so each pair `[Q, I]` becomes one `Complex32` with
+`re = i_q[2k+1]/IQ_COUNTS_PER_UNIT` and `im = i_q[2k]/IQ_COUNTS_PER_UNIT`; this
+is where the amplitude/phase derivation the firmware used to do on-node
+(`√(I²+Q²)`, `atan2(Q, I)`) now lives. `decode_record(raw, meta, layout) ->
 Result<ComplexFrame, DecodeError>` decodes a raw ESP32 CSI record: `raw` is
 interleaved `int8` I/Q pairs, imaginary byte first per Espressif
-`wifi_csi_info_t`, and `bins.len() == layout.expected_bins`. Both are total
-functions; they allocate but do not touch IO. The exact I/Q byte interleaving
-and the HT20/HT40 null-bin map are **research-verify** items flagged in §7, not
-assumed silently.
+`wifi_csi_info_t` (`esp-csi-csi`), and `bins.len() == layout.expected_bins`.
+Both are total functions; they allocate but do not touch IO. Both decoders use
+the same imaginary-first order. The HT20/HT40 null-bin map is a
+**research-verify** item flagged in §7, not assumed silently.
 
 **Invariants.**
 - `D1` Structural: `decode_record` accepts iff `raw.len()` is even,
-  `raw.len()/2 == layout.expected_bins`, and `raw.len() <= 612`;
-  `decode_csi` accepts iff `amplitude.len() >= 1`, `phase.len() ==
-  amplitude.len()`, and every sample is finite. Every accepted frame satisfies
-  `bins.len() == expected_bins` (`decode_record`) or `amplitude.len()`
-  (`decode_csi`).
+  `raw.len()/2 == layout.expected_bins`, and `raw.len() <= 2 * MAX_SUBCARRIERS`;
+  `decode_csi` accepts iff `i_q.len()` is even and non-empty. Every accepted
+  frame satisfies `bins.len() == expected_bins` (`decode_record`) or
+  `i_q.len() / 2` (`decode_csi`). `MAX_SUBCARRIERS` is the canonical int8 ceiling
+  set by ADR-0005 (`714` for the 1472-byte datagram budget, i.e. `1428` sample
+  bytes), not the old f32-era `178`/`612`; the cap is derived from that one
+  constant, never hard-coded separately.
 - `D2` Determinism: identical input yields bit-identical `ComplexFrame`.
 - `D3` Exactness: `int8 → f32` conversion is exact; no clamping or NaN.
-- `D4` `first_word_invalid` policy: the first I/Q pair is zeroed and
-  `flags.first_word_zeroed = true`; the frame is otherwise accepted.
+- `D4` `first_word_invalid` policy: the first complex sample (one I/Q pair,
+  two bytes) is zeroed and `flags.first_word_zeroed = true`; the frame is
+  otherwise accepted.
 - `D5` Metadata sanity is *recorded*, not enforced destructively: out-of-range
   `rssi`/`noise_floor` set a flag rather than failing the decode.
 
 **Failure modes.** `OddLength`, `WrongBinCount { found, expected }`,
 `TooLarge`, `UnsupportedBandwidth`, `EmptyRecord`, and (for `decode_csi`)
-`EmptyFrame`, `LengthMismatch { amplitude, phase }`,
-`NonFiniteSample { field, index }`.
+`EmptyFrame`, `OddIqLength`.
 
 **Property tests.**
 - `D1`: for arbitrary byte lengths, `decode_record` is `Ok` iff length ∈
   `{2·expected_bins}`; the error variant is exactly determined. For arbitrary
-  contract frames, `decode_csi` is `Ok` iff the arrays agree, are non-empty and
-  finite.
+  contract frames, `decode_csi` is `Ok` iff the I/Q sample is even-length and
+  non-empty.
 - `D2/Golden`: `sha256(bins_as_le_bytes)` equals the committed fixture digest.
 - `D4`: setting `first_word_invalid` yields `bins[0] == 0` and no other change.
 - `D5`: arbitrary `rssi`/`noise_floor` never change `bins`, only `flags`.
@@ -299,7 +315,7 @@ order-preserving.
 global calibration, so nodes are comparable.
 
 **Contract.** `H_norm[i] = H[i] * C[i]` where `C[i]` is a precomputed
-`Complex32` multiplier from `Calibration`. Pure complex multiply; no runtime
+`Complex32` multiplier from `NodeCorrection`. Pure complex multiply; no runtime
 trig. Time-invariant.
 
 **Invariants.**
@@ -495,7 +511,7 @@ the dominant breathing/heart-rate frequency over time (the BVP-style series).
 **Contract.** `stft` computes, for frame `m` and bin `k`,
 `X[m,k] = Σ_{n<W} w[n]·x[mH+n]·e^{−i2πkn/W}`, using a `const` Hann window and
 `const` twiddle/tables; bins map to `f_k = k·fs/W`. `bvp_track` band-limits
-`|X|` to a `Band`, picks the dominant bin per frame by deterministic argmax
+`|X|` to a `FreqBand`, picks the dominant bin per frame by deterministic argmax
 (lowest bin on ties), optionally refines by a pinned parabolic formula, and
 returns `BvpSample { t, freq_hz, snr_db }` (brpm/bpm conversion is left to the
 model seam).
@@ -564,7 +580,7 @@ Non-finite score → that bin is excluded and flagged, never treated as `+∞`.
    contract frames.
 2. `validate_sequence` per node → anomalies attached to `Features`.
 3. layout projection (ascending usable bins).
-4. `normalise` with the frozen `Calibration`.
+4. `normalise` with the frozen `NodeCorrection`.
 5. amplitude path and phase path:
    - amplitude magnitude series per bin;
    - `unwrap_phase` → `sanitise_phase` per frame.
@@ -580,7 +596,7 @@ mask consumed at step 9; it is not re-run per frame. This keeps the runtime path
 free of data-dependent branching that could vary between replays.
 
 The frozen configuration and the calibration coefficients are inputs, not
-globals. Replaying a recorded fixture with the same `Config` and `Calibration`
+globals. Replaying a recorded fixture with the same `Config` and `NodeCorrection`
 must reproduce `Features` bit-for-bit.
 
 ## 6. Consolidated invariants
@@ -629,13 +645,14 @@ when short; `K4` deterministic with lower-index tie-break; `K5` rank consistency
 Global: `G1` no IO, no globals, no threads in the reference path; `G2` no
 cross-node phase in v1; `G3` bit-exact on the pinned reference target; `G4` no
 `atan2`/`sin`/`cos`/`exp`/`ln` at runtime outside pinned tables or the in-crate
-`atan2`; `G5` same `Config`+`Calibration`+fixture ⇒ identical `Features`.
+`atan2`; `G5` same `Config`+`NodeCorrection`+fixture ⇒ identical `Features`.
 
 ## 7. Open questions (honest unknowns)
 
-- Exact ESP32-S3 CSI byte order (imaginary-first vs. real-first) and the HT20/
-  HT40 null-bin map must be confirmed against a real capture before `decode_csi`
-  is frozen; until then they are configuration, not assumptions.
+- The HT20/HT40 null-bin map must be confirmed against a real capture before
+  `decode_csi` is frozen; until then it is configuration, not an assumption.
+  (The CSI byte order is no longer open: it is imaginary-first, per `esp-csi-csi`
+  and ADR-0006 below.)
 - Whether `f32` is sufficient for the accumulation-heavy stages, or whether the
   residual/spine should stay in `f64` throughout, is to be settled by the
   measurement ledger (record + diff), not by taste.

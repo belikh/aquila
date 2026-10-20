@@ -1,0 +1,14 @@
+# Aquila ESP32-S3 CSI node — dual-OTA (A/B) partition table.
+#
+# Two application slots plus `otadata`, so an OTA image is written to the
+# inactive slot, activated on reboot, health-checked and rolled back
+# automatically if it does not prove healthy (docs/spec/firmware-ota.md §6).
+# Sized for a 4 MB flash (CONFIG_ESPTOOLPY_FLASHSIZE_4MB), which the OTA agent
+# requires (two app slots do not fit 2 MB).
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+otadata,    data, ota,     0xf000,   0x2000,
+phy_init,   data, phy,     0x11000,  0x1000,
+ota_0,      app,  ota_0,   0x20000,  0x1f0000,
+ota_1,      app,  ota_1,   0x210000, 0x1f0000,

@@ -44,7 +44,7 @@ async def async_get_config_entry_diagnostics(
             "api_version": runtime.api_version,
             "min_component_version": runtime.min_component_version,
             "update_interval": runtime.update_interval,
-            "stream_connected": runtime.coordinator.stream_connected,
+            "last_update_success": runtime.coordinator.last_update_success,
         },
         "snapshot": {
             "zones": data.get("zones", {}),

@@ -170,7 +170,11 @@ pub fn bvp_track(spec: &Spectrogram, band: Band) -> Vec<BvpSample> {
         };
         let freq = best_bin as f32 * spec.fs_hz / spec.bin_count as f32;
         let t = (m as f32) * (spec.hop as f32) / spec.fs_hz;
-        out.push(BvpSample { t, freq_hz: freq, snr_db });
+        out.push(BvpSample {
+            t,
+            freq_hz: freq,
+            snr_db,
+        });
     }
     out
 }

@@ -1,0 +1,41 @@
+menu "Aquila firmware OTA"
+
+    config AQUILA_OTA_HEALTH_WINDOW_S
+        int "Pending-verify health window (seconds)"
+        default 60
+        range 1 3600
+        help
+            After an OTA image activates, the node must stay healthy
+            (associated, streaming CSI, control responsive) for this many
+            seconds before it calls esp_ota_mark_app_valid_cancel_rollback().
+            If it does not confirm, the bootloader rolls back to the previous
+            image (docs/spec/firmware-ota.md §6).
+
+    config AQUILA_FW_SECURITY_VERSION
+        int "Compiled-in firmware security-version floor"
+        default 0
+        range 0 2147483647
+        help
+            The anti-rollback floor this build enforces. The effective floor is
+            the greater of this value and the monotonic value persisted in NVS
+            after a successful update; an OTA image whose version encodes a
+            lower security version is rejected (firmware-ota.md §4).
+
+    config AQUILA_FW_ALLOW_DOWNGRADE
+        bool "Allow a factory-authorised downgrade below the floor"
+        default n
+        help
+            The explicit factory-authorised force flag of firmware-ota.md §4.
+            When disabled (the default), the node rejects any image below the
+            security-version floor.
+
+    config AQUILA_FW_PUBKEY_HEX
+        string "Compiled-in Ed25519 firmware public key (64 hex characters)"
+        default ""
+        help
+            The 32-byte Ed25519 trust anchor, as 64 hex characters. A key
+            provisioned in NVS under the `ota` namespace, key `fw_pubkey`,
+            takes precedence. When neither is set the node has no trust anchor
+            and fails every OTA verification closed.
+
+endmenu

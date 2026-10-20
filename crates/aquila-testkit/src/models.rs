@@ -86,13 +86,13 @@ impl VitalsModel for FakeVitalsModel {
         Ok(requests
             .iter()
             .map(|request| {
-                let room = match &request.scope {
-                    DetectionScope::Room(room) => room.clone(),
+                let zone = match &request.scope {
+                    DetectionScope::Zone(zone) => zone.clone(),
                     DetectionScope::Home(home) => home.clone(),
                 };
                 VitalsReading {
                     subject: request.subject,
-                    room,
+                    zone,
                     span: request.span,
                     breathing: None,
                     heart_rate: None,

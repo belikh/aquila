@@ -1,201 +1,280 @@
-"""WebSocket client for the Aquila core stream.
+"""HTTP polling transport for the Aquila core.
 
-Owns the connection, reconnect and exponential backoff, and ``seq`` handling
-(home-assistant.md §5.2/§6.2). It transports nothing itself: each accepted
-message is handed to the coordinator's ``apply_event``.
+v1 serves **no WebSocket**: ``GET /api/v1/stream`` returns a typed
+``501 websocket_unimplemented`` (core-api.md §10), so the component polls the
+canonical REST snapshot endpoints instead (home-assistant.md §5.2/§6.2). This
+module owns that polling transport; ``AquilaCoordinator`` schedules it.
 
-Contract notes:
-- ``seq`` is monotonic per connection; a message whose ``seq`` is not greater
-  than the last applied one is dropped as stale.
-- A ``seq`` gap forces an HTTP resync.
-- A disconnected stream marks the core unreachable; entities become
-  unavailable until reconnect.
-- The server's own envelope (``type``/``seq``/``ts`` plus payload fields) is the
-  home-assistant.md shape. A ``data`` sub-object, if present, is tolerated and
-  unwrapped so the client also accepts the core-api.md envelope.
+It holds no state and does not merge *policy*: it fetches, normalises and merges
+the core's firmware resources into the snapshot shape the coordinator caches.
+The firmware merge is deliberately a set of pure helpers
+(:func:`manifest_images`, :func:`resolve_image`, :func:`merge_node_firmware`) so
+it can be tested without a Home Assistant runtime.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import random
-from collections.abc import Callable
-from contextlib import suppress
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
-import aiohttp
-
-from .api import AquilaApiClient
+from .api import AquilaApiClient, AquilaError, parse_version
 from .const import (
-    EVENT_TYPE_FIRMWARE,
-    EVENT_TYPE_HEALTH,
-    EVENT_TYPE_STATE,
-    WS_HEARTBEAT_S,
-    WS_PATH,
-    WS_RECONNECT_BASE,
-    WS_RECONNECT_FACTOR,
-    WS_RECONNECT_MAX,
-    WS_SUBPROTOCOL,
+    FIRMWARE_IMAGE_ID,
+    FIRMWARE_IN_PROGRESS,
+    FIRMWARE_INSTALLED_VERSION,
+    FIRMWARE_LAST_RESULT,
+    FIRMWARE_LATEST_VERSION,
+    FIRMWARE_PENDING,
+    FIRMWARE_RELEASE_NOTES,
+    FIRMWARE_UPDATE_AVAILABLE,
+    FIRMWARE_UPDATE_PERCENTAGE,
+    HEALTH_CALIBRATION_STATE,
+    HEALTH_CLOCK_DRIFT_MS,
+    HEALTH_CORE_CONNECTED,
+    HEALTH_LAST_PACKET_TS,
+    HEALTH_NODES_ONLINE,
+    HEALTH_NODES_TOTAL,
+    HEALTH_SELF_TEST_OK,
+    IMAGE_ID,
+    IMAGE_NOTES,
+    IMAGE_VERSION,
+    JOB_IMAGE_ID,
+    JOB_IMAGE_ID_SNAKE,
+    JOB_PROGRESS,
+    JOB_PROGRESS_FRACTION,
+    JOB_PROGRESS_RECEIVED,
+    JOB_PROGRESS_TOTAL,
+    JOB_STATE,
+    JOB_STATE_RUNNING,
+    MANIFEST_ITEMS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-EventCallback = Callable[[dict[str, Any]], None]
-StateCallback = Callable[[], None]
+#: The health keys the coordinator snapshot carries (home-assistant.md §6.2).
+#: The poll also probes ``GET /api/v1/health`` (the "health probe") and merges
+#: these keys into the snapshot's ``health`` block, so the diagnostic entities
+#: see the core's authoritative counters rather than only what ``/state`` embeds.
+_HEALTH_KEYS = (
+    HEALTH_CORE_CONNECTED,
+    HEALTH_NODES_ONLINE,
+    HEALTH_NODES_TOTAL,
+    HEALTH_CALIBRATION_STATE,
+    HEALTH_CLOCK_DRIFT_MS,
+    HEALTH_LAST_PACKET_TS,
+    HEALTH_SELF_TEST_OK,
+)
 
 
-class AquilaStreamClient:
-    """A reconnecting ``aiohttp`` WebSocket client for ``/api/v1/stream``."""
+def normalise_nodes(payload: Any) -> dict[str, Any]:
+    """Normalise a ``GET /api/v1/nodes`` payload into a MAC-keyed mapping.
 
-    def __init__(
-        self,
-        hass: Any,
-        client: AquilaApiClient,
-        *,
-        on_event: EventCallback,
-        on_connected: StateCallback,
-        on_disconnected: StateCallback,
-        on_gap: StateCallback,
-    ) -> None:
-        self._hass = hass
-        self._client = client
-        self._on_event = on_event
-        self._on_connected = on_connected
-        self._on_disconnected = on_disconnected
-        self._on_gap = on_gap
-        self._task: asyncio.Task[None] | None = None
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
-        self._stopping = False
-        self._last_seq = 0
+    The core returns ``{"items": [...]}``; a node is keyed by its MAC (falling
+    back to its id). An already MAC-keyed mapping is passed through.
+    """
+    if isinstance(payload, dict):
+        items = payload.get(MANIFEST_ITEMS)
+        if isinstance(items, list):
+            raw_nodes = items
+        else:
+            return {str(k): v for k, v in payload.items() if isinstance(v, dict)}
+    elif isinstance(payload, list):
+        raw_nodes = payload
+    else:
+        return {}
 
-    @property
-    def connected(self) -> bool:
-        """Whether a live WebSocket currently exists."""
-        return self._ws is not None and not self._ws.closed
+    nodes: dict[str, Any] = {}
+    for node in raw_nodes:
+        if not isinstance(node, dict):
+            continue
+        mac = node.get("mac") or node.get("id")
+        if mac:
+            nodes[str(mac)] = node
+    return nodes
 
-    async def async_start(self) -> None:
-        """Start the background reconnect loop (idempotent)."""
-        if self._task is not None:
-            return
-        self._stopping = False
-        self._task = self._hass.async_create_background_task(
-            self._run(), name="aquila_stream"
+
+def manifest_images(manifest: Any) -> list[dict[str, Any]]:
+    """Return the image list from a ``GET /api/v1/firmware`` manifest.
+
+    The core serves ``{"items": [...]}``; anything else yields an empty list
+    rather than raising, because the manifest is fetched best-effort.
+    """
+    if not isinstance(manifest, dict):
+        return []
+    items = manifest.get(MANIFEST_ITEMS)
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def resolve_image(
+    images: list[dict[str, Any]], version: str | None = None
+) -> dict[str, Any] | None:
+    """Resolve a stored image by version, or the newest image when ``version`` is None.
+
+    An explicit ``version`` that is not in the store resolves to ``None``; the
+    caller must not silently install a different image (firmware-ota.md §7).
+    """
+    if version is not None:
+        wanted = str(version)
+        for image in images:
+            if str(image.get(IMAGE_VERSION)) == wanted:
+                return image
+        return None
+    if not images:
+        return None
+    return max(images, key=lambda image: parse_version(image.get(IMAGE_VERSION)))
+
+
+def firmware_progress_percent(job: Any) -> float | None:
+    """Map a ``GET .../firmware/job`` payload to a 0–100 percentage.
+
+    The core serves ``progress.fraction`` (0–1) and byte counters; either is
+    accepted. A missing or non-numeric progress yields ``None`` rather than a
+    fabricated zero.
+    """
+    if not isinstance(job, dict):
+        return None
+    progress = job.get(JOB_PROGRESS)
+    if not isinstance(progress, dict):
+        return None
+    fraction = progress.get(JOB_PROGRESS_FRACTION)
+    if fraction is None:
+        received = progress.get(JOB_PROGRESS_RECEIVED)
+        total = progress.get(JOB_PROGRESS_TOTAL)
+        if isinstance(received, (int, float)) and isinstance(total, (int, float)) and total:
+            fraction = received / total
+    if not isinstance(fraction, (int, float)):
+        return None
+    return max(0.0, min(100.0, round(float(fraction) * 100.0, 2)))
+
+
+def merge_node_firmware(
+    firmware: Any,
+    job: Any = None,
+    images: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Merge per-node firmware state and its OTA job into the snapshot shape.
+
+    ``installed_version`` and the offered ``latest_version`` come from
+    ``GET /api/v1/nodes/{node}/firmware``; the job adds live ``in_progress`` and
+    progress. The release notes are the notes of the offered image in the store
+    manifest, when one matches. Nothing is fabricated: absent values stay
+    ``None``/``False`` (firmware-ota.md §7).
+    """
+    fw: dict[str, Any] = firmware if isinstance(firmware, dict) else {}
+    store = images or []
+
+    installed = fw.get(FIRMWARE_INSTALLED_VERSION)
+    latest = fw.get(FIRMWARE_LATEST_VERSION)
+    pending = bool(fw.get(FIRMWARE_PENDING))
+
+    job_dict: dict[str, Any] = job if isinstance(job, dict) else {}
+    job_state = job_dict.get(JOB_STATE)
+    in_progress = pending or job_state == JOB_STATE_RUNNING
+
+    image_id = job_dict.get(JOB_IMAGE_ID) or job_dict.get(JOB_IMAGE_ID_SNAKE)
+    notes: str | None = None
+    if latest is not None:
+        offered = resolve_image(store, latest)
+        if offered is not None:
+            if image_id is None:
+                image_id = offered.get(IMAGE_ID)
+            notes = offered.get(IMAGE_NOTES) or None
+
+    percentage = firmware_progress_percent(job_dict) if in_progress else None
+    update_available = latest is not None and str(latest) != str(installed)
+
+    return {
+        FIRMWARE_INSTALLED_VERSION: installed,
+        FIRMWARE_LATEST_VERSION: latest,
+        FIRMWARE_IMAGE_ID: image_id,
+        FIRMWARE_IN_PROGRESS: in_progress,
+        FIRMWARE_UPDATE_PERCENTAGE: percentage,
+        FIRMWARE_UPDATE_AVAILABLE: update_available,
+        FIRMWARE_RELEASE_NOTES: notes,
+        FIRMWARE_PENDING: pending,
+        FIRMWARE_LAST_RESULT: fw.get(FIRMWARE_LAST_RESULT),
+    }
+
+
+async def _merge_node_firmware(
+    client: AquilaApiClient,
+    mac: str,
+    node: dict[str, Any],
+    images: list[dict[str, Any]],
+) -> None:
+    """Fetch and merge one node's firmware state; best-effort per node."""
+    try:
+        firmware = await client.async_get_node_firmware(mac)
+    except AquilaError as err:
+        _LOGGER.debug("Node firmware fetch failed for %s: %s", mac, err)
+        return
+    job: Any = None
+    try:
+        job = await client.async_get_firmware_job(mac)
+    except AquilaError as err:
+        _LOGGER.debug("Firmware job fetch failed for %s: %s", mac, err)
+    node["firmware"] = merge_node_firmware(firmware, job, images)
+
+
+async def async_collect_snapshot(client: AquilaApiClient) -> dict[str, Any]:
+    """Collect the current core snapshot by polling the canonical endpoints.
+
+    ``GET /api/v1/state`` is required; ``GET /api/v1/nodes``,
+    ``GET /api/v1/firmware`` and the per-node
+    ``GET /api/v1/nodes/{node}/firmware`` (+ ``/job``) are best-effort and never
+    fail the poll (home-assistant.md §6.2, firmware-ota.md §7). The state
+    response is a plain resource with no stream envelope (core-api.md §10).
+    """
+    state = await client.async_get_state()
+    snapshot: dict[str, Any] = dict(state) if isinstance(state, dict) else {}
+    snapshot.setdefault("zones", {})
+    health = snapshot.get("health")
+    if not isinstance(health, dict):
+        health = {}
+    # The health probe: `GET /api/v1/health` is authoritative for the counters
+    # the diagnostic entities read (home-assistant.md §6.2). Best-effort — a
+    # failed probe leaves the `/state` health block in place, never fabricated.
+    try:
+        probe = await client.async_get_health()
+    except AquilaError as err:
+        _LOGGER.debug("Health probe failed: %s", err)
+    else:
+        if isinstance(probe, dict):
+            for key in _HEALTH_KEYS:
+                if probe.get(key) is not None:
+                    health[key] = probe[key]
+    # A successful poll is the v1 connectivity signal; a failed poll raises
+    # before reaching here and the coordinator marks entities unavailable.
+    health.setdefault(HEALTH_CORE_CONNECTED, True)
+    snapshot["health"] = health
+
+    nodes: dict[str, Any] = {}
+    try:
+        nodes = normalise_nodes(await client.async_get_nodes())
+        snapshot["nodes"] = nodes
+    except AquilaError as err:
+        _LOGGER.debug("Node reconciliation failed: %s", err)
+        snapshot.setdefault("nodes", {})
+
+    images: list[dict[str, Any]] = []
+    try:
+        manifest = await client.async_get_firmware_manifest()
+        snapshot["firmware_manifest"] = manifest
+        images = manifest_images(manifest)
+    except AquilaError as err:
+        _LOGGER.debug("Firmware manifest reconciliation failed: %s", err)
+
+    if nodes:
+        await asyncio.gather(
+            *(
+                _merge_node_firmware(client, mac, node, images)
+                for mac, node in nodes.items()
+                if isinstance(node, dict)
+            ),
+            return_exceptions=True,
         )
 
-    async def async_stop(self) -> None:
-        """Stop the loop and close the socket."""
-        self._stopping = True
-        if self._ws is not None:
-            with suppress(Exception):
-                await self._ws.close()
-        if self._task is not None:
-            self._task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
-        self._ws = None
-
-    async def _run(self) -> None:
-        delay = WS_RECONNECT_BASE
-        while not self._stopping:
-            try:
-                await self._connect_once()
-                # A clean close resets the backoff.
-                delay = WS_RECONNECT_BASE
-            except asyncio.CancelledError:
-                raise
-            except Exception as err:  # noqa: BLE001 - reconnect on any failure
-                _LOGGER.debug("Aquila stream connection error: %s", err)
-
-            if self._stopping:
-                break
-
-            # The connection has ended: reset per-connection state and notify.
-            self._last_seq = 0
-            self._ws = None
-            self._on_disconnected()
-
-            jitter = random.uniform(0.0, delay / 2)
-            await asyncio.sleep(min(delay, WS_RECONNECT_MAX) + jitter)
-            delay = min(delay * WS_RECONNECT_FACTOR, WS_RECONNECT_MAX)
-
-    async def _connect_once(self) -> None:
-        url = self._ws_url()
-        async with self._client.session.ws_connect(
-            url,
-            headers=self._client.auth_headers(),
-            protocols=(WS_SUBPROTOCOL,),
-            heartbeat=WS_HEARTBEAT_S,
-        ) as ws:
-            self._ws = ws
-            # A fresh connection restarts the sequence at 1; the coordinator
-            # must resync so it does not drop new frames as stale.
-            self._on_connected()
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    self._handle_text(msg.data)
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    break
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                    aiohttp.WSMsgType.CLOSED,
-                ):
-                    break
-
-    def _ws_url(self) -> str:
-        parts = urlsplit(self._client.base_url)
-        scheme = "wss" if parts.scheme == "https" else "ws"
-        path = (parts.path.rstrip("/") if parts.path else "") + WS_PATH
-        return urlunsplit((scheme, parts.netloc, path, "", ""))
-
-    def _handle_text(self, raw: str) -> None:
-        try:
-            event = json.loads(raw)
-        except ValueError:
-            _LOGGER.debug("Ignoring non-JSON stream frame")
-            return
-        if not isinstance(event, dict):
-            return
-
-        # Protocol major, when present, must be 1 (core-api.md §10.2).
-        if event.get("v") not in (None, 1):
-            return
-
-        event = self._normalise(event)
-        if event.get("type") not in (
-            EVENT_TYPE_STATE,
-            EVENT_TYPE_HEALTH,
-            EVENT_TYPE_FIRMWARE,
-        ):
-            # Unknown event types are ignored by contract.
-            return
-
-        seq = event.get("seq")
-        if isinstance(seq, int):
-            if seq <= self._last_seq:
-                return  # stale: not greater than the last applied seq
-            if self._last_seq and seq > self._last_seq + 1:
-                _LOGGER.debug("Aquila stream seq gap (%s -> %s); resyncing", self._last_seq, seq)
-                self._on_gap()
-            self._last_seq = seq
-
-        self._on_event(event)
-
-    @staticmethod
-    def _normalise(event: dict[str, Any]) -> dict[str, Any]:
-        """Flatten a core-api-style ``data`` envelope into the flat shape.
-
-        home-assistant.md emits flat payloads; core-api.md nests them under
-        ``data`` with ``id``. Unwrapping keeps the coordinator's merge simple.
-        """
-        data = event.get("data")
-        if not isinstance(data, dict):
-            return event
-        flat = dict(event)
-        flat.pop("data", None)
-        flat.update(data)
-        return flat
+    return snapshot

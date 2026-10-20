@@ -12,8 +12,8 @@
 //! floor on the calibrated logit scale.
 
 use crate::calibration::CalibrationArtifact;
-use crate::fusion::{TorsoGeometry, TORSO_KEYPOINT_SCATTERS};
-use crate::pose::DEFAULT_TORSO_DITHER_HZ;
+use crate::fusion::TorsoGeometry;
+use crate::pose::DitherSearch;
 
 /// Provenance recorded on every [`Measurement`](aquila_metrics::Measurement) the
 /// core writes.
@@ -23,6 +23,12 @@ use crate::pose::DEFAULT_TORSO_DITHER_HZ;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeasurementConfig {
     /// The full 40-character hex commit the measurement is keyed to.
+    ///
+    /// This is **required**: it is empty in [`MeasurementConfig::default`] and
+    /// [`SensingConfig::validate`] refuses an empty or all-zero commit, so a
+    /// core cannot be constructed without a real build identity. A fabricated
+    /// zero hash would attribute every ledger row to no build
+    /// (`sister-issues-core.md` S15).
     pub commit: String,
     /// A stable host fingerprint.
     pub host: String,
@@ -30,10 +36,25 @@ pub struct MeasurementConfig {
     pub prefix: String,
 }
 
+impl MeasurementConfig {
+    /// Build a provenance record keyed to a real commit.
+    #[must_use]
+    pub fn with_commit(commit: impl Into<String>) -> Self {
+        Self {
+            commit: commit.into(),
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for MeasurementConfig {
     fn default() -> Self {
+        // No commit is known until the composition root supplies one; the empty
+        // string is an explicit "unknown", never a zero hash presented as a
+        // commit. `validate` rejects it, so the default is not usable to build a
+        // core (`sister-issues-core.md` S15).
         Self {
-            commit: "0".repeat(40),
+            commit: String::new(),
             host: "aquila-sensing".to_string(),
             prefix: "sensing".to_string(),
         }
@@ -60,7 +81,15 @@ pub struct SensingConfig {
     /// evidence is odds 1:1. A person's motion and breathing make the CSI
     /// amplitude fluctuate above the static multipath, so that variability is
     /// the presence cue; a raw mean-amplitude threshold is not scale-robust.
-    pub presence_motion_threshold: f64,
+    ///
+    /// `None` (the uncalibrated default) means the threshold is **not known**:
+    /// the core refuses to decide presence and reports `p = 0.5` ("unknown"),
+    /// rather than guessing with a synthetic-tuned constant
+    /// (`sister-issues-core.md` S9). A value is an explicitly **declared**
+    /// baseline, which the calibrated path supplies per node from the learned
+    /// empty-home baseline; a synthetic fixture declares its own and is graded
+    /// accordingly.
+    pub presence_motion_threshold: Option<f64>,
     /// The log-odds scale of the presence motion: one unit of amplitude
     /// standard deviation above the threshold adds `1 / presence_motion_scale`
     /// logits.
@@ -121,10 +150,11 @@ pub struct SensingConfig {
     pub pose_enabled: bool,
     /// The minimum contributing frames per node before a pose is attempted.
     pub pose_min_frames: usize,
-    /// The per-scatterer pose-dither frequencies, in hertz, in torso scatterer
-    /// order (left shoulder, right shoulder, left hip, right hip). They must
-    /// match the synthetic signature the observed CSI carries.
-    pub pose_dither_hz: [f64; TORSO_KEYPOINT_SCATTERS],
+    /// The pose-dither **search band**: the estimator does not know the
+    /// scatterer dither frequencies; it searches this band for the dominant
+    /// peaks (S4). The simulation draws its frequencies from the same shared
+    /// band, per seed.
+    pub pose_dither_search: DitherSearch,
     /// The rigid torso geometry the coarse-pose combination fits.
     pub pose_geometry: TorsoGeometry,
     /// The calibration quality `q_n` attributed to a node that carries no
@@ -148,14 +178,11 @@ impl Default for SensingConfig {
             grid_interval_ns: 50_000_000,
             grid_slots: 20,
             min_frames_per_node: 3,
-            // The motion threshold is tuned to the deterministic simulator's
-            // amplitude scale; it is a starting point, not a claim. The cue is
-            // the window's amplitude variability: a moving occupant measures
-            // ~0.22 and an empty room ~0.03 (the physical simulator of
-            // `capture-and-firmware.md` §7.2), so 0.10 sits between them.
-            // Global calibration (slice 3) removes the need for an absolute
-            // per-home level.
-            presence_motion_threshold: 0.10,
+            // No baseline means no decision: an uncalibrated core reports
+            // "unknown", never a synthetic-tuned guess (`sister-issues-core.md`
+            // S9). Global calibration (slice 3), or an explicitly declared
+            // baseline for a synthetic fixture, supplies the threshold.
+            presence_motion_threshold: None,
             presence_motion_scale: 0.03,
             prior_logit: 0.0,
             logit_clamp: 4.0,
@@ -174,7 +201,7 @@ impl Default for SensingConfig {
             calibration_scale_floor_db: 1.0,
             pose_enabled: false,
             pose_min_frames: 8,
-            pose_dither_hz: DEFAULT_TORSO_DITHER_HZ,
+            pose_dither_search: DitherSearch::default(),
             pose_geometry: TorsoGeometry::adult(),
             pose_uncalibrated_quality: 0.0,
             vitals_floor_min_confidence: 0.0,
@@ -184,6 +211,19 @@ impl Default for SensingConfig {
 }
 
 impl SensingConfig {
+    /// Return this configuration with the measurement commit set to `commit`.
+    ///
+    /// The composition root (or a test) must call this — or set
+    /// `measurement.commit` directly — before [`Sensing::new`](crate::Sensing::new):
+    /// the default carries an explicit unknown commit, and `validate` refuses
+    /// it, so the ledger is never keyed to a fabricated hash
+    /// (`sister-issues-core.md` S15).
+    #[must_use]
+    pub fn with_commit(mut self, commit: impl Into<String>) -> Self {
+        self.measurement.commit = commit.into();
+        self
+    }
+
     /// Validate the configuration's internal consistency.
     ///
     /// # Errors
@@ -205,17 +245,26 @@ impl SensingConfig {
             return Err(bad("min_frames_per_node must be at least 1"));
         }
         for (name, value) in [
-            ("presence_motion_threshold", self.presence_motion_threshold),
             ("presence_motion_scale", self.presence_motion_scale),
             ("prior_logit", self.prior_logit),
             ("logit_clamp", self.logit_clamp),
             ("p_lo", self.p_lo),
             ("p_hi", self.p_hi),
             ("node_weight", self.node_weight),
-            ("calibration_scale_floor_db", self.calibration_scale_floor_db),
+            (
+                "calibration_scale_floor_db",
+                self.calibration_scale_floor_db,
+            ),
         ] {
             if !value.is_finite() {
                 return Err(bad(&format!("{name} must be finite")));
+            }
+        }
+        if let Some(threshold) = self.presence_motion_threshold {
+            if !threshold.is_finite() {
+                return Err(bad(
+                    "presence_motion_threshold must be finite when declared",
+                ));
             }
         }
         if self.calibration_scale_floor_db <= 0.0 {
@@ -257,16 +306,18 @@ impl SensingConfig {
             if self.pose_min_frames < 4 {
                 return Err(bad("pose_min_frames must be at least 4"));
             }
-            for (j, frequency) in self.pose_dither_hz.iter().enumerate() {
-                if !frequency.is_finite() || *frequency <= 0.0 {
-                    return Err(bad(&format!(
-                        "pose_dither_hz[{j}] must be finite and positive"
-                    )));
-                }
+            if !self.pose_dither_search.is_valid() {
+                return Err(bad(
+                    "pose_dither_search must be a finite, positive-width band with a \
+                     finite, non-negative minimum separation and a positive step",
+                ));
             }
             let geometry = &self.pose_geometry;
             for (name, value) in [
-                ("pose_geometry.shoulder_half_width_m", geometry.shoulder_half_width_m),
+                (
+                    "pose_geometry.shoulder_half_width_m",
+                    geometry.shoulder_half_width_m,
+                ),
                 ("pose_geometry.hip_half_width_m", geometry.hip_half_width_m),
                 ("pose_geometry.torso_length_m", geometry.torso_length_m),
             ] {
@@ -280,15 +331,17 @@ impl SensingConfig {
                 return Err(bad("pose_uncalibrated_quality must lie in [0, 1]"));
             }
         }
-        if self.measurement.commit.len() != 40
-            || !self
-                .measurement
-                .commit
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit())
-        {
+        let commit = &self.measurement.commit;
+        if commit.len() != 40 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(bad(
-                "measurement.commit must be a full 40-character hex SHA",
+                "measurement.commit must be a full 40-character hex SHA set at the \
+                 composition root; an empty or absent commit is not a build identity",
+            ));
+        }
+        if commit.bytes().all(|b| b == b'0') {
+            return Err(bad(
+                "measurement.commit must be a real build commit, not the all-zero \
+                 placeholder (sister-issues-core.md S15)",
             ));
         }
         if self.measurement.host.is_empty() {

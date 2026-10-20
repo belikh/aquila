@@ -80,7 +80,7 @@ fixtures must be regenerated and their provenance bumped.
 | `FakePoseModel` / `FakeVitalsModel` | `PoseModel` / `VitalsModel` | Deterministic stub models: identity, constant, or table-driven. Pipeline, calibration and fusion tests never depend on ONNX. |
 | `DeterministicCsiGenerator` | producer for `CsiSource` | Seeded CSI synthesiser. Given seed + scene spec (nodes, floors, rooms, presence, motion, breathing rate, packet loss, noise) it emits a reproducible `CsiFrame` stream. Bit-exact given seed + generator version. |
 | `Simulator` | wires a whole scene | Multi-node, three-floor scene runner through the fakes; drives the **real** core pipeline and the private control plane for integration tests. |
-| `FakeSink`, `RecordingMetricSink` | `Sink`, `MetricSink` | Capture emitted estimates and metrics for assertion. |
+| `FakeSink`, `InMemoryMetricSink` | `Sink`, `MetricSink` | Capture emitted estimates and metrics for assertion. |
 | `Fixture` loader | — | Parses a fixture's `manifest.json` + payloads, verifies digests, and exposes typed frames and labels. |
 | `Golden` helpers | — | Canonical serialisation and hashing of a `ReferenceOutput`. |
 
@@ -172,10 +172,10 @@ surviving mutant means a real gap in decision logic.
 
 | Module | Region coverage floor | Mutation (caught) | Notes |
 | --- | --- | --- | --- |
-| `aquila-core` DSP | 85% | 80% | numeric kernels prioritise properties over mutation |
-| `aquila-core` calibration | 95% | 90% | critical path |
-| `aquila-core` fusion / decision | 90% | 85% | control-flow heavy: mutation is high-value here |
-| `aquila-core` inference glue | 85% | n/a | verified by conformance/golden outputs, not mutants |
+| `aquila-signal` DSP | 85% | 80% | numeric kernels prioritise properties over mutation |
+| `aquila-sensing` calibration | 95% | 90% | critical path |
+| `aquila-sensing` fusion / decision | 90% | 85% | control-flow heavy: mutation is high-value here |
+| `aquila-inference` inference glue | 85% | n/a | verified by conformance/golden outputs, not mutants |
 | `aquila-testkit` | 80% | n/a | fakes are contract-tested against real adapters |
 | adapters (edges) | excluded from core floor | n/a | adapter contract tests against recorded capture |
 
@@ -186,16 +186,22 @@ stable; survivors are triaged as a real gap (add a test) or an equivalent mutant
 
 ## 7. The honest-claims contract
 
-The README's claims table and a machine-readable registry are a **bijection**.
-A claim without evidence is a defect; a test without a claim it backs is
-orphaned.
+The documentation claims table (`docs/README.md`, the **Claims** section) and a
+machine-readable registry are a **bijection**. A claim without evidence is a
+defect; a registry entry with no table row is orphaned.
 
 - **Registry.** `claims.toml` maps each `claim_id` (`CLM-<slug>`) to its claim
-  text, its metric definition, its evaluation set, its status, and its evidence:
-  test/bench targets and, when `measured`, a commit-keyed ledger entry.
-- **Test declaration.** Conformance and evaluation tests/benches declare their
-  `claim_id` (metadata comment or harness config). The verifier parses the
-  registry and the declarations, and fails if the two are not a bijection.
+  text, its metric definition, its status and, when `measured`, a commit-keyed
+  ledger entry.
+- **Claims table.** `docs/README.md` carries one row per claim id. The verifier
+  (`cargo run -p xtask -- claims-verify`) parses both the registry and the table
+  and fails unless their `CLM-<slug>` sets are identical: every registry claim
+  must have a table row, and no table row may be orphaned.
+- **Evidence linkage (intended, not yet enforced).** Conformance and evaluation
+  tests/benches are meant to declare their `claim_id` (metadata comment or
+  harness config) so the verifier could also fail an orphaned test; the verifier
+  does **not** parse test declarations yet. What it enforces today is the
+  table↔registry bijection and the `measured`-needs-ledger rule.
 - **Status vocabulary** — enforced in prose as well as data:
   - `measured` — has a ledger-recorded value from an evaluation run, pinned to a
     commit. Prose may quote this value.
@@ -204,7 +210,8 @@ orphaned.
     presented as achieved.
   - `future` — explicitly outside v1 scope.
 - **No unbacked claim.** The verifier fails a `measured` claim with no ledger
-  entry, a README claim with no registry link, and an orphaned registry entry.
+  entry, a claims-table row with no registry link, and an orphaned registry
+  entry.
 
 ## 8. CI topology
 

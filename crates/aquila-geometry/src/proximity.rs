@@ -1,4 +1,5 @@
-//! Node-pair scope and the discrete proximity relation: the primary estimator.
+//! Node-pair proximity and the discrete proximity relation: the primary
+//! estimator.
 //!
 //! **Proximity fingerprinting** is the robust, primary estimator
 //! (`geometry-calibration.md` §5). It makes **no metric distance claim**: it
@@ -6,14 +7,14 @@
 //! — which multipath can only degrade in confidence, never turn into a wrong
 //! number.
 //!
-//! In v1 a link's relation is derived from its topology scope
-//! (`data-contracts.md` §3): an intra-room link is a `same_zone_candidate`, an
-//! inter-room (same-floor) link is `adjacent`, and an inter-floor link is `far`.
-//! A calibrated per-zone signature replaces this prior once
-//! `aquila-calibration` supplies one; the topology relation is the honest
+//! A link's relation is derived from the 3D distance between its endpoints'
+//! surveyed positions: co-located endpoints are a `same_zone_candidate`,
+//! moderately separated endpoints are `adjacent`, and distant endpoints are
+//! `far`. A calibrated per-zone signature replaces this prior once
+//! `aquila-calibration` supplies one; the proximity relation is the honest
 //! fallback that needs no RF.
 
-use aquila_types::{NodeId, PairScope};
+use aquila_types::NodeId;
 use serde::{Deserialize, Serialize};
 
 /// One link observation within an attribution window: the unordered node pair
@@ -45,31 +46,23 @@ impl LinkObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProximityRelation {
-    /// Both endpoints share a zone: the perturbation is likely local.
+    /// Endpoints are co-located or close: the perturbation is likely local.
     SameZoneCandidate,
-    /// The endpoints share a floor but not a room: an adjacent room.
+    /// Endpoints are moderately separated: an adjacent region.
     Adjacent,
-    /// The endpoints are on different floors: far.
+    /// Endpoints are distant: far.
     Far,
 }
 
-/// The v1 topology prior mapping a pair scope to a proximity relation.
+/// Estimate the proximity relation from the 3D distance between two nodes'
+/// surveyed positions.
 #[must_use]
-pub const fn relation_for_scope(scope: PairScope) -> ProximityRelation {
-    match scope {
-        PairScope::Room => ProximityRelation::SameZoneCandidate,
-        PairScope::SameFloor => ProximityRelation::Adjacent,
-        PairScope::CrossFloor => ProximityRelation::Far,
-    }
-}
-
-/// The spec-vocabulary label for a pair scope: `intra_room`, `inter_room` or
-/// `inter_floor` (`geometry-calibration.md` §1).
-#[must_use]
-pub const fn scope_label(scope: PairScope) -> &'static str {
-    match scope {
-        PairScope::Room => "intra_room",
-        PairScope::SameFloor => "inter_room",
-        PairScope::CrossFloor => "inter_floor",
+pub fn relation_for_distance(distance_m: f32) -> ProximityRelation {
+    if distance_m <= 2.0 {
+        ProximityRelation::SameZoneCandidate
+    } else if distance_m <= 6.0 {
+        ProximityRelation::Adjacent
+    } else {
+        ProximityRelation::Far
     }
 }

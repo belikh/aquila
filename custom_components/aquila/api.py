@@ -20,6 +20,7 @@ import aiohttp
 from .const import (
     API_MAJOR,
     COMPONENT_VERSION,
+    HEALTH_API,
     HEALTH_API_VERSION,
     HEALTH_INSTANCE_ID,
     HEALTH_MIN_COMPONENT_VERSION,
@@ -55,7 +56,7 @@ class AquilaApiError(AquilaError):
         self.message = message
 
 
-def _parse_version(value: Any) -> tuple[int, ...]:
+def parse_version(value: Any) -> tuple[int, ...]:
     """Parse a dotted version string into an integer tuple.
 
     Unknown or malformed segments contribute zero so a comparison still yields a
@@ -72,17 +73,58 @@ def _parse_version(value: Any) -> tuple[int, ...]:
     return tuple(parts) or (0,)
 
 
+#: Backwards-compatible private alias (used inside this module).
+_parse_version = parse_version
+
+
+def _api_object(health: dict[str, Any]) -> dict[str, Any] | None:
+    """The canonical ``api`` object from health, when present and shaped right.
+
+    ``core-api.md`` §4.1 defines the version as ``api: {major, minor}``.
+    """
+    raw = health.get(HEALTH_API)
+    return raw if isinstance(raw, dict) else None
+
+
 def _api_major(health: dict[str, Any]) -> int | None:
-    """Extract the API major from either a scalar or ``{major, minor}`` shape."""
-    raw = health.get(HEALTH_API_VERSION)
-    if isinstance(raw, dict):
+    """Extract the API major from the canonical ``api`` object.
+
+    The canonical shape is ``health["api"]["major"]`` (core-api.md §4.1). The
+    flat ``api_version`` key — scalar or ``{major, minor}`` — is a tolerated
+    legacy alias (home-assistant.md §5.2), so a core that still sends it keeps
+    working.
+    """
+    raw = _api_object(health)
+    if raw is not None:
         raw = raw.get("major")
+    else:
+        raw = health.get(HEALTH_API_VERSION)
+        if isinstance(raw, dict):
+            raw = raw.get("major")
     if raw is None:
         return None
     try:
         return int(raw)
     except (TypeError, ValueError):
         return _parse_version(raw)[0]
+
+
+def api_version_string(health: dict[str, Any]) -> str:
+    """The core's API version as a dotted string, from ``api`` or the alias.
+
+    Used for the HA device ``sw_version``; returns ``""`` when the core reports
+    no version at all rather than fabricating one.
+    """
+    for raw in (_api_object(health), health.get(HEALTH_API_VERSION)):
+        if isinstance(raw, dict):
+            major, minor = raw.get("major"), raw.get("minor")
+            if major is not None and minor is not None:
+                return f"{major}.{minor}"
+            if major is not None:
+                return str(major)
+        elif raw is not None:
+            return str(raw)
+    return ""
 
 
 def check_version(health: dict[str, Any]) -> None:
@@ -133,14 +175,16 @@ class AquilaApiClient:
         return self._token
 
     def auth_headers(self) -> dict[str, str]:
-        """Headers carrying the optional token.
+        """Headers carrying the optional bearer token.
 
-        home-assistant.md §5.2 specifies ``X-Aquila-Token``; the default has no
-        token because port 8099 is not published to the LAN. A token is only
-        required when the API is exposed beyond the ``hassio`` network.
+        core-api.md §3.3 specifies ``Authorization: Bearer <token>``. The
+        loopback/ingress trust boundary is the default credential, so no token
+        is sent unless one is configured; a token is only needed when the API is
+        reached outside the add-on's private network. A token is never placed in
+        a query string (the core rejects that with ``401``).
         """
         if self._token:
-            return {"X-Aquila-Token": self._token}
+            return {"Authorization": f"Bearer {self._token}"}
         return {}
 
     async def _request(

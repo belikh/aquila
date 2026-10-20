@@ -178,8 +178,8 @@ class AquilaCoreConnectedBinarySensor(AquilaEntity, BinarySensorEntity):
     def is_on(self) -> bool | None:
         value = self.health.get(HEALTH_CORE_CONNECTED)
         if value is None:
-            return self.coordinator.stream_connected
-        return bool(value) and self.coordinator.stream_connected
+            return self.coordinator.last_update_success
+        return bool(value) and self.coordinator.last_update_success
 
 
 class AquilaSelfTestBinarySensor(AquilaEntity, BinarySensorEntity):

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{require_finite_f32, require_unit_interval, ValidationError};
+use crate::error::{require_unit_interval, ValidationError};
 
 /// The radio band of a CSI frame: 2.4 GHz or 5 GHz.
 ///
@@ -42,8 +42,9 @@ pub enum SecondaryChannel {
 /// A bitflag-like newtype over the PHY status word from the receiver.
 ///
 /// Bit 0 is HT (11n), bit 1 secondary present, bit 2 STBC, bit 3 LDPC, bit 4
-/// short GI, bit 5 sounding/NDP. Higher bits are reserved and preserved
-/// verbatim.
+/// short GI, bit 5 sounding/NDP, bit 6 IQ saturated (a capture/simulator
+/// diagnostic), bit 7 VHT (11ac) and bit 8 HE (11ax). Bits 9–15 are reserved
+/// and preserved verbatim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PhyFlags(pub u16);
@@ -60,7 +61,26 @@ impl PhyFlags {
     /// A short guard interval was used.
     pub const SHORT_GI: u16 = 1 << 4;
     /// The frame was a sounding/NDP frame.
+    ///
+    /// The ESP32 receiver's `sig_mode` cannot express this directly: the
+    /// firmware sets it when `rx_ctrl.not_sounding == 0` (a sounding PPDU).
     pub const SOUNDING_NDP: u16 = 1 << 5;
+    /// The captured I/Q clipped the int8 range: a diagnostic a capture or
+    /// simulator sets so a saturated frame is visible rather than silent. It
+    /// lives on a reserved bit; firmware is not expected to set it.
+    pub const IQ_SATURATED: u16 = 1 << 6;
+    /// VHT (802.11ac) was used.
+    ///
+    /// The ESP32-S3 radio is 11n, so a node on that target never sets this;
+    /// the bit exists so a VHT-capable receiver (ESP32-C6 and later) can
+    /// distinguish 11ac from 11n instead of collapsing both onto [`Self::HT`]
+    /// (`sister-issues-firmware-ha.md` F10).
+    pub const VHT: u16 = 1 << 7;
+    /// HE (802.11ax) was used.
+    ///
+    /// Reserved for an 11ax receiver (ESP32-C6 and later); no v1 target sets
+    /// it, but the vocabulary no longer conflates 11ax with 11n (F10).
+    pub const HE: u16 = 1 << 8;
 
     /// No flags set.
     #[must_use]
@@ -90,9 +110,7 @@ impl PhyFlags {
 /// `Measured` claim; `DataGated` and `HardwareGated` are the two blocked
 /// sub-grades of `Claimed` (`evaluation.md` §5), naming the missing input or
 /// the missing hardware respectively.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Witness {
     /// Measured and passing a defined v1 bar. The only grade a headline claim
@@ -124,25 +142,28 @@ impl Witness {
     }
 }
 
-/// A confidence value in `[0, 1]`.
+/// A bounded scalar in `[0, 1]`.
 ///
-/// Used where a model reports its own certainty. Confidence is independent of
-/// [`Witness`]: a claim can be confidently wrong, or correctly asserted with
-/// weak evidence.
+/// One newtype backs all three roles the project names — model [`Confidence`],
+/// calibration [`Quality`] and per-node [`NodeQuality`], exposed as aliases
+/// below — so there is exactly one implementation of the bound and its
+/// validation, not three drift-prone copies (`sister-issues-core.md` S19). The
+/// names stay distinct because the vocabulary is: a model's certainty is not a
+/// calibration score, even though both are unit scalars.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Confidence(f32);
+pub struct UnitScalar(f32);
 
-impl Confidence {
-    /// Zero confidence.
-    pub const ZERO: Confidence = Confidence(0.0);
-    /// Full confidence.
-    pub const ONE: Confidence = Confidence(1.0);
+impl UnitScalar {
+    /// Zero.
+    pub const ZERO: UnitScalar = UnitScalar(0.0);
+    /// One.
+    pub const ONE: UnitScalar = UnitScalar(1.0);
 
-    /// Construct a confidence, rejecting values outside `[0, 1]` or non-finite
-    /// values.
+    /// Construct a scalar, rejecting non-finite values and values outside
+    /// `[0, 1]`.
     pub fn new(value: f32) -> Result<Self, ValidationError> {
-        require_unit_interval("confidence", value)?;
+        require_unit_interval("unit_scalar", value)?;
         Ok(Self(value))
     }
 
@@ -154,57 +175,23 @@ impl Confidence {
 
     /// Validate the `[0, 1]` invariant.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        require_unit_interval("confidence", self.0)
+        require_unit_interval("unit_scalar", self.0)
     }
 }
+
+/// A confidence value in `[0, 1]`.
+///
+/// Used where a model reports its own certainty. Confidence is independent of
+/// [`Witness`]: a claim can be confidently wrong, or correctly asserted with
+/// weak evidence. It is a [`UnitScalar`], not a separate type (S19).
+pub type Confidence = UnitScalar;
 
 /// A calibration-quality score in `[0, 1]`.
 ///
 /// Fusion derives a node's weight from its calibration quality
-/// (`fusion-sync.md` §2.3): a node with quality `0` contributes nothing.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Quality(f32);
-
-impl Quality {
-    /// Zero quality; the node contributes nothing.
-    pub const ZERO: Quality = Quality(0.0);
-    /// Full quality.
-    pub const ONE: Quality = Quality(1.0);
-
-    /// Construct a quality score, rejecting values outside `[0, 1]` or
-    /// non-finite values.
-    pub fn new(value: f32) -> Result<Self, ValidationError> {
-        require_finite_f32("quality", value)?;
-        if (0.0..=1.0).contains(&value) {
-            Ok(Self(value))
-        } else {
-            Err(ValidationError::Range {
-                field: "quality",
-                detail: format!("{value} is not in [0, 1]"),
-            })
-        }
-    }
-
-    /// The inner value.
-    #[must_use]
-    pub const fn get(&self) -> f32 {
-        self.0
-    }
-
-    /// Validate the `[0, 1]` invariant.
-    pub fn validate(&self) -> Result<(), ValidationError> {
-        require_finite_f32("quality", self.0)?;
-        if (0.0..=1.0).contains(&self.0) {
-            Ok(())
-        } else {
-            Err(ValidationError::Range {
-                field: "quality",
-                detail: format!("{} is not in [0, 1]", self.0),
-            })
-        }
-    }
-}
+/// (`fusion-sync.md` §2.3): a node with quality `0` contributes nothing. It is a
+/// [`UnitScalar`], not a separate type (S19).
+pub type Quality = UnitScalar;
 
 /// A single node's calibration-quality score in `[0, 1]`.
 ///
@@ -212,47 +199,6 @@ impl Quality {
 /// (`fusion-sync.md` §2.3, `geometry-calibration.md` §13): fusion derives a
 /// node's weight from its own quality, so a node with poor CSI, a weak baseline
 /// or a poor clock fit is down-weighted rather than hidden behind a single
-/// whole-home score. `NodeQuality::ZERO` means the node contributes nothing.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct NodeQuality(f32);
-
-impl NodeQuality {
-    /// Zero quality; the node contributes nothing.
-    pub const ZERO: NodeQuality = NodeQuality(0.0);
-    /// Full quality.
-    pub const ONE: NodeQuality = NodeQuality(1.0);
-
-    /// Construct a per-node quality score, rejecting values outside `[0, 1]`
-    /// or non-finite values.
-    pub fn new(value: f32) -> Result<Self, ValidationError> {
-        require_finite_f32("node_quality", value)?;
-        if (0.0..=1.0).contains(&value) {
-            Ok(Self(value))
-        } else {
-            Err(ValidationError::Range {
-                field: "node_quality",
-                detail: format!("{value} is not in [0, 1]"),
-            })
-        }
-    }
-
-    /// The inner value.
-    #[must_use]
-    pub const fn get(&self) -> f32 {
-        self.0
-    }
-
-    /// Validate the `[0, 1]` invariant.
-    pub fn validate(&self) -> Result<(), ValidationError> {
-        require_finite_f32("node_quality", self.0)?;
-        if (0.0..=1.0).contains(&self.0) {
-            Ok(())
-        } else {
-            Err(ValidationError::Range {
-                field: "node_quality",
-                detail: format!("{} is not in [0, 1]", self.0),
-            })
-        }
-    }
-}
+/// whole-home score. `NodeQuality::ZERO` means the node contributes nothing. It
+/// is a [`UnitScalar`], not a separate type (S19).
+pub type NodeQuality = UnitScalar;

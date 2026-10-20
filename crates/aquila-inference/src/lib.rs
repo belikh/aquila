@@ -56,16 +56,17 @@ mod onnx;
 #[cfg(test)]
 mod tests;
 
-pub use error::{DType, DeviceSelection, Dim, ModelError, ModelHealth};
 /// The canonical model-input carrier, owned by the level-0 contract crate and
 /// re-exported here so a consumer of the seam never reaches past it.
 pub use aquila_types::FeatureVector;
+pub use error::{DType, DeviceSelection, Dim, ModelError, ModelHealth};
 pub use model::{
     check_tensor_dims, DatasetRecord, ModelCard, ModelId, ModelTask, SeedWeights, TensorSpec,
     WeightsTrained,
 };
 pub use seam::{
-    PoseModel, PoseOutcome, PoseRequest, VitalsModel, VitalsRequest, DEFAULT_MAX_BATCH_SIZE,
+    PoseModel, PoseNodeSeries, PoseOutcome, PoseRequest, VitalsModel, VitalsRequest,
+    DEFAULT_MAX_BATCH_SIZE,
 };
 
 #[cfg(feature = "onnx")]

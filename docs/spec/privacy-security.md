@@ -53,10 +53,10 @@ is asserted.
 | G1 | No telemetry and no phone-home. |
 | G2 | No outbound connection outside the LAN; no name resolution. |
 | G3 | Raw CSI is confined to the air and the core host; never re-emitted. |
-| G4 | Management HTTP+WS is loopback/ingress only, never `0.0.0.0`, never host-published. |
-| G5 | Management requires a valid HA ingress session; no separate login. |
+| G4 | Management HTTP+WS is reachable only on the add-on's private network and/or through ingress; never host- or LAN-published. |
+| G5 | Management requires a trusted private/loopback peer, a valid HA ingress session, or a bearer; no separate login. |
 | G6 | Only enrolled nodes enter the pipeline; everything else is dropped. |
-| G7 | Ingest and control are authenticated per node and replay-resistant. |
+| G7 | Control commands are authenticated per node and replay-resistant; CSI ingest authentication is deferred in v1 (see §5). |
 | G8 | No public API, SDK, or MCP surface exists in v1. |
 | G9 | No imposed retention: Aquila never deletes or expires user data on its own. |
 | G10 | Export and erasure are explicit, local, user-initiated operations. |
@@ -110,81 +110,111 @@ messages only, never CSI payloads.
 
 **Test.** (a) DAG test asserts no network-egress `Sink` exists. (b) Run a full
 capture replay and assert the set of transmitted payloads observed on the wire
-contains no CSI frame bytes (control + ingest ACKs only). (c) The CSI payload
-framing is AEAD-sealed with the per-node key (see G7), so another LAN device
-sharing the WLAN cannot recover subcarriers from captured traffic.
+contains no CSI frame bytes (control + ingest ACKs only).
 
-Note: On-the-air exposure depends on the WLAN's link-layer encryption. Aquila
-recommends WPA3 and a dedicated node SSID/VLAN; the AEAD sealing in G7 is what
-makes confidentiality hold even on a shared PSK.
+**v1 limitation (honest).** The CSI payload is **not** AEAD-sealed in v1; it
+travels as plaintext in the `AQCI` UDP datagram. On-the-air confidentiality
+therefore depends entirely on the WLAN's link-layer encryption. On a WPA2/WPA3
+personal network this still keeps subcarriers out of reach of an off-network
+observer, but a device sharing the same PSK (or an open network) could recover
+them. Per-node sealing is deferred; see G7 and §5.
 
-### G4 — Management HTTP+WS is loopback/ingress only
+### G4 — Management HTTP+WS is private-network/ingress only
 
-**Statement.** The private HTTP+WS server used by the dashboard binds only to the
-loopback interface and/or the Supervisor-provided ingress socket. It never binds
-to `0.0.0.0`, never to a LAN interface, and its port is not published to the host.
+**Statement.** The private HTTP+WS server used by the dashboard and the HACS
+component binds only to the loopback interface, the add-on's private container
+interface, and/or the Supervisor-provided ingress socket. It never binds a host
+LAN interface, and its port is not published to the host.
 
 **Enforcement.** Add-on configuration enables ingress and publishes no `ports`
-mapping; the core binds the ingress/loopback address explicitly.
+mapping; where the core binds a non-loopback address it is the add-on's private
+container interface, reachable only on the `hassio` Docker network
+(`home-assistant.md` §2).
 
-**Test.** Start the add-on; enumerate listening sockets and assert every HTTP+WS
-listener is loopback or the ingress socket, and that no listener is bound to a
-non-loopback address. Deterministic.
+**Test.** Start the add-on; enumerate listening sockets and assert every
+HTTP+WS listener is loopback, a private (RFC 1918 / link-local / IPv6 ULA)
+address, or the ingress socket, and that no listener is bound to a public
+address and no host `ports` mapping is published. Deterministic.
 
-### G5 — Management requires a valid HA ingress session
+### G5 — Management requires a valid identity
 
-**Statement.** The dashboard and management API are reachable only through HA
-Ingress, which authenticates the HA user. Aquila implements no second credential
-set, no password store, and no bypass. Requests that lack the Supervisor ingress
-identity headers, or that arrive off the ingress path, are refused.
+**Statement.** The dashboard is reachable only through HA Ingress, which
+authenticates the HA user. The management API deliberately also accepts a
+**trusted private/loopback peer** — the HACS component in the HA core container
+reaches it directly over the private Docker network (`core-api.md` §3.1,
+`home-assistant.md` §5.2) — and a configured **bearer token** for other
+placements. Aquila implements no second password store and no login of its own.
+Requests that lack all three (no trusted peer, no Supervisor ingress identity
+headers, no bearer) are refused.
 
 **Enforcement.** Validate `X-Remote-User-Id` (and related ingress headers) on
-every request; reject when absent. WebSocket upgrades are same-origin and checked.
-No wildcard CORS; the `Host` header is never trusted for routing.
+every request; otherwise require a loopback/private peer or a constant-time
+bearer check; reject when none is present. WebSocket upgrades are same-origin and
+checked. No wildcard CORS; the `Host` header is never trusted for routing.
 
-**Test.** (a) Request the management endpoint with no ingress headers → refused.
-(b) Request from a peer on the container network but off the ingress path →
-refused. (c) Assert the add-on ships no password/user database. Deterministic.
+**Test.** (a) Request the management endpoint with no ingress headers from a
+**public** peer → refused. (b) Request from a private peer on the container
+network but off the ingress path → accepted as a trusted peer (the component
+path), while the same request from a public peer → refused. (c) Assert the
+add-on ships no password/user database. Deterministic.
 
 ### G6 — Only enrolled nodes enter the pipeline
 
 **Statement.** A node must be enrolled before any of its packets are processed.
-Unenrolled, unknown, or spoofed sources are dropped before parsing and counted;
-they cannot influence sensing, calibration, or measurement.
+Unenrolled or unknown sources are dropped before parsing and counted; they cannot
+influence sensing, calibration, or measurement. **v1 limitation:** because ingest
+is not authenticated (G7), a source that spoofs an *enrolled* node's address is
+not distinguishable from that node in v1; spoofed-source detection on the data
+plane is deferred with ingest authentication.
 
 **Enforcement.** Enrolment is an out-of-band pairing step (user-triggered in the
-dashboard; node presents a one-time secret). The core maintains a per-node key
-set; the ingest path is allowlist-first, default-deny.
+dashboard; node presents a one-time secret). The core maintains the per-node
+pairing token (used to authenticate **control** commands) and an enrolled-node
+**address** allowlist; the ingest path is allowlist-first, default-deny.
 
 **Test.** Send CSI-shaped UDP from an unenrolled source → zero frames enter the
 pipeline, the drop counter increments, and the sensing output is unchanged. Then
 enrol and assert frames are accepted. Deterministic.
 
-### G7 — Authenticated, replay-resistant ingest and control
+### G7 — Authenticated, replay-resistant control; ingest authentication deferred
 
-**Statement.** Every ingested CSI packet and every control command is
-authenticated with the per-node key, and the node's identity is taken from the
-cryptographic key, never from attacker-controllable packet fields. Replayed
-packets and replayed commands are rejected.
+**Statement (v1, honest).** Control commands from the core to a node are
+authenticated per node and replay-resistant. CSI **ingest** is **not**
+authenticated in v1: the ingest path trusts the source address of an enrolled
+node, which an on-LAN attacker can spoof, and no packet-level MAC or seal is
+present. This is a stated v1 limitation, not an enforced guarantee.
 
-**Enforcement.** AEAD (sealed CSI payload) plus a monotonic per-node sequence
-number and software-clock timestamps; the node control channel is mutually
-authenticated with the same per-node identity (pinned, no broadcast). Malformed or
-oversized frames are rejected by a bounded, total parser.
+**Enforcement (control).** A paired node authenticates every inbound command
+with a 32-byte HMAC-SHA256 trailer keyed by the pairing token issued in
+`JOIN_ACK` (`capture-and-firmware.md` §6.1, §6.3), pins the core's address, and
+rejects a `request_id` seen in a bounded replay window. The trailer is verified
+in constant time; a message with no tag, the wrong tag length, or a wrong tag is
+rejected before any handler runs. The node **fails closed** until the core's
+sender attaches the trailer, so v1 authenticates the core → node direction only;
+node → core replies and `STATUS` are not yet authenticated, and "mutually
+authenticated" is a target, not a v1 property.
 
-**Test.** (a) Tamper a packet → rejected, no pipeline entry. (b) Replay a valid
-packet → rejected by sequence/clock check. (c) Forged source address with a valid
-enrolled key for a different node → identity resolves to the key's node. (d)
-Fuzz the frame parser with malformed/oversized input under a memory-safety harness
-(Rust) → no panic, no unsafe behaviour. Deterministic.
+**Enforcement (ingest, deferred).** v1 relies on the **G6** enrolment allowlist
+and network placement: raw CSI is confined to the LAN (G3 niche below), a
+recommended dedicated node SSID/VLAN limits who can inject, and frames are
+parsed by a bounded, total parser. There is no per-node seal, key-derived
+identity, or authenticated sequence number on the data plane in v1.
+
+**Test.** (a) A control command with a tampered body or tag → rejected, no state
+change. (b) A control command with a stale `request_id` → rejected as a replay.
+(c) Fuzz the control and ingest parsers with malformed/oversized input under a
+memory-safety harness (Rust) → no panic, no unsafe behaviour. Ingest
+authentication has no v1 test because there is no v1 mechanism; the deferred
+mechanism must land with its own negative tests (§5). Deterministic.
 
 ### G8 — No public API, SDK, or MCP surface
 
 **Statement.** v1 exposes no public REST/WS/MCP endpoint and no plugin/SDK
-surface. The only data consumers are in-tree modules and the ingress dashboard.
+surface. The only data consumers are in-tree modules, the bundled HACS
+component, and the ingress dashboard.
 
 **Enforcement.** The API-facing crate does not depend on the server crate (DAG);
-the only listener is the ingress server of G4/G5.
+the only listener is the private management server of G4/G5.
 
 **Test.** DAG test asserts no public API crate depends on internals and no
 externally advertised API module exists. Deterministic.
@@ -224,6 +254,10 @@ minimum required for node ingest/control.
 
 **Enforcement.** Add-on manifest declares no extra capabilities, no privileged
 mode, no Docker socket; the data directory is the only writable path.
+**v1 limitation:** the read-only root filesystem and dropped-capability runtime
+flags are set by the image/packaging (ticket #11, `aquila_core/Dockerfile`),
+which is not built in this repository; the shipped `config.yaml` requests no
+extras, but the runtime hardening is unverified until that build exists (F25).
 
 **Test.** Inspect the add-on manifest and the running container: assert the
 capability set is empty (or exactly the documented minimum), the user is non-root,
@@ -240,6 +274,10 @@ validation.
 **Enforcement.** Served from the same ingress origin with a CSP such as
 `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self';
 connect-src 'self'; img-src 'self' data:; frame-ancestors <HA>`; no external CDNs.
+**v1 limitation:** the dashboard crate is a host-buildable stub and the add-on
+does not yet serve it (ticket #10), so no CSP header is emitted in v1 and this
+guarantee is not yet exercised; the CSP header lands with the dashboard server
+(F25). The JSON API serves no HTML, so there is nothing to sandbox yet.
 
 **Test.** (a) Assert the served CSP header matches the policy and contains no
 `unsafe-inline` or remote origins. (b) Assert the built WASM imports no
@@ -289,7 +327,7 @@ procedural; the measurable parts are deterministic.)
 suite, producing deterministic per-commit results in the measurement ledger.
 
 **Test.** The suite runs the G1–G15 checks as named, deterministic cases (e.g.
-`privacy.no_outbound_sockets`, `privacy.loopback_only`,
+`privacy.no_outbound_sockets`, `privacy.management_not_host_published`,
 `security.enrolment_required`, `security.no_dns`, `supplychain.licence_gate`) and
 the ledger records each as pass/fail keyed by commit.
 
@@ -302,7 +340,9 @@ threats and mitigations. v1 has exactly **three network surfaces**:
 
 1. **Node ingest** — nodes → core, raw CSI over Wi-Fi UDP on the LAN.
 2. **Node control** — core → nodes, direct control channel on the LAN.
-3. **Management** — HA user → dashboard/HTTP+WS, via HA Ingress only.
+3. **Management** — the HACS component in HA Core → HTTP+WS, directly over the
+   add-on's private Docker network; and HA user → dashboard/HTTP+WS, via HA
+   Ingress only.
 
 Everything else is in-process or on-disk on the host.
 
@@ -331,8 +371,11 @@ Everything else is in-process or on-disk on the host.
 - **Unenrolled sender** — any device emitting CSI-shaped UDP to the ingest port.
 - **Curious or malicious household member or guest** — legitimate LAN/host access
   plus physical presence; the multi-occupant consent problem (see §4).
-- **Another add-on on the Supervisor network** — could reach the ingress port
-  unless it is ingress-header-gated.
+- **Another add-on on the Supervisor network** — shares the private Docker
+  network, so it is trusted by peer address (`core-api.md` §3.1) and can reach
+  management unless the port were published and unauthenticated; this is the
+  stated v1 limitation of address-based peer trust, contained by the unpublished
+  port rather than by a per-add-on credential.
 - **Supply-chain attacker** — upstream crate, vendored weights, HACS release.
 - **Vendor/distributor** — designed out: no phone-home, no remote control (G1).
 
@@ -341,29 +384,34 @@ Everything else is in-process or on-disk on the host.
 Threats: spoofed CSI injection to poison fusion or calibration; replay; flood /
 resource exhaustion; malformed-packet parser bugs.
 
-Mitigations: **G6** enrolment allowlist (default-deny) and **G7** per-node AEAD,
-sequence numbers, clock checks, key-derived identity, a bounded total parser, Rust
-memory safety, rate limits, and bounded buffers; unenrolled packets are counted,
-not parsed. A rogue node can at worst pollute its own contribution — mitigated by
-per-node attribution in fusion and by the measurement ledger flagging anomalies.
+Mitigations: **G6** enrolment allowlist (default-deny) — frames from a source
+that is not an enrolled node's address are dropped and counted, not parsed —
+plus a bounded total parser, Rust memory safety, rate limits, and bounded
+buffers. **v1 limitation:** ingest is not authenticated, so an on-LAN attacker
+that spoofs an enrolled node's address can inject CSI-shaped datagrams; a
+sequence number is present but unauthenticated. A rogue node can at worst
+pollute its own contribution — mitigated by per-node attribution in fusion and
+by the measurement ledger flagging anomalies.
 
 ### 3.4 Node control (core → node, LAN)
 
 Threats: command injection; rogue core; downgrade or MITM on the LAN.
 
-Mitigations: mutually authenticated, pinned per-node channel (**G7**); no
-broadcast; the command set is allowlisted and minimal; nodes reject
-unauthenticated or unsigned control. A rogue core is out of scope beyond the LAN
-confidentiality boundary, because control confers no access to management or to
-other nodes' keys.
+Mitigations: a pinned per-node channel whose commands are authenticated with the
+pairing token (**G7**); no broadcast; the command set is allowlisted and
+minimal; nodes reject unauthenticated control and fail closed. v1 authenticates
+core → node only (node → core replies are not yet authenticated). A rogue core is
+out of scope beyond the LAN confidentiality boundary, because control confers no
+access to management or to other nodes' keys.
 
 ### 3.5 Management (HTTP+WS via ingress)
 
 Threats: unauthenticated access; direct LAN access; another add-on reaching the
 port; CSRF; WebSocket cross-origin hijack; DNS rebinding; Host-header abuse.
 
-Mitigations: **G4** loopback/ingress-only binding with no host-published port;
-**G5** ingress identity-header validation and refusal off the ingress path;
+Mitigations: **G4** private-network/ingress-only binding with no host-published
+port; **G5** ingress identity-header validation plus a trusted private/loopback
+peer or bearer, and refusal otherwise;
 same-origin WS with Origin checks; no wildcard CORS; `Host` never trusted;
 CSRF token on state-changing calls; strict CSP (**G12**).
 
@@ -383,9 +431,13 @@ Supervisor; secret theft; noisy-neighbour abuse of the Supervisor network.
 
 Mitigations: **G11** least-privilege, non-root, read-only rootfs, no Docker
 socket, no `host_pid`/`privileged`; **G13** secrets in Supervisor options;
-egress restricted by **G2**; ingress gated by **G5** so another add-on cannot use
-management. Node UDP requires host-network reachability; this is the single
-justified network capability and is documented and minimised.
+egress restricted by **G2**; management gated by **G4/G5** with no host-published
+port. Note the honest v1 limitation: because a private-network peer is trusted by
+address (`core-api.md` §3.1), another container on the same `hassio` Docker
+network is trusted too — the containment is the *unpublished port and private
+network*, not a per-add-on credential. Node UDP requires host-network
+reachability; this is the single justified network capability and is documented
+and minimised.
 
 ### 3.8 Supply chain
 
@@ -434,10 +486,16 @@ must say so.
 
 - **Compromised host** is out of scope for v1: if the host is owned, all bets are
   off. G11 limits blast radius; it does not defend an already-root host.
-- **Shared WLAN.** If AEAD sealing of CSI payloads is deferred past v1, raw CSI
-  confidentiality falls back to the WLAN's link-layer encryption; on a shared PSK,
-  another LAN device could observe subcarriers. This is a v1 design dependency to
-  resolve, and must be stated honestly until it is.
+- **Unsealed CSI ingest (v1).** Per-node AEAD sealing of CSI payloads is
+  **deferred past v1**: the data plane is plaintext `AQCI` over UDP and its
+  sequence number is unauthenticated. Confidentiality therefore rests on the
+  WLAN's link-layer encryption; on a shared PSK, an open network, or to an
+  on-LAN attacker that spoofs an enrolled node's address, subcarriers are
+  exposed and injectable. This is the single largest v1 residual risk and is
+  stated in G7 and §3.3 rather than hidden behind an AEAD claim.
+- **Unidirectional control authentication (v1).** Control commands are
+  authenticated core → node; node → core replies and `STATUS` are not yet
+  authenticated, so mutual authentication remains a follow-up.
 - **Node hardware.** The ESP32-S3 reference device may not enable secure boot and
   flash encryption in v1; a physical attacker could then extract a node key and
   impersonate one node. Blast radius is one node's contribution; keys are
@@ -467,6 +525,6 @@ must say so.
   oversized input (G7).
 - **Ledger.** Results are recorded as deterministic metrics in the commit-keyed
   measurement ledger (G16), e.g. `privacy.no_outbound_sockets`,
-  `privacy.loopback_only`, `privacy.no_imposed_retention`,
+  `privacy.management_not_host_published`, `privacy.no_imposed_retention`,
   `security.enrolment_required`, `security.replay_rejected`,
   `security.no_dns`, `dashboard.csp_strict`, `supplychain.licence_gate`.

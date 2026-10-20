@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 5</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">multiple directed loops give intersecting closure-phase constraints for 3-D localisation</text>
+
+  <!-- Floor plan -->
+  <rect x="120" y="130" width="610" height="330" fill="#fff" stroke="#000" stroke-width="1.4"/>
+  <text x="425" y="120" text-anchor="middle" font-size="9" font-weight="bold">monitored home (floor plan)</text>
+
+  <!-- Nodes -->
+  <g transform="translate(160,170)">
+    <circle r="16" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="0" y="4" text-anchor="middle" font-weight="bold">n1</text>
+  </g>
+  <g transform="translate(690,170)">
+    <circle r="16" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="0" y="4" text-anchor="middle" font-weight="bold">n2</text>
+  </g>
+  <g transform="translate(160,430)">
+    <circle r="16" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="0" y="4" text-anchor="middle" font-weight="bold">n3</text>
+  </g>
+  <g transform="translate(690,430)">
+    <circle r="16" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="0" y="4" text-anchor="middle" font-weight="bold">n4</text>
+  </g>
+
+  <!-- Loops (triangles) -->
+  <path d="M176,186 L706,186 L425,310 Z" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="3 2"/>
+  <text x="441" y="178" text-anchor="start" font-size="8">loop 1</text>
+  <path d="M176,446 L706,446 L425,310 Z" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="3 2"/>
+  <text x="441" y="438" text-anchor="start" font-size="8">loop 2</text>
+  <path d="M176,186 L176,446 L425,310 Z" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="3 2"/>
+  <text x="162" y="314" text-anchor="end" font-size="8">loop 3</text>
+  <path d="M706,186 L706,446 L425,310 Z" fill="none" stroke="#000" stroke-width="1.1" stroke-dasharray="3 2"/>
+  <text x="721" y="314" text-anchor="start" font-size="8">loop 4</text>
+
+  <!-- Moving scatterer at intersection -->
+  <circle cx="425" cy="310" r="20" fill="#fff" stroke="#000" stroke-width="1.4"/>
+  <text x="425" y="314" text-anchor="middle" font-weight="bold" font-size="11">S</text>
+  <text x="425" y="332" text-anchor="middle" font-size="8">moving scatterer</text>
+
+  <!-- Constraint surfaces (ellipses) from loops -->
+  <ellipse cx="425" cy="248" rx="260" ry="150" fill="none" stroke="#000" stroke-width="0.9" opacity="0" stroke-dasharray="2 2"/>
+  <path d="M165,248 Q425,120 685,248 Q425,376 165,248 Z" fill="none" stroke="#000" stroke-width="0.9" stroke-dasharray="6 3"/>
+  <text x="425" y="104" text-anchor="middle" font-size="8">fringe surface from loop 1</text>
+</svg>

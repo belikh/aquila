@@ -7,13 +7,17 @@ publish.workspace = true
 
 [dependencies]
 aquila-types = { path = "../aquila-types" }
+aquila-wire = { path = "../aquila-wire" }
 aquila-geometry = { path = "../aquila-geometry" }
+aquila-metrics = { path = "../aquila-metrics" }
 aquila-sensing = { path = "../aquila-sensing" }
 aquila-sources = { path = "../aquila-sources" }
 aquila-ha = { path = "../aquila-ha" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+ed25519-dalek = { workspace = true }
+crc32fast = { workspace = true }
 
 [lints]
 workspace = true

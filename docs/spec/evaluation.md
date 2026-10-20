@@ -49,8 +49,8 @@ specification makes that operational:
 
 `GroundTruth` is the only source of reference labels for scoring. It is a deep
 module: a tiny interface that hides every adapter's capture format, clock
-alignment and calibration. It is owned by `aquila-groundtruth` (roadmap seam
-map). A second adapter is required for the seam to exist — a fixture labeller
+alignment and calibration. It is owned by `aquila-evaluation` (the register's
+seam list). A second adapter is required for the seam to exist — a fixture labeller
 and at least one physical reference (chest strap or MM-Fi) are the first two.
 
 ### 2.1 Interface
@@ -77,7 +77,7 @@ Rules the seam enforces:
 
 - **Aligned, not assumed.** `label` returns records already mapped onto the
   session's common clock grid (software time sync + per-node drift estimation,
-  `aquila-clock`). An adapter that cannot align returns `None` with a coverage
+  `aquila-sensing`). An adapter that cannot align returns `None` with a coverage
   gap, never an interpolated guess.
 - **Reference is calibrated.** Each adapter records its own calibration
   (time offset, gain, unit) in `ReferenceProvenance`; an uncalibrated reference
@@ -91,10 +91,10 @@ Rules the seam enforces:
 
 | Adapter | `ReferenceKind` | Basis | Availability |
 | --- | --- | --- | --- |
-| `FixtureLabelGroundTruth` | Presence, Count | Labels committed with the recorded fixture set; the v1 default. | v1 |
+| `FixtureGroundTruth` | Presence, Count | Labels committed with the recorded fixture set; the v1 default. | v1 |
 | `ReferenceVitalsGroundTruth` | Breathing, Heart | Chest strap (ECG-derived heart rate) and respiratory belt for breathing; oximeter as a redundant pulse cross-check only (no SpO2, no HRV — out of scope). | v1 eval rig |
 | `MmFiLabelGroundTruth` | Pose | MM-Fi multimodal labels: WiFi CSI plus camera-derived 3D skeletons. Training seed and cross-dataset pose evaluation; non-commercial use only. | v1 eval / training |
-| `CameraRigGroundTruth` | Presence, Count, Pose, Breathing (weak) | A synchronised research rig that auto-labels CSI; research-only, behind the same seam. | research (Track 1) |
+| `CameraGroundTruth` | Presence, Count, Pose, Breathing (weak) | A synchronised research rig that auto-labels CSI; research-only, behind the same seam. | research (Track 1) |
 
 Notes.
 
@@ -184,12 +184,19 @@ common clock. Units are fixed: brpm, bpm, millimetres, dimensionless fractions.
 ### 4.1 Pose
 
 **Torso-PCK@20.** The v1 pose bar. Percent of correct keypoints among the
-**torso keypoint set** — neck, left/right shoulder, left/right hip, pelvis —
-whose estimated position lies within **20% of the torso span** of the reference.
-The torso span is the distance between the neck and the pelvis midpoint in the
-reference pose; it is the per-sample normaliser, so PCK@20 is scale-invariant
-and comparable across subjects and rooms.
+**torso keypoint set**, whose estimated position lies within **20% of the torso
+span** of the reference.
 
+The torso set is drawn only from the frozen **COCO-17** schema
+(`data-contracts.md` §4), which has **no neck and no pelvis keypoint**. It is the
+four shoulder/hip joints present in COCO-17 — `LeftShoulder`, `RightShoulder`,
+`LeftHip`, `RightHip` — plus the two **derived midpoints** `Neck` =
+mid(`LeftShoulder`, `RightShoulder`) and `Pelvis` = mid(`LeftHip`, `RightHip`),
+which are computed from the reference pose and are not new `KeypointId`s. The
+torso span is the distance between the derived `Neck` and `Pelvis` points in the
+reference pose; it is the per-sample normaliser, so PCK@20 is scale-invariant
+and comparable across subjects and rooms. The derived-midpoint construction is
+frozen here and needs no further ADR (`sister-issues-specs.md` D26/D57).
 - Report torso-PCK@20 as the headline pose number, with per-keypoint breakdown.
 - Because CSI pose is low-fidelity by design (`CONTEXT.md`), a coarse keypoint
   schema is used; the schema is fixed and versioned, and both reference and
@@ -348,9 +355,13 @@ The three gated bars, in-domain, evidenced by commit-keyed ledger rows
 
 | Metric | Bar | Scope | Ledger row |
 | --- | --- | --- | --- |
-| In-domain torso PCK@20 | ≥ 65% | In-domain pose fixtures, single room | `pose.pck20.torso` |
-| Presence F1 | ≥ 0.90 | In-domain presence fixtures, per zone (macro) | `presence.f1` |
-| Breathing MAE | ≤ 2 brpm | In-domain, vs respiratory belt reference | `breathing.mae` |
+| In-domain torso PCK@20 | ≥ 65% | In-domain pose fixtures, single room | `accuracy.torso_pck_at_20` |
+| Presence F1 | ≥ 0.90 | In-domain presence fixtures, per zone (macro) | `accuracy.presence_f1` |
+| Breathing MAE | ≤ 2 brpm | In-domain, vs respiratory belt reference | `accuracy.breathing.mae_brpm` |
+
+The `Ledger row` ids above are the **canonical v1 metric vocabulary**
+(`data-contracts.md` §7.3, `measurement.md` §4.6); every other spelling is a
+defect. Heart rate is `accuracy.heart_rate.mae_bpm`.
 
 Also required for v1, reported and diffed but with no fixed bar:
 
@@ -369,19 +380,25 @@ No v1 bar is set on any out-of-domain protocol.
 
 For calibration of expectations only. These are **external claims**, graded
 Claimed until Aquila reproduces them; they are not Aquila measurements and must
-never be quoted as such.
+never be quoted as such. The band figures are drawn from the project's own
+reference for `hf-mmfi-pose` (`docs/reference/resources.md`, `sources.json` id
+`hf-mmfi-pose`, CC BY-NC 4.0), which records **Torso-PCK@20 82.686 in-domain**
+and **cross-room ~17.5 %**; where a band below is wider than that single
+reference point it is an unpinned external expectation, not a measured fact.
 
-- **In-domain** (same subjects, room and configuration): roughly **65–75%**
-  torso-PCK@20. Aquila's v1 bar (65%) sits at the conservative end of this band.
-- **Cross-subject** (LOSO): roughly **60–65%** — a modest, not catastrophic,
-  drop from in-domain.
-- **Zero-shot cross-room** (LORO / cross-configuration): roughly **15–20%** —
-  near-chance for pose, which is why cross-room is reported-but-ungated.
+- **In-domain** (same subjects, room and configuration): the cited reference
+  reports **82.7 %** torso-PCK@20. Aquila's v1 bar (65%) is deliberately
+  conservative against that reported point, not against a wider asserted band.
+- **Cross-subject** (LOSO): roughly **60–65 %** — a modest, not catastrophic,
+  drop from in-domain; unpinned external expectation (no `sources.json` id).
+- **Zero-shot cross-room** (LORO / cross-configuration): the cited reference
+  reports **~17.5 %** — near-chance for pose, which is why cross-room is
+  reported-but-ungated.
 - **Presence** is the robust capability: in-domain F1 ≥ 0.9 is credible;
-  cross-room presence degrades but is expected to remain usable.
+  cross-room presence degrades but is expected to remain usable; unpinned.
 - **Vitals**: breathing MAE of 1–2 brpm in-domain is the credible band; heart
   rate is materially harder and its error is expected to be several times the
-  breathing error.
+  breathing error; unpinned.
 
 When Aquila measures any of these, the result is recorded in the ledger and the
 external reference point is superseded for that scope.
@@ -390,14 +407,14 @@ external reference point is superseded for that scope.
 
 ## 8. Reproducer and ledger
 
-Proposed shape of a reproducer (tooling TBD by ADR):
+The evaluation harness (`aquila-evaluation::Harness::run`) is the reproducer:
+it replays recorded fixtures through the real pipeline and writes ledger rows.
+There is **no `cargo xtask eval` subcommand** — it was struck, not left
+declared-but-absent (`sister-issues-specs.md` D41/D45); a bespoke xtask
+reproducer would duplicate the harness and is deferred until a real need
+appears.
 
-```
-cargo xtask eval --protocol loso --metric torso_pck20 --commit <sha> \
-    --fixtures <digest> --out ledger.json
-```
-
-Guarantees:
+Guarantees (enforced by the harness, not by a shell command):
 
 - Runs offline from recorded fixtures; no nodes, no camera, no strap.
 - Deterministic: fixed seed, pinned model and calibration digests; identical
@@ -409,8 +426,6 @@ Guarantees:
 
 ## 9. Open questions
 
-- The exact torso keypoint schema and torso-span normaliser, to be fixed by ADR
-  with the `aquila-pose` crate.
 - Whether the vitals eval rig uses a respiratory belt, chest-strap-derived
   respiration, or both; the belt is the direct reference, the strap the
   independent cross-check.

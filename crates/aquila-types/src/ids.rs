@@ -3,9 +3,9 @@
 //! Two kinds of identity exist. [`NodeId`] is the dense on-air identity unique
 //! within one home. Every other entity is named by a [`Slug`]: a stable,
 //! human-authorable string such as `"kitchen-01"` or `"ground-floor"`. The
-//! `*Id` names ([`HomeId`], [`FloorId`], [`RoomId`], [`ZoneId`], [`PairId`],
-//! [`SessionId`], [`MetricId`]) are transparent aliases of [`Slug`] so the
-//! vocabulary reads correctly without forking the type.
+//! `*Id` names ([`HomeId`], [`ZoneId`], [`PairId`], [`SessionId`],
+//! [`MetricId`]) are transparent aliases of [`Slug`] so the vocabulary reads
+//! correctly without forking the type.
 
 use serde::{Deserialize, Serialize};
 
@@ -49,16 +49,11 @@ impl Slug {
 /// Identity of a home: the unit of installation and of global calibration.
 pub type HomeId = Slug;
 
-/// Identity of a floor: a storey of a home, containing rooms.
-pub type FloorId = Slug;
-
-/// Identity of a room: a named physical partition of a floor, and the v1
-/// spatial scope of a sensing result.
-pub type RoomId = Slug;
-
-/// Identity of a zone: a named spatial region a sensing result is attributed
-/// to. In v1 a zone *is* a room; `ZoneId == RoomId`.
-pub type ZoneId = RoomId;
+/// Identity of a zone: a named virtual detection region in 3D home space. A
+/// zone may be coextensive with the whole home ("lounge"), a sub-region
+/// ("bed", "shower", "toilet"), or span multiple rooms. Zones are the only
+/// spatial concept; there are no rooms or floors.
+pub type ZoneId = Slug;
 
 /// Identity of a node-pair: the ordered tx/rx edge of the sensing graph.
 pub type PairId = Slug;
@@ -77,9 +72,7 @@ pub type MetricId = Slug;
 /// Provisioned via the node control channel at commissioning and mirrored in
 /// the topology. Values `1..=65535` are provisioned; `0` is reserved for
 /// "unprovisioned" ([`NodeId::UNPROVISIONED`]).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId(pub u16);
 
@@ -139,9 +132,7 @@ impl MacAddr {
 ///
 /// Stable only within a session. It is not person identity, and is never
 /// persisted across sessions as identity.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SubjectId(pub u32);
 

@@ -7,17 +7,15 @@
  * single-producer/single-consumer ring; a sender task drains the ring to the
  * core, one AQCI datagram per frame, subject to the configured transmit-rate
  * cap. The callback never allocates, never blocks and never uses floating point
- * (§9.1.3). The int8 I/Q to f32 amplitude/phase conversion required by
- * ADR-0004 happens in the sender task, not the callback; it is a wire
- * representation change, not signal processing.
+ * (§9.1.3). The payload is the raw signed int8 I/Q buffer, copied verbatim
+ * (ADR-0005); the node performs no amplitude/phase conversion.
  *
- * This file is a reference implementation. It is NOT compiled, flashed or
- * tested in this repository (see the firmware README).
+ * Compile-verified with ESP-IDF v5.5.2 (`nix develop .#esp`); not flashed or
+ * run on hardware (see the firmware README).
  */
 
 #include "csi_node.h"
 
-#include <math.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -47,8 +45,6 @@ typedef struct {
     uint64_t device_ts_us;
     uint8_t band;
     uint8_t channel;
-    uint8_t bandwidth_mhz;
-    uint8_t secondary;
     int8_t rssi;
     int8_t noise_floor;
     uint16_t phy_flags;
@@ -68,24 +64,44 @@ static _Atomic bool s_streaming;
 static portMUX_TYPE s_cfg_mux = portMUX_INITIALIZER_UNLOCKED;
 static csi_node_config_t s_config;
 static uint16_t s_raw_cap = (uint16_t)CSI_RAW_MAX;
-static uint32_t s_boot_epoch;
+static uint16_t s_boot_epoch;
 
 static int s_sock = -1;
 static struct sockaddr_in s_core;
 static int64_t s_last_send_us;
 
-/* The 2.4 GHz band byte for channels 1..14, otherwise the 5 GHz band byte. */
+/* The band byte: 0 (2.4 GHz) for channels 1..14, 1 (5 GHz) for the standard
+ * UNII channels 32..177, and 255 (unknown) otherwise. The receiver can report
+ * a channel outside the contract's known set; the node must not claim a band it
+ * cannot know (F20). */
 static uint8_t band_from_channel(uint8_t channel)
 {
-    return channel <= 14u ? 0u : 1u;
+    if (channel >= 1u && channel <= 14u) {
+        return 0u; /* 2.4 GHz */
+    }
+    if (channel >= 32u && channel <= 177u) {
+        return 1u; /* 5 GHz */
+    }
+    return 255u; /* unknown */
 }
 
-/* Map the receiver's sig_mode to the Aquila PHY flag bits. */
+/*
+ * Map the receiver's sig_mode and sounding flag to the Aquila PHY flag bits.
+ *
+ * `sig_mode`: 0 non-HT (11b/g), 1 HT (11n), 3 VHT (11ac). The ESP32-S3 radio is
+ * 11n, so VHT never occurs on this target; the VHT bit is still decoded so a
+ * VHT-capable receiver can distinguish 11ac from 11n, and the HE bit is
+ * reserved for the ESP32-C6 target. This replaces the old code that collapsed
+ * every 11n-or-later mode onto the HT bit (F10). `not_sounding` is 0 for a
+ * sounding PPDU, which is what the contract's sounding/NDP bit records.
+ */
 static uint16_t phy_flags_from_rx(const wifi_pkt_rx_ctrl_t *rx)
 {
     uint16_t flags = 0u;
-    if (rx->sig_mode >= 1u) { /* 1 HT, 2 VHT, 3 HE all imply 11n-or-later */
-        flags |= 1u << 0;     /* HT */
+    if (rx->sig_mode == 1u) {
+        flags |= 1u << 0; /* HT (11n) */
+    } else if (rx->sig_mode == 3u) {
+        flags |= 1u << 7; /* VHT (11ac) */
     }
     if (rx->cwb != 0u) {
         flags |= 1u << 1; /* secondary present */
@@ -98,6 +114,9 @@ static uint16_t phy_flags_from_rx(const wifi_pkt_rx_ctrl_t *rx)
     }
     if (rx->sgi != 0u) {
         flags |= 1u << 4; /* short GI */
+    }
+    if (rx->not_sounding == 0u) {
+        flags |= 1u << 5; /* sounding/NDP */
     }
     return flags;
 }
@@ -137,8 +156,6 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     slot->device_ts_us = (uint64_t)esp_timer_get_time();
     slot->band = band_from_channel(info->rx_ctrl.channel);
     slot->channel = info->rx_ctrl.channel;
-    slot->bandwidth_mhz = 20u; /* refined from config below at send time */
-    slot->secondary = info->rx_ctrl.secondary_channel;
     slot->rssi = info->rx_ctrl.rssi;
     slot->noise_floor = info->rx_ctrl.noise_floor;
     slot->phy_flags = phy_flags_from_rx(&info->rx_ctrl);
@@ -165,7 +182,7 @@ static void apply_esp_csi(const csi_node_config_t *cfg)
     wifi_csi_config_t csi_config = {
         .lltf_en = cfg->lltf_enable,
         .htltf_en = cfg->ht_ltf_enable,
-        .stbc_htltf_en = cfg->stbc_ht_ltf_enable,
+        .stbc_htltf2_en = cfg->stbc_ht_ltf_enable,
         .ltf_merge_en = true,
         .channel_filter_en = false,
         .manu_scale = false,
@@ -175,16 +192,13 @@ static void apply_esp_csi(const csi_node_config_t *cfg)
 }
 
 /*
- * The sender task: drain the ring, convert the raw int8 I/Q pairs to the f32
- * amplitude/phase the AQCI payload carries (ADR-0004), frame the datagram and
- * unicast it to the core.
+ * The sender task: drain the ring, frame the datagram with the raw signed int8
+ * I/Q buffer copied verbatim (ADR-0005) and unicast it to the core.
  */
 static void csi_sender_task(void *arg)
 {
     (void)arg;
     static uint8_t datagram[AQ_CSI_MAX_DATAGRAM_LEN];
-    static float amplitude[AQ_CSI_MAX_SUBCARRIERS];
-    static float phase[AQ_CSI_MAX_SUBCARRIERS];
     csi_slot_t slot;
 
     for (;;) {
@@ -222,25 +236,21 @@ static void csi_sender_task(void *arg)
         if (n > AQ_CSI_MAX_SUBCARRIERS) {
             n = AQ_CSI_MAX_SUBCARRIERS;
         }
-        /* The first 4 bytes are invalid when the driver says so; the frozen
-         * CsiFrame has no such flag, so the first subcarrier is nulled, exactly
-         * as the simulator does (capture-and-firmware.md §7.4). */
-        for (uint16_t k = 0; k < n; ++k) {
-            float imag = (float)slot.csi[2u * k];
-            float real = (float)slot.csi[2u * k + 1u];
-            amplitude[k] = sqrtf(real * real + imag * imag);
-            phase[k] = atan2f(imag, real);
-        }
+        /* The leading complex sample (two bytes) is unreliable when the driver
+         * says so; null it and mark the header flags byte, exactly as the
+         * simulator and the core decoder do (capture-and-firmware.md §7.4). */
         if (slot.first_word_invalid) {
-            amplitude[0] = 0.0f;
+            slot.csi[0] = 0;
+            slot.csi[1] = 0;
         }
 
+        // PROVISIONAL: unconfirmed against a real capture (S11/F19; signal.md §7)
         int16_t subcarrier_offset = (int16_t)(-(int16_t)(n / 2u));
         size_t length = aq_frame_csi(
             cfg.node_id, slot.band, slot.channel, cfg.bandwidth_mhz, slot.sequence,
-            slot.device_ts_us, (uint16_t)s_boot_epoch, subcarrier_offset, n,
-            slot.rssi, slot.noise_floor, slot.phy_flags, amplitude, phase, datagram,
-            sizeof(datagram));
+            slot.device_ts_us, s_boot_epoch, subcarrier_offset, n, slot.rssi,
+            slot.noise_floor, slot.phy_flags, slot.first_word_invalid, slot.csi,
+            datagram, sizeof(datagram));
         if (length > 0u && s_sock >= 0) {
             sendto(s_sock, datagram, length, 0, (struct sockaddr *)&s_core,
                    sizeof(s_core));
@@ -260,8 +270,9 @@ csi_node_config_t csi_node_default_config(void)
         .lltf_enable = true,
         .ht_ltf_enable = true,
         .stbc_ht_ltf_enable = false,
-        .csi_len_cap = (uint16_t)AQ_CSI_MAX_DATAGRAM_LEN,
+        .csi_len_cap = (uint16_t)CSI_RAW_MAX,
         .max_tx_rate_hz = 200u,
+        .heartbeat_ms = 5000u,
     };
     return cfg;
 }
@@ -320,6 +331,7 @@ void csi_node_apply_config(const csi_node_config_t *config)
     s_config.stbc_ht_ltf_enable = config->stbc_ht_ltf_enable;
     s_config.csi_len_cap = config->csi_len_cap;
     s_config.max_tx_rate_hz = config->max_tx_rate_hz;
+    s_config.heartbeat_ms = config->heartbeat_ms;
     portEXIT_CRITICAL(&s_cfg_mux);
 
     s_raw_cap = config->csi_len_cap < CSI_RAW_MAX ? config->csi_len_cap
@@ -327,13 +339,28 @@ void csi_node_apply_config(const csi_node_config_t *config)
     atomic_store(&s_streaming, config->csi_enable);
     apply_esp_csi(config);
     if (config->channel != 0u) {
-        esp_wifi_set_channel(config->channel, WIFI_SECOND_CHAN_NONE);
+        /* `secondary` (0 none, 1 above, 2 below) selects the 40 MHz offset;
+         * anything unrecognised falls back to no secondary channel (F5). */
+        wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+        if (config->bandwidth_mhz > 20u) {
+            if (config->secondary == 1u) {
+                second = WIFI_SECOND_CHAN_ABOVE;
+            } else if (config->secondary == 2u) {
+                second = WIFI_SECOND_CHAN_BELOW;
+            }
+        }
+        esp_wifi_set_channel(config->channel, second);
     }
 }
 
 void csi_node_set_streaming(bool enable)
 {
     atomic_store(&s_streaming, enable);
+}
+
+bool csi_node_is_streaming(void)
+{
+    return atomic_load(&s_streaming);
 }
 
 uint16_t csi_node_phy_cap(void)

@@ -1,18 +1,27 @@
 //! `aquila-api` tests: the control plane is exercised over real loopback
 //! sockets.
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aquila_geometry::Topology;
+use aquila_metrics::{Measurement, MetricSink, MetricsError};
 use aquila_sensing::Sink;
 use aquila_types::{
-    DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Floor, Home, MacAddr,
-    Node, NodeId, Room, RoomKind, Slug, Witness, CONTRACT_VERSION,
+    sha256, DeviceType, Event, EventKind, EventPayload, EventScope, FirmwareRef, Home, MacAddr,
+    Node, NodeId, Slug, Witness, Zone, CONTRACT_VERSION,
 };
+use aquila_wire::{ControlBody, ControlMessage, OtaAck, OtaAckStatus, OtaOutcome, OtaResult};
+use ed25519_dalek::{Signer, SigningKey};
+use serde_json::Value;
 
-use crate::{ApiError, ChannelSink, Server};
+use crate::{
+    ApiError, Auth, ChannelSink, FirmwareCompat, FirmwareStore, ImportRequest, OtaError,
+    OtaTransport, Server, ServerConfig, StaticAssets, StoreError,
+};
 
 fn slug(value: &str) -> Slug {
     Slug(value.to_string())
@@ -24,7 +33,7 @@ fn topology() -> Topology {
     let room = slug("living-room");
     let firmware = FirmwareRef {
         version: "test".to_string(),
-        sha256: [0u8; 32],
+        sha256: None,
     };
     Topology::load(aquila_types::Topology {
         home: Home {
@@ -33,30 +42,20 @@ fn topology() -> Topology {
             time_zone: "Australia/Sydney".to_string(),
             contract: CONTRACT_VERSION,
         },
-        floors: vec![Floor {
-            id: floor.clone(),
-            home: home.clone(),
-            name: "Ground".to_string(),
-            level: 0,
-            elevation_m: 0.0,
-        }],
-        rooms: vec![Room {
+        zones: vec![aquila_types::Zone {
             id: room.clone(),
-            floor: floor.clone(),
-            name: "Living".to_string(),
-            kind: RoomKind::Living,
             origin_home_m: [0.0, 0.0, 0.0],
-            yaw_deg: 0.0,
-            area_m2: None,
+            extent_home_m: [5.0, 5.0, 5.0],
+            name: "Living".to_string(),
         }],
         nodes: vec![Node {
             id: NodeId(1),
-            room: room.clone(),
+            zone: room.clone(),
             name: "node-1".to_string(),
             mac: MacAddr([0, 0, 0, 0, 0, 1]),
             device: DeviceType::Esp32S3,
             firmware,
-            pos_room_m: Some([0.0, 0.0, 2.4]),
+            pos_home_m: [0.0, 0.0, 2.4],
             installed_unix_ms: 0,
         }],
         pairs: vec![],
@@ -70,7 +69,7 @@ fn presence_event() -> Event {
         home: slug("home"),
         t_unix_ms: 1_000,
         dedup_key: "home:presence:living-room".to_string(),
-        scope: EventScope::Room(slug("living-room")),
+        scope: EventScope::Zone(slug("living-room")),
         kind: EventKind::PresenceChanged,
         payload: EventPayload::Presence {
             occupied: true,
@@ -82,13 +81,16 @@ fn presence_event() -> Event {
 
 /// A blocking one-shot HTTP GET, returning the whole response as a string.
 fn http_get(addr: SocketAddr, path: &str) -> String {
+    http_request(
+        addr,
+        &format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
+    )
+}
+
+/// A blocking one-shot HTTP request with a raw request head.
+fn http_request(addr: SocketAddr, raw: &str) -> String {
     let mut stream = TcpStream::connect(addr).expect("connect");
-    stream
-        .write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
-        .expect("write request");
+    stream.write_all(raw.as_bytes()).expect("write request");
     let mut response = String::new();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -108,9 +110,83 @@ fn binding_a_non_loopback_address_is_refused() {
 }
 
 #[test]
+fn a_non_loopback_bind_is_permitted_when_configured() {
+    let any: SocketAddr = "0.0.0.0:0".parse().expect("addr");
+    let server = Server::bind_with_config(
+        any,
+        &topology(),
+        "test",
+        ServerConfig::new().any_interface(),
+    )
+    .expect("an any-interface config permits a non-loopback bind");
+    assert!(!server.local_addr().expect("addr").ip().is_loopback());
+}
+
+#[test]
+fn the_dashboard_bundle_is_served_with_an_ingress_base() {
+    let dir = unique_temp_dir();
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::fs::write(
+        dir.join("index.html"),
+        "<!DOCTYPE html><html><head><title>Aquila</title></head><body></body></html>",
+    )
+    .expect("index");
+    std::fs::write(dir.join("app.js"), "console.log('aquila');").expect("asset");
+
+    let server = Server::bind_with_config(
+        "127.0.0.1:0".parse().expect("addr"),
+        &topology(),
+        "test",
+        ServerConfig::new().with_assets(Some(StaticAssets::new(&dir))),
+    )
+    .expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    // The document is served at the origin root, without auth, and carries the
+    // injected `<base href>` for the ingress prefix.
+    let index = http_request(
+        addr,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nX-Ingress-Path: /api/hassio_ingress/tok\r\n\r\n",
+    );
+    assert!(index.starts_with("HTTP/1.1 200 OK"), "{index}");
+    assert!(index.contains("text/html"), "{index}");
+    assert!(
+        index.contains("<base href=\"/api/hassio_ingress/tok/\" />"),
+        "the ingress base must be injected: {index}"
+    );
+
+    // An asset resolves under the same ingress prefix, stripped before routing,
+    // with a JS content type.
+    let asset = http_request(
+        addr,
+        "GET /api/hassio_ingress/tok/app.js HTTP/1.1\r\n\
+         Host: localhost\r\nX-Ingress-Path: /api/hassio_ingress/tok\r\n\r\n",
+    );
+    assert!(asset.starts_with("HTTP/1.1 200 OK"), "{asset}");
+    assert!(asset.contains("text/javascript"), "{asset}");
+    assert!(asset.contains("console.log"), "{asset}");
+
+    // A missing asset is a typed 404, not the API's auth 401.
+    let missing = http_get(addr, "/nope.js");
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+
+    guard.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A process-unique temporary directory.
+fn unique_temp_dir() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("aquila-api-{}-{n}", std::process::id()))
+}
+
+#[test]
 fn health_and_state_are_served_over_loopback() {
-    let server = Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test")
-        .expect("bind");
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
     let addr = server.local_addr().expect("local addr");
     assert!(addr.ip().is_loopback());
     let handle = server.handle();
@@ -134,10 +210,168 @@ fn health_and_state_are_served_over_loopback() {
     guard.shutdown();
 }
 
+/// Parse the JSON body of a raw HTTP response.
+fn json_body(response: &str) -> Value {
+    let (_, body) = response
+        .split_once("\r\n\r\n")
+        .expect("a response has a header/body separator");
+    serde_json::from_str(body).expect("the response body is JSON")
+}
+
+#[test]
+fn health_carries_the_component_contract_fields() {
+    // The HACS component's config flow reads these from `GET /api/v1/health`
+    // (`home-assistant.md` §5.2); this asserts the canonical `core-api.md` §4.1
+    // schema carries them so the flow can complete.
+    let server = Server::bind(
+        "127.0.0.1:0".parse().expect("addr"),
+        &topology(),
+        "instance-abc",
+    )
+    .expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let health = json_body(&http_get(addr, "/api/v1/health"));
+    assert!(
+        health.get("instance_id").and_then(Value::as_str).is_some_and(|id| !id.is_empty()),
+        "instance_id must be present and non-empty: {health}"
+    );
+    assert_eq!(health["instance_id"], "instance-abc");
+    assert!(health.get("api").is_some(), "api object must be present: {health}");
+    assert_eq!(health["api"]["major"], 1);
+    assert_eq!(health["core_connected"], Value::Bool(true));
+    assert!(
+        health["min_component_version"].as_str().is_some_and(|v| !v.is_empty()),
+        "min_component_version must be present: {health}"
+    );
+    assert_eq!(health["self_test_ok"], Value::Bool(true));
+    assert!(health["nodes_total"].as_u64().is_some(), "{health}");
+    assert!(health["nodes_online"].as_u64().is_some(), "{health}");
+    assert!(health.get("calibration_state").is_some(), "{health}");
+    // Honest absences are `null`, never fabricated numbers.
+    assert_eq!(health["clock_drift_ms"], Value::Null);
+    assert_eq!(health["last_packet_ts"], Value::Null);
+
+    // The component contract version cannot drift from the capability document:
+    // both read the one `MIN_COMPONENT_VERSION` constant.
+    let capabilities = json_body(&http_get(addr, "/api/v1/capabilities"));
+    assert_eq!(
+        health["min_component_version"],
+        capabilities["minComponentVersion"]
+    );
+
+    guard.shutdown();
+}
+
+#[test]
+fn the_canonical_read_endpoints_are_served() {
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let schema = http_get(addr, "/api/v1/schema");
+    assert!(schema.starts_with("HTTP/1.1 200 OK"), "{schema}");
+    assert!(schema.contains("\"living-room\""), "{schema}");
+    assert!(schema.contains("breathing_rate"), "{schema}");
+
+    let nodes = http_get(addr, "/api/v1/nodes");
+    assert!(nodes.starts_with("HTTP/1.1 200 OK"), "{nodes}");
+    assert!(nodes.contains("00:00:00:00:00:01"), "{nodes}");
+    assert!(nodes.contains("\"installed_version\":\"test\""), "{nodes}");
+
+    let firmware = http_get(addr, "/api/v1/firmware");
+    assert!(firmware.starts_with("HTTP/1.1 200 OK"), "{firmware}");
+    assert!(firmware.contains("\"items\":[]"), "{firmware}");
+
+    let node_firmware = http_get(addr, "/api/v1/nodes/00:00:00:00:00:01/firmware");
+    assert!(
+        node_firmware.starts_with("HTTP/1.1 200 OK"),
+        "{node_firmware}"
+    );
+    assert!(
+        node_firmware.contains("\"installed_version\":\"test\""),
+        "{node_firmware}"
+    );
+
+    let metrics = http_get(addr, "/api/v1/metrics/snapshot");
+    assert!(metrics.starts_with("HTTP/1.1 200 OK"), "{metrics}");
+    assert!(metrics.contains("\"metrics\":[]"), "{metrics}");
+
+    guard.shutdown();
+}
+
+#[test]
+fn a_token_in_the_query_string_is_rejected() {
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let response = http_get(addr, "/api/v1/state?token=leaked");
+    assert!(response.starts_with("HTTP/1.1 401"), "{response}");
+    assert!(response.contains("unauthenticated"), "{response}");
+
+    guard.shutdown();
+}
+
+#[test]
+fn an_invalid_bearer_token_is_rejected_even_on_loopback() {
+    let server = Server::bind_with_auth(
+        "127.0.0.1:0".parse().expect("addr"),
+        &topology(),
+        "test",
+        Auth::new(Some("secret".to_string())),
+    )
+    .expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let wrong = http_request(
+        addr,
+        "GET /api/v1/state HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer nope\r\n\r\n",
+    );
+    assert!(wrong.starts_with("HTTP/1.1 401"), "{wrong}");
+
+    let right = http_request(
+        addr,
+        "GET /api/v1/state HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer secret\r\n\r\n",
+    );
+    assert!(right.starts_with("HTTP/1.1 200 OK"), "{right}");
+
+    guard.shutdown();
+}
+
+#[test]
+fn the_ota_mutations_fail_closed() {
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let install = http_request(
+        addr,
+        "POST /api/v1/nodes/00:00:00:00:00:01/firmware/install HTTP/1.1\r\n\
+         Host: localhost\r\nContent-Length: 0\r\n\r\n",
+    );
+    assert!(install.starts_with("HTTP/1.1 503"), "{install}");
+    assert!(install.contains("ota_unavailable"), "{install}");
+
+    let unknown = http_request(
+        addr,
+        "POST /api/v1/nodes/00:00:00:00:00:99/firmware/abort HTTP/1.1\r\n\
+         Host: localhost\r\nContent-Length: 0\r\n\r\n",
+    );
+    assert!(unknown.starts_with("HTTP/1.1 404"), "{unknown}");
+
+    guard.shutdown();
+}
+
 #[test]
 fn the_channel_sink_delivers_events_to_subscribers() {
-    let server = Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test")
-        .expect("bind");
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
     let handle = server.handle();
     let receiver = handle.subscribe();
     let mut sink = ChannelSink::new(handle.clone());
@@ -152,8 +386,8 @@ fn the_channel_sink_delivers_events_to_subscribers() {
 
 #[test]
 fn the_websocket_upgrade_is_a_typed_fail_closed_stub() {
-    let server = Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test")
-        .expect("bind");
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
     let addr = server.local_addr().expect("local addr");
     let mut guard = server.serve_in_background().expect("serve");
 
@@ -174,4 +408,292 @@ fn the_websocket_upgrade_is_a_typed_fail_closed_stub() {
     assert!(response.contains("websocket_unimplemented"), "{response}");
 
     guard.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Firmware OTA (ticket #13)
+// ---------------------------------------------------------------------------
+
+/// A minimal in-test node OTA agent: it writes chunks sequentially, verifies
+/// their CRC-32 and answers cumulative ACKs and a final result. It is the
+/// `aquila-api` tests' own fake, so the crate keeps no dependency on testkit.
+struct FakeNode {
+    expected: [u8; 32],
+    received: Vec<u8>,
+}
+
+impl FakeNode {
+    fn handle(&mut self, message: &ControlMessage) -> Option<ControlMessage> {
+        let request_id = message.request_id;
+        match &message.body {
+            ControlBody::OtaBegin(_) => Some(ControlMessage {
+                request_id,
+                body: ControlBody::OtaAck(OtaAck {
+                    received_upto: self.received.len() as u32,
+                    status: OtaAckStatus::Ok,
+                }),
+            }),
+            ControlBody::OtaChunk(chunk) => {
+                if chunk.offset as usize == self.received.len()
+                    && crc32fast::hash(&chunk.bytes) == chunk.crc32
+                {
+                    self.received.extend_from_slice(&chunk.bytes);
+                }
+                Some(ControlMessage {
+                    request_id,
+                    body: ControlBody::OtaAck(OtaAck {
+                        received_upto: self.received.len() as u32,
+                        status: OtaAckStatus::Ok,
+                    }),
+                })
+            }
+            ControlBody::OtaEnd(_) => {
+                let complete = sha256(&self.received) == self.expected;
+                Some(ControlMessage {
+                    request_id,
+                    body: ControlBody::OtaResult(OtaResult {
+                        outcome: if complete {
+                            OtaOutcome::Activated
+                        } else {
+                            OtaOutcome::Failed
+                        },
+                        reason: String::new(),
+                    }),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A control transport over a [`FakeNode`].
+struct TestTransport {
+    node: Arc<Mutex<FakeNode>>,
+    queue: VecDeque<ControlMessage>,
+}
+
+impl TestTransport {
+    fn new(node: Arc<Mutex<FakeNode>>) -> Self {
+        Self {
+            node,
+            queue: VecDeque::new(),
+        }
+    }
+}
+
+impl OtaTransport for TestTransport {
+    fn send(&mut self, message: &ControlMessage) -> Result<(), OtaError> {
+        let reply = {
+            let mut node = self.node.lock().expect("node lock");
+            node.handle(message)
+        };
+        if let Some(reply) = reply {
+            self.queue.push_back(reply);
+        }
+        Ok(())
+    }
+
+    fn try_recv(&mut self) -> Result<Option<ControlMessage>, OtaError> {
+        Ok(self.queue.pop_front())
+    }
+}
+
+/// A metric sink whose recorded rows a test can read back.
+#[derive(Clone, Default)]
+struct TestSink(Arc<Mutex<Vec<Measurement>>>);
+
+impl TestSink {
+    fn records(&self) -> Vec<Measurement> {
+        self.0.lock().expect("sink lock").clone()
+    }
+}
+
+impl MetricSink for TestSink {
+    fn record(&mut self, measurement: &Measurement) -> Result<(), MetricsError> {
+        measurement.validate()?;
+        self.0.lock().expect("sink lock").push(measurement.clone());
+        Ok(())
+    }
+}
+
+/// A temp firmware directory unique to `name`.
+fn firmware_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("aquila-api-ota-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// A signed image and its store identity.
+fn signed_store(dir: &std::path::Path, bytes: &[u8]) -> (FirmwareStore, String) {
+    let key = SigningKey::from_bytes(&[21u8; 32]);
+    let store = FirmwareStore::open(dir, key.verifying_key()).expect("open store");
+    let digest = sha256(bytes);
+    let manifest = store
+        .import(
+            FirmwareCompat::encode(1, 0),
+            "esp32s3",
+            ImportRequest {
+                image: bytes.to_vec(),
+                signature: key.sign(&digest).to_bytes(),
+                version: "1.0.0".to_string(),
+                target: "esp32s3".to_string(),
+                compatibility: FirmwareCompat::new(
+                    FirmwareCompat::encode(1, 0),
+                    FirmwareCompat::encode(1, 9),
+                ),
+                notes: String::new(),
+            },
+        )
+        .expect("import");
+    let id = manifest.id().to_string();
+    (store, id)
+}
+
+#[test]
+fn the_firmware_endpoints_begin_and_report_a_job() {
+    let dir = firmware_dir("job");
+    let bytes: Vec<u8> = (0..300u32).map(|i| (i % 251) as u8).collect();
+    let (store, id) = signed_store(&dir, &bytes);
+
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    let handle = server.handle();
+    let sink = TestSink::default();
+    handle.ota().configure_store(store);
+    handle.ota().set_metric_sink(Box::new(sink.clone()));
+    let node = Arc::new(Mutex::new(FakeNode {
+        expected: sha256(&bytes),
+        received: Vec::new(),
+    }));
+    handle
+        .ota()
+        .register_transport("00:00:00:00:00:01", Box::new(TestTransport::new(node)));
+
+    let mut guard = server.serve_in_background().expect("serve");
+
+    // The store is served.
+    let firmware = http_get(addr, "/api/v1/firmware");
+    assert!(firmware.starts_with("HTTP/1.1 200 OK"), "{firmware}");
+    assert!(firmware.contains(&id), "{firmware}");
+    assert!(firmware.contains("\"target\":\"esp32s3\""), "{firmware}");
+
+    // Begin the install.
+    let body = format!("{{\"image_id\":\"{id}\"}}");
+    let install = http_request(
+        addr,
+        &format!(
+            "POST /api/v1/nodes/00:00:00:00:00:01/firmware/install HTTP/1.1\r\n\
+             Host: localhost\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(install.starts_with("HTTP/1.1 202 Accepted"), "{install}");
+    assert!(install.contains("\"state\":\"succeeded\""), "{install}");
+    assert!(install.contains("\"jobId\":\"fw-1\""), "{install}");
+
+    // The job reports completion.
+    let job = http_get(addr, "/api/v1/nodes/00:00:00:00:00:01/firmware/job");
+    assert!(job.starts_with("HTTP/1.1 200 OK"), "{job}");
+    assert!(job.contains("\"state\":\"succeeded\""), "{job}");
+    assert!(job.contains("\"receivedBytes\":300"), "{job}");
+
+    // The node firmware view carries the last result.
+    let node_firmware = http_get(addr, "/api/v1/nodes/00:00:00:00:00:01/firmware");
+    assert!(node_firmware.contains("\"last_result\""), "{node_firmware}");
+    assert!(node_firmware.contains("\"succeeded\""), "{node_firmware}");
+
+    // Both ledger rows were recorded (`firmware-ota.md` §9).
+    let rows = sink.records();
+    assert!(rows
+        .iter()
+        .any(|row| row.name.as_str() == "firmware.ota.result"));
+    assert!(rows
+        .iter()
+        .any(|row| row.name.as_str() == "firmware.version.installed"));
+
+    guard.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_install_without_a_transport_is_an_offline_node() {
+    let dir = firmware_dir("offline");
+    let bytes = vec![1u8, 2, 3, 4];
+    let (store, id) = signed_store(&dir, &bytes);
+
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    server.handle().ota().configure_store(store);
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let body = format!("{{\"image_id\":\"{id}\"}}");
+    let response = http_request(
+        addr,
+        &format!(
+            "POST /api/v1/nodes/00:00:00:00:00:01/firmware/install HTTP/1.1\r\n\
+             Host: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(response.starts_with("HTTP/1.1 409 Conflict"), "{response}");
+    assert!(response.contains("node_offline"), "{response}");
+
+    guard.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_unknown_image_is_not_found() {
+    let dir = firmware_dir("unknown");
+    let (store, _id) = signed_store(&dir, &[9u8; 8]);
+    let server =
+        Server::bind("127.0.0.1:0".parse().expect("addr"), &topology(), "test").expect("bind");
+    let addr = server.local_addr().expect("local addr");
+    server.handle().ota().configure_store(store);
+    let mut guard = server.serve_in_background().expect("serve");
+
+    let body = "{\"image_id\":\"deadbeefdeadbeef\"}";
+    let response = http_request(
+        addr,
+        &format!(
+            "POST /api/v1/nodes/00:00:00:00:00:01/firmware/install HTTP/1.1\r\n\
+             Host: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+
+    guard.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_store_rejects_a_bad_signature() {
+    let dir = firmware_dir("badsig");
+    let key = SigningKey::from_bytes(&[5u8; 32]);
+    let store = FirmwareStore::open(&dir, key.verifying_key()).expect("open");
+    let bytes = vec![1u8, 2, 3, 4, 5];
+    let mut signature = key.sign(&sha256(b"different")).to_bytes();
+    signature[10] ^= 0xFF;
+    let result = store.import(
+        FirmwareCompat::encode(1, 0),
+        "esp32s3",
+        ImportRequest {
+            image: bytes,
+            signature,
+            version: "1.0.0".to_string(),
+            target: "esp32s3".to_string(),
+            compatibility: FirmwareCompat::new(
+                FirmwareCompat::encode(1, 0),
+                FirmwareCompat::encode(1, 9),
+            ),
+            notes: String::new(),
+        },
+    );
+    assert!(matches!(result, Err(StoreError::BadSignature)));
+    assert!(store.list().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }

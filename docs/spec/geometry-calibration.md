@@ -53,20 +53,27 @@ one, in this hierarchy:
 Home
 └── Floor        (F0, F1, F2 …)          index + elevation
     └── Room     (living, kitchen, bed)  floor-plan polygon in floor frame
-        └── Zone (sofa, bed, doorway)    named sub-volume in room frame
+        └── Zone (v1: the room itself)   sub-volume in room frame — staged
             └── Node (n00 … nNN)         one ESP32-S3 mount
-                └── NodePair (link)      unordered node pair = one CSI link
+                └── NodePair             ordered pair (tx, rx) = one CSI node-pair
 ```
 
 - A **Node** belongs to exactly one Room (its mount), optionally to a Zone.
   A node with no measured position is first-class: room known, position
   `Unknown`.
-- A **NodePair** (link) is the unit of channel observation: the unordered pair
-  `{a, b}` with a canonical id (`a-b`, lexicographic). Its **scope** is derived,
-  never stored as truth: `intra_room` (same room), `inter_room` (same floor),
-  `inter_floor` (different floors).
-- A **Zone** does not own nodes; it owns *contributing links* and thresholds.
-  This keeps presence attribution a fusion problem, not a routing problem.
+- A **NodePair** is the unit of channel observation: an **ordered** pair
+  (`tx` transmits, `rx` measures; CSI is directional) with a canonical id
+  (`pair_id`, `"<tx>-<rx>"`). Its **scope** is derived, never stored as truth:
+  `room` (same room), `same_floor` (same floor, different room), `cross_floor`
+  (different floors) — the frozen `PairScope` discriminants
+  (`data-contracts.md` §3.2). `link` is a forbidden synonym for node-pair
+  (`CONTEXT.md`); this document uses **node-pair** and `pair_id`.
+- A **Zone** does not own nodes; it owns *contributing node-pairs* and
+  thresholds. In v1 `ZoneId == RoomId` and every room is exactly one zone
+  (`data-contracts.md` §1); sub-room zones (sofa, bed, doorway) are a **staged**
+  capability, emitted only when `zone_of` separates them and never assumed by the
+  v1 contract. This keeps presence attribution a fusion problem, not a routing
+  problem.
 
 Topology is authored by the user in the wizard and is the spine the calibration
 artefact hangs off. Topology changes are the primary calibration invalidation
@@ -128,17 +135,18 @@ degrading gracefully to room-level.
 
 ## 4. Zone / room / floor mapping (attribution)
 
-Given a set of link observations from a window, geometry produces a
+Given a set of node-pair observations from a window, geometry produces a
 **confidence-scored attribution**:
 
 - `room_of(obs) -> Scored<RoomId>` — the room the perturbation most likely came
-  from, by aggregating per-link zone signature likelihoods (§8, L3).
-- `zone_of(obs) -> Scored<Option<ZoneId>>` — best-effort; `None` when no zone
-  separates cleanly.
+  from, by aggregating per-node-pair zone signature likelihoods (§8, L3).
+- `zone_of(obs) -> Scored<Option<ZoneId>>` — v1 returns the room (the zone,
+  `ZoneId == RoomId`); a sub-room `Some(zone)` is staged and returned only when a
+  sub-room zone separates cleanly, else `None`.
 - `floor_of(obs) -> Scored<FloorId>` — via topology scope and a learned slab
   attenuation factor; lowest confidence, staged last.
 
-Aggregation is feature-level fusion: each contributing link votes with a weight
+Aggregation is feature-level fusion: each contributing node-pair votes with a weight
 learned at calibration; votes are combined as log-likelihoods and normalised to
 a confidence. If the top two rooms are within a margin, attribution returns an
 **ambiguous** result rather than a false confident one.
@@ -147,9 +155,9 @@ a confidence. If the top two rooms are within a margin, attribution returns an
 
 | Stage | Resolution delivered | Prerequisite |
 | --- | --- | --- |
-| 1 | intra-room: room + zone | per-room baseline (≥1 usable link) |
+| 1 | intra-room: room + zone | per-room baseline (≥1 usable node-pair) |
 | 2 | intra-floor: room→room separation, floor attribution | per-floor baselines + adjacent-room signatures |
-| 3 | cross-floor: slab attenuation, inter-floor links | inter-floor baselines, staged after 1–2 |
+| 3 | cross-floor: slab attenuation, inter-floor node-pairs | inter-floor baselines, staged after 1–2 |
 
 Each stage is independently shippable and independently measured.
 
@@ -159,21 +167,21 @@ Each stage is independently shippable and independently measured.
 
 Two estimators, in priority order.
 
-**Primary — proximity fingerprinting (robust).** For each link, the
+**Primary — proximity fingerprinting (robust).** For each node-pair, the
 baseline-subtracted per-subcarrier amplitude vector over a window is a feature.
 During the wizard walk-through the user labels zones; geometry learns a per-zone
-signature (mean + covariance) per link, then classifies. This yields a discrete
-proximity relation per link — `same_zone_candidate | adjacent | far` — and the
+signature (mean + covariance) per node-pair, then classifies. This yields a discrete
+proximity relation per node-pair — `same_zone_candidate | adjacent | far` — and the
 room/zone attribution above. It makes **no metric distance claim**, so multipath
 cannot turn it into a wrong number, only a lower confidence.
 
 **Secondary — RSSI trilateration (bounded, advisory).** With ≥3 placed anchors
-and a fitted path-loss exponent `n` (default 2.0–3.5, refined only from links
+and a fitted path-loss exponent `n` (default 2.0–3.5, refined only from node-pairs
 with known placements), solve a weighted least-squares position and report its
-**95% error ellipse** from the linearised Jacobian and per-link variances. This
+**95% error ellipse** from the linearised Jacobian and per-node-pair variances. This
 is emitted as `PositionEstimate`, always accompanied by:
 
-- `range_sigma_m` per link (honest per-link uncertainty), and
+- `range_sigma_m` per node-pair (honest per-node-pair uncertainty), and
 - `error_ellipse_95_m: [major, minor, orientation]`.
 
 If the 95% ellipse exceeds the room polygon, the estimator **demotes itself to
@@ -199,12 +207,13 @@ hard input to presence, pose, or vitals.
 
 - **`aquila-geometry`** — topology model, frames/transforms, placement,
   zone/room/floor mapping, proximity fingerprint, bounded trilateration,
-  `Confidence`. Pure computation, no I/O, no async. Depends only on a tiny
-  `aquila-units` (metre, radian, dB) if needed.
-- **`aquila-calibration`** — the whole-home calibration process: capture
+  `Confidence`. Pure computation, no I/O, no async. Depends only on
+  `aquila-types` (shared identities and units: metre, radian, dB).
+- **Calibration is not a crate.** The whole-home calibration process — capture
   planning, baseline/threshold/drift/signature learning, quality gates, the
-  artefact, versioning and invalidation policy. Depends on `aquila-geometry`,
-  the DSP feature layer, and `aquila-metrics`.
+  artefact, versioning and invalidation policy — is the internal `calibration`
+  module of **`aquila-sensing`** (ADR-0003 §6), which depends on
+  `aquila-geometry`, the DSP feature layer and `aquila-metrics`.
 
 ### Seams (reused; no new ports invented)
 
@@ -212,7 +221,7 @@ Calibration and geometry use exactly the brief's seams:
 
 | Seam | Role here |
 | --- | --- |
-| `CsiSource` | baseline capture stream; in tests, a `FakeCsiSource` replaying recorded fixtures |
+| `CsiSource` | baseline capture stream; in tests, the `ReplaySource` adapter replaying recorded fixtures |
 | `Clock` | software time sync: offsets, skew, drift residual feeding the drift model |
 | `GroundTruth` | wizard prompts ("stand in the kitchen") and QA labels |
 | `Sink` | atomic write of the calibration artefact and the ledger entry |
@@ -221,31 +230,32 @@ Calibration and geometry use exactly the brief's seams:
 Reading an artefact back is a **pure function over bytes** (`parse_artefact`,
 `validate_artefact`), so replay tests load recorded fixtures with no new seam.
 Persistence *semantics* (content addressing, the `current` pointer) are owned by
-`aquila-calibration`; the byte write goes through `Sink`.
+the `calibration` module of `aquila-sensing`; the byte write goes through `Sink`.
 
 ### Enforced DAG
 
 ```
-units ← geometry ← calibration ← { dsp, metrics }
+aquila-types ← aquila-geometry ← aquila-sensing
 ```
 
 No upward edges. Geometry never depends on the model crates. Enforced by the
-repo's dependency-check tooling (per the brief's dependency-DAG rule).
+repo's dependency-check tooling (`tools/dag.toml`; per the brief's
+dependency-DAG rule).
 
 ### Public surface (sketch)
 
 ```rust
 // aquila-geometry
-pub struct Home { /* floors, rooms, zones, nodes, links */ }
+pub struct Home { /* floors, rooms, zones, nodes, node_pairs */ }
 pub enum Frame { World, Floor(FloorId), Room(RoomId), Node(NodeId) }
 pub struct Transform { /* se2/se3 */ pub confidence: Confidence }
 
-pub fn room_of(obs: &LinkWindow, home: &Home, cal: &Calibration) -> Scored<RoomId>;
-pub fn zone_of(obs: &LinkWindow, home: &Home, cal: &Calibration) -> Scored<Option<ZoneId>>;
-pub fn floor_of(obs: &LinkWindow, home: &Home, cal: &Calibration) -> Scored<FloorId>;
-pub fn estimate_position(links: &[LinkObservation], home: &Home, cal: &Calibration) -> Scored<PositionEstimate>;
+pub fn room_of(obs: &PairWindow, home: &Home, cal: &Calibration) -> Scored<RoomId>;
+pub fn zone_of(obs: &PairWindow, home: &Home, cal: &Calibration) -> Scored<Option<ZoneId>>;
+pub fn floor_of(obs: &PairWindow, home: &Home, cal: &Calibration) -> Scored<FloorId>;
+pub fn estimate_position(pairs: &[PairObservation], home: &Home, cal: &Calibration) -> Scored<PositionEstimate>;
 
-// aquila-calibration
+// aquila-sensing (internal calibration module)
 pub fn run(
     source: &impl CsiSource,
     clock: &impl Clock,
@@ -255,8 +265,14 @@ pub fn run(
     request: CalibrationRequest,
 ) -> Result<CalibrationReport>;
 
-pub fn parse_artefact(bytes: &[u8]) -> Result<Calibration>;   // for replay/fixtures
-pub fn validate_artefact(cal: &Calibration, home: &Home) -> ValidationReport;
+pub fn parse_artefact(bytes: &[u8]) -> Result<CalibrationArtefact>;   // for replay/fixtures
+pub fn validate_artefact(cal: &CalibrationArtefact, home: &Home) -> ValidationReport;
+```
+
+`Calibration` in the query signatures is the frozen runtime contract
+`aquila_types::Calibration` (`data-contracts.md` §10); `parse_artefact`/
+`validate_artefact` operate on the on-disk `CalibrationArtefact` (§13). There is
+no third `Calibration`.
 ```
 
 The wizard drives `run` as a state machine over capture windows; each step is an
@@ -272,8 +288,8 @@ sweeps room → floor → cross-floor in one pass.
 | Layer | Learned | Used by |
 | --- | --- | --- |
 | **L1 per-node** | clock offset + skew + fit residual; per-node amplitude/phase gain drift basis; channel/bandwidth/subcarrier config; firmware id | time sync, drift correction |
-| **L2 per-node-pair (link)** | empty-home baseline: per-subcarrier amplitude mean & std, noise floor, excess dynamic range, temporal drift basis (PCA), samples/coverage, SNR | baseline subtraction; the perturbation signal everything else consumes |
-| **L3 per-zone** | presence & motion thresholds targeting a chosen false-positive rate; zone signature (mean + covariance); contributing links + weights; zone adjacency | attribution, presence/motion detection |
+| **L2 per-node-pair** | empty-home baseline: per-subcarrier amplitude mean & std, noise floor, excess dynamic range, temporal drift basis (PCA), samples/coverage, SNR | baseline subtraction; the perturbation signal everything else consumes |
+| **L3 per-zone** | presence & motion thresholds targeting a chosen false-positive rate; zone signature (mean + covariance); contributing node-pairs + weights; zone adjacency | attribution, presence/motion detection |
 | **L4 per-room / per-floor** | aggregation weights; cross-floor slab attenuation factor; room-to-room discriminability | fusion, floor attribution |
 | **L5 global** | geometry (transforms, proximity relations, position priors), quality gates, policy (target FPR, staleness window) | geometry outputs, validity |
 
@@ -295,7 +311,7 @@ prompt):
    assigned to rooms. Output: topology + `topology_digest`. No RF needed.
 2. **Place nodes** — optional tap-to-place; record mounting and yaw if known.
 3. **Empty-home baseline** — home quiet for 5–15 min (configurable, minimum
-   enforced). Output: L1 drift seed + L2 baselines. Wizard shows live link
+   enforced). Output: L1 drift seed + L2 baselines. Wizard shows live node-pair
    coverage so the user can see a bad node before wasting the run.
 4. **Zone walk-through** — prompt "stand in the kitchen / on the sofa"; capture
    30–60 s per zone. Output: L3 signatures + thresholds.
@@ -347,11 +363,11 @@ minors) and records the mismatch as `stale` rather than crashing.
 
 | Trigger | Scope | Action |
 | --- | --- | --- |
-| Node added / removed / moved | affected links + zones | invalidate; prompt re-run |
+| Node added / removed / moved | affected node-pairs + zones | invalidate; prompt re-run |
 | Room / zone edited, node reassigned | affected room/floor | invalidate; prompt re-run |
-| Firmware or channel/bandwidth change | affected node(s) | invalidate links; prompt |
+| Firmware or channel/bandwidth change | affected node(s) | invalidate node-pairs; prompt |
 | Model version change | global | mark `stale`; baseline reusable, thresholds re-derived |
-| Sustained drift beyond threshold | affected node(s)/links | mark `stale`; online drift correction continues, confidence penalty |
+| Sustained drift beyond threshold | affected node(s)/node-pairs | mark `stale`; online drift correction continues, confidence penalty |
 | Baseline age > `stale_after_days` | global | mark `stale`; suggest scheduled re-baseline |
 | Quality gate failure | global | `valid = false` with reasons |
 | User manual re-run | global | supersede; keep history |
@@ -371,13 +387,13 @@ only; no CI gating yet.
 
 | Metric | Kind | Meaning | v1 gate |
 | --- | --- | --- | --- |
-| `link_coverage` | deterministic | fraction of node-pairs with a usable baseline | ≥ 0.9 |
-| `baseline_snr_db` | deterministic (min) | worst usable link SNR | ≥ 12 dB |
+| `node_pair_coverage` | deterministic | fraction of node-pairs with a usable baseline | ≥ 0.9 |
+| `baseline_snr_db` | deterministic (min) | worst usable node-pair SNR | ≥ 12 dB |
 | `excess_dynamic_range_db` | deterministic | perturbation headroom above noise | ≥ 3 dB |
 | `zone_separation` | statistical | inter-zone distribution distance (e.g. Bhattacharyya) | ≥ 1.5 |
 | `presence_f1` | statistical (CV) | leave-one-zone-out presence F1 on calibration captures | ≥ baseline (v1 home bar 0.9 at chosen FPR) |
 | `drift_residual_ms` | deterministic | post-fit time-sync residual (max) | ≤ 5 ms |
-| `range_residual_m` | statistical | RSSI path-loss fit residual per link | reported; drives `range_sigma_m` |
+| `range_residual_m` | statistical | RSSI path-loss fit residual per node-pair | reported; drives `range_sigma_m` |
 | `within_room_ratio` | derived | fraction of 95% error ellipses inside their room | ≥ 0.7, else positions demoted to advisory |
 | `phase_coherence` | structural | constant `none_cross_node` in v1 | informational |
 
@@ -391,7 +407,7 @@ reproducible, not anecdotal.
 
 ## 12. Testing strategy (TDD, fakes, fixtures)
 
-- **Fakes**: `FakeCsiSource` replays recorded baseline fixtures; `FakeClock`
+- **Fakes**: `ReplaySource` replays recorded baseline fixtures; `FakeClock`
   injects offsets/skew; `GroundTruth` supplies wizard prompts and QA labels.
 - **Synthetic home generator**: 3 floors, 9+ nodes, parameterised placement and
   path-loss, for geometry and trilateration tests — including the case where the
@@ -413,8 +429,14 @@ reproducible, not anecdotal.
 Structural schema (`aquila.calibration/v1`). All arrays of physical values are
 little-endian f32 base64. `*_sha256` are lowercase hex. `confidence` ∈ [0, 1].
 
+This is the **on-disk calibration artefact** (`CalibrationArtefact`), a distinct
+serialisation that cites — and does not fork — the frozen runtime contract
+`aquila_types::Calibration` (`data-contracts.md` §10, §8). Its
+`node_pairs[].baseline`, `nodes[].placement` and `nodes[]` facts correspond to
+the contract's `pair_offsets`, `node_positions_m` and `node_offsets_db`.
+
 ```
-Calibration
+CalibrationArtefact
 ├── schema_version        string   "aquila.calibration/v1"
 ├── calibration_id        string   "sha256:<hex>" over body_sha256 content
 ├── calibration_version   string   semver, learning semantics
@@ -426,7 +448,7 @@ Calibration
 ├── home                  object
 │     ├── home_id         string   uuid
 │     ├── topology_digest string   "sha256:<hex>"
-│     └── topology        object   floors[] rooms[] zones[] nodes[] links[]
+│     └── topology        object   floors[] rooms[] zones[] nodes[] node_pairs[]
 ├── frames                object
 │     ├── world           object   { kind: "enu", origin_ref, units: "metre" }
 │     ├── floors[]        object   { floor_id, index, elevation_m }
@@ -442,15 +464,15 @@ Calibration
 │     ├── clock           object   { offset_s, skew_ppm, fit_residual_ms,
 │     │                              estimated_at }
 │     ├── firmware        string           esp32s3-csi x.y.z
-│     ├── channel         object   { band, primary_channel, bandwidth_mhz,
-│     │                              subcarriers }
+│     ├── channel         object   { known, band, primary_channel,
+│     │                              bandwidth_mhz, subcarriers }   known=false ⇒ numbers are placeholders
 │     ├── gain_drift      object   { amplitude_db_per_h, phase_basis[],
 │     │                              confidence }
 │     └── quality         f32      per-node calibration quality q_n in [0,1]
-├── links[]               object
-│     ├── link_id         string   canonical unordered "a-b"
-│     ├── nodes           [string, string]
-│     ├── scope           enum     intra_room | inter_room | inter_floor
+├── node_pairs[]          object
+│     ├── pair_id         string   canonical ordered "<tx>-<rx>"
+│     ├── nodes           [string, string]   ordered: [tx, rx]
+│     ├── scope           enum     room | same_floor | cross_floor
 │     ├── baseline        object
 │     │     ├── window    object   { start, end, duration_s, occupancy:"empty" }
 │     │     ├── samples   int
@@ -463,7 +485,7 @@ Calibration
 │     └── proximity       object
 │           ├── rssi_mean_dbm      f32
 │           ├── range_estimate_m   f32
-│           ├── range_sigma_m      f32  (honest per-link bound)
+│           ├── range_sigma_m      f32  (honest per-node-pair bound)
 │           ├── relation           enum same_zone_candidate | adjacent | far
 │           └── confidence         f32
 ├── zones[]               object
@@ -477,7 +499,7 @@ Calibration
 │           ├── presence_threshold_db f32
 │           ├── motion_threshold_db   f32
 │           ├── target_fpr            f32
-│           ├── contributing_links    [link_id]
+│           ├── contributing_pairs    [pair_id]
 │           ├── signature             object { feature_mean[], cov[] }
 │           └── quality               object { separation, cv_f1 }
 ├── geometry              object
@@ -499,7 +521,7 @@ Calibration
 ├── invalidation          object
 │     ├── policy_version  string
 │     ├── invalidated_by  [reason]
-│     ├── stale_after_days int
+│     ├── stale_after_days int      required at runtime; no shipped default
 │     ├── supersedes      string|null  previous calibration_id
 │     └── history_pointer string       index.json#<calibration_id>
 └── body_sha256           string  sha256 over all fields above
@@ -531,14 +553,14 @@ Calibration
     "clock": { "offset_s": 0.014, "skew_ppm": 3.2, "fit_residual_ms": 0.9,
                "estimated_at": "2026-10-13T09:05:00Z" },
     "firmware": "esp32s3-csi 0.4.1",
-    "channel": { "band": "2.4ghz", "primary_channel": 6,
+    "channel": { "known": true, "band": "2.4ghz", "primary_channel": 6,
                  "bandwidth_mhz": 20, "subcarriers": 64 },
     "gain_drift": { "amplitude_db_per_h": 0.02, "phase_basis": [],
                     "confidence": 0.7 },
     "quality": 0.9
   } ],
-  "links": [ {
-    "link_id": "n07-n12", "nodes": ["n07", "n12"], "scope": "intra_room",
+  "node_pairs": [ {
+    "pair_id": "n07-n12", "nodes": ["n07", "n12"], "scope": "room",
     "baseline": {
       "window": { "start": "2026-10-13T08:55:00Z", "end": "2026-10-13T09:10:00Z",
                   "duration_s": 900, "occupancy": "empty" },
@@ -556,7 +578,7 @@ Calibration
     "shape_confidence": 0.5, "adjacency": ["Z2b"],
     "detection": { "presence_threshold_db": 2.7, "motion_threshold_db": 1.4,
                    "target_fpr": 0.03,
-                   "contributing_links": ["n07-n12","n07-n15"],
+                   "contributing_pairs": ["n07-n12","n07-n15"],
                    "quality": { "separation": 1.9, "cv_f1": 0.93 } }
   } ],
   "geometry": {
@@ -569,7 +591,7 @@ Calibration
   "quality": {
     "status": "fair", "valid": true,
     "gates": [
-      { "gate": "link_coverage", "value": 0.98, "threshold": 0.9, "pass": true },
+      { "gate": "node_pair_coverage", "value": 0.98, "threshold": 0.9, "pass": true },
       { "gate": "presence_f1", "value": 0.91, "threshold": 0.90, "pass": true },
       { "gate": "zone_separation", "value": 1.9, "threshold": 1.5, "pass": true },
       { "gate": "drift_residual_ms", "value": 0.9, "threshold": 5.0, "pass": true }
@@ -588,8 +610,10 @@ Calibration
 
 - Path-loss exponent: fit globally or per floor? Leaning per floor with a global
   prior, to keep per-home data needs small.
-- Zone adjacency: user-authored edges vs inferred from link overlap. v1 user
+- Zone adjacency: user-authored edges vs inferred from node-pair overlap. v1 user
   first, inference later.
-- `stale_after_days`: 90 is a placeholder; needs a real drift study on S3s.
+- `stale_after_days` has **no placeholder default**: the field is provisional
+  until a real drift study on S3s, so it is **required at runtime** (set by the
+  operator or config), never silently defaulted to a number in the artefact.
 - Whether cross-floor slab attenuation is stable enough to be a threshold, or
   only a soft prior.

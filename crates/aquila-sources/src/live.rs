@@ -129,6 +129,11 @@ pub struct UdpLiveSource {
     stats: Arc<LiveStats>,
     stopped: bool,
     buffer: Vec<u8>,
+    /// The raw bytes of the datagram that produced the most recent decoded
+    /// frame, so a recording can store the **exact** on-wire bytes rather than a
+    /// re-encoding of the decoded frame (`capture-and-firmware.md` §8.2;
+    /// `sister-issues-core.md` S17). Empty until the first frame is decoded.
+    last_datagram: Vec<u8>,
 }
 
 impl UdpLiveSource {
@@ -150,7 +155,17 @@ impl UdpLiveSource {
             stats: Arc::new(LiveStats::default()),
             stopped: false,
             buffer: vec![0u8; cfg.buffer_bytes],
+            last_datagram: Vec::new(),
         })
+    }
+
+    /// The raw bytes of the datagram behind the frame returned by the most
+    /// recent [`recv`](CsiSource::recv), or an empty slice before the first
+    /// frame. A recording stores these verbatim so replay runs the real decoder
+    /// on the bytes the node actually sent.
+    #[must_use]
+    pub fn last_datagram(&self) -> &[u8] {
+        &self.last_datagram
     }
 
     /// The actual bound address; useful when binding to port `0` in tests.
@@ -181,6 +196,8 @@ impl CsiSource for UdpLiveSource {
                     match decode_datagram(&self.buffer[..len]) {
                         Ok(frame) => {
                             self.stats.decoded.fetch_add(1, Ordering::Relaxed);
+                            self.last_datagram.clear();
+                            self.last_datagram.extend_from_slice(&self.buffer[..len]);
                             return Ok(FrameOrEnd::Frame(CsiEnvelope {
                                 frame,
                                 host_rx_mono_ns: self.clock.now().as_nanos(),

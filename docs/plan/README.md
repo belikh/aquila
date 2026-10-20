@@ -16,6 +16,9 @@ offset numbering.
 - `map.md` — the wayfinder map.
 - `tickets/<issue-number>-<slug>.md` — one ticket per file.
 - `issues.md` — the map from issue number to file, and the live status.
+- `hardware-bring-up.md` — the runbook for the day the ESP32-S3 boards arrive.
+  Not a ticket: it is the operational plan plus the honest list of software
+  prerequisites (P1–P6) that must close before a real node is useful.
 
 ## How an implementation agent consumes a ticket
 

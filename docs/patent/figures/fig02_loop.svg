@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 2</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">directed three-node packet loop A&#8594;B&#8594;C&#8594;A</text>
+
+  <!-- Triangle nodes -->
+  <g transform="translate(250,220)">
+    <circle r="24" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="0" y="5" text-anchor="middle" font-weight="bold">A</text>
+    <text x="0" y="38" text-anchor="middle" font-size="8">LO &#952;<sub>A</sub></text>
+  </g>
+  <g transform="translate(600,220)">
+    <circle r="24" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="0" y="5" text-anchor="middle" font-weight="bold">B</text>
+    <text x="0" y="38" text-anchor="middle" font-size="8">LO &#952;<sub>B</sub></text>
+  </g>
+  <g transform="translate(425,460)">
+    <circle r="24" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="0" y="5" text-anchor="middle" font-weight="bold">C</text>
+    <text x="0" y="38" text-anchor="middle" font-size="8">LO &#952;<sub>C</sub></text>
+  </g>
+
+  <!-- Directed edges -->
+  <path d="M274,220 L576,220" stroke="#000" stroke-width="1.4" marker-end="url(#arr)" fill="none"/>
+  <text x="425" y="208" text-anchor="middle" font-size="9">CSI A&#8594;B</text>
+  <path d="M594,232 Q425,280 425,436" stroke="#000" stroke-width="1.4" marker-end="url(#arr)" fill="none"/>
+  <text x="540" y="330" text-anchor="middle" font-size="9" transform="rotate(-25 540 330)">CSI B&#8594;C</text>
+  <path d="M401,448 Q280,400 274,236" stroke="#000" stroke-width="1.4" marker-end="url(#arr)" fill="none"/>
+  <text x="310" y="360" text-anchor="middle" font-size="9" transform="rotate(25 310 360)">CSI C&#8594;A</text>
+
+  <!-- Closure phase equation -->
+  <g transform="translate(250,520)">
+    <rect x="0" y="0" width="350" height="80" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="175" y="22" text-anchor="middle" font-weight="bold">Jennison closure phase (subcarrier k)</text>
+    <text x="175" y="44" text-anchor="middle" font-size="10" fill="#000">&#932;<sub>ABC</sub>[k] = &#966;<sub>A&#8594;B</sub>[k] + &#966;<sub>B&#8594;C</sub>[k] + &#966;<sub>C&#8594;A</sub>[k] (mod 2&#960;)</text>
+    <text x="175" y="64" text-anchor="middle" font-size="9">&#952;<sub>A</sub>, &#952;<sub>B</sub>, &#952;<sub>C</sub> cancel; only loop path length remains</text>
+  </g>
+</svg>

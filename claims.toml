@@ -1,0 +1,26 @@
+# Honest-claims registry (testing.md §7; verified by `cargo xtask claims-verify`).
+#
+# Each claim is one row of the claims table in `docs/README.md` (the **Claims**
+# section) and its ledger metric. `claims-verify` parses both this registry and
+# that table and fails unless their `CLM-<slug>` id sets are a bijection: a
+# claim without a table row is a defect; a table row without a registry entry is
+# orphaned. The three v1 gated bars (evaluation.md §6) are `target` until they
+# are measured on the commit-keyed ledger; none is presented as achieved.
+
+[[claim]]
+id = "CLM-torso-pck20"
+text = "In-domain torso PCK@20 is at or above 65% on single-room pose fixtures."
+metric = "accuracy.torso_pck_at_20"
+status = "target"
+
+[[claim]]
+id = "CLM-presence-f1"
+text = "In-domain presence F1 is at or above 0.90 per zone (macro)."
+metric = "accuracy.presence_f1"
+status = "target"
+
+[[claim]]
+id = "CLM-breathing-mae"
+text = "In-domain breathing MAE is at or below 2 brpm against the respiratory-belt reference."
+metric = "accuracy.breathing.mae_brpm"
+status = "target"

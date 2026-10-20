@@ -17,27 +17,36 @@ use aquila_metrics::{
 };
 use aquila_sensing::{
     calibrate, topology_digest, CalibrationError, CalibrationExpectation, CalibrationInputs,
-    CalibrationRequest, CalibrationStore, HomeWindow, InvalidationReason, Sensing, SensingConfig,
-    Topology,
+    CalibrationRequest, CalibrationStore, DitherSearch, DspPoseModel, HomeWindow,
+    InvalidationReason, Sensing, SensingConfig, Topology,
 };
 use aquila_simulator::{
     Actor, Body, Impairments, Motion, NodeSpec, Rhythm, SceneScript, SimConfig,
 };
 use aquila_sources::{LiveConfig, NodeControl, UdpLiveSource};
 use aquila_types::{
-    Band, CsiEnvelope, Event, FloorId, GroundTruthRecord, MacAddr, NodeId, RoomId, Slug,
+    Band, CsiEnvelope, Event, ZoneId, GroundTruthRecord, MacAddr, NodeId, Slug,
 };
 use aquila_wire::{AckStatus, ControlBody, ControlMessage, JoinAck, SetConfig, SyncEcho, SyncPing};
 
 use crate::{
-    count_mae, floor_count_mae, floor_presence_f1, home_count_mae, home_floor_attribution_accuracy,
-    home_presence_f1, presence_f1, room_attribution_accuracy, topology_for, topology_for_floors,
-    torso_pck20, vitals_mae, vitals_reference, CollectorSink, DeterministicCsiGenerator, FakeClock,
-    Fixture, FloorPlan, RecordingMetricSink, VirtualNode, VirtualNodeConfig,
+    count_mae, home_count_mae, home_floor_attribution_accuracy, home_presence_f1, presence_f1,
+    room_attribution_accuracy, topology_for, topology_for_floors, torso_pck20, vitals_mae,
+    vitals_reference, CollectorSink, DeterministicCsiGenerator, FakeClock, Fixture,
+    RecordingMetricSink, VirtualNode, VirtualNodeConfig, ZonePlan, zone_count_mae,
+    zone_presence_f1,
 };
 
 /// The window hop used to align predictions with ground truth, in milliseconds.
 const HOP_MS: i64 = 1_000;
+
+/// A fixed, non-zero 40-hex build identity for tests.
+///
+/// [`SensingConfig::validate`] refuses an empty or all-zero commit, so every
+/// test that builds a core supplies this real-looking commit rather than the
+/// fabricated zero hash the default used to carry (`sister-issues-core.md`
+/// S15).
+const TEST_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 /// The clock step between replayed frames, in nanoseconds.
 ///
 /// Two nodes share each simulation tick, so a frame advances the clock by half
@@ -56,23 +65,23 @@ fn tracer_scene() -> SceneScript {
         nodes: vec![
             NodeSpec {
                 id: NodeId(1),
-                room: kitchen.clone(),
+                zone: kitchen.clone(),
                 pos_m: [0.0, 0.0, 2.4],
                 skew_ppm: 12.0,
                 noise_scale: 1.0,
             },
             NodeSpec {
                 id: NodeId(2),
-                room: lounge.clone(),
-                pos_m: [0.0, 0.0, 2.4],
+                zone: lounge.clone(),
+                pos_m: [3.0, 0.0, 2.4],
                 skew_ppm: -9.0,
                 noise_scale: 1.0,
             },
         ],
         actors: vec![
             Actor {
-                room: kitchen,
-                position_m: [1.5, 0.0, 0.0],
+                zone: kitchen,
+                position_m: [0.4, 0.0, 2.4],
                 active_from_s: 0.0,
                 active_to_s: 4.0,
                 motion: Motion::Walk {
@@ -90,8 +99,8 @@ fn tracer_scene() -> SceneScript {
                 body: None,
             },
             Actor {
-                room: lounge,
-                position_m: [1.5, 0.0, 0.0],
+                zone: lounge,
+                position_m: [0.4, 0.0, 2.4],
                 active_from_s: 6.0,
                 active_to_s: 12.0,
                 motion: Motion::Walk {
@@ -151,7 +160,7 @@ fn run_tracer() -> TracerRun {
         None,
         None,
         topology_for(&script),
-        SensingConfig::default(),
+        synthetic_config(),
     )
     .expect("valid core");
 
@@ -179,6 +188,23 @@ fn snapshot<T: Clone>(mutex: &Mutex<Vec<T>>) -> Vec<T> {
         .clone()
 }
 
+/// A sensing configuration with an explicitly **declared** synthetic-fixture
+/// presence baseline.
+///
+/// The deterministic generator is not hardware, so a test that needs presence
+/// decisions declares its own baseline instead of leaning on a production
+/// constant (which is now `None`: an uncalibrated core refuses to decide,
+/// `sister-issues-core.md` S9). Every metric scored from these runs is graded
+/// [`Authority::Synthetic`], never hardware (`sister-issues-core.md` S5).
+fn synthetic_config() -> SensingConfig {
+    SensingConfig {
+        presence_motion_threshold: Some(0.04375),
+        presence_motion_scale: 0.013125,
+        measurement: aquila_sensing::MeasurementConfig::with_commit(TEST_COMMIT),
+        ..SensingConfig::default()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Slice 2 — vitals tracer bullet (`roadmap.md`, Slice 2)
 // ---------------------------------------------------------------------------
@@ -198,14 +224,14 @@ fn vitals_scene() -> SceneScript {
         home: Slug("vitals-home".to_string()),
         nodes: vec![NodeSpec {
             id: NodeId(1),
-            room: lounge.clone(),
+            zone: lounge.clone(),
             pos_m: [0.0, 0.0, 2.4],
             skew_ppm: 0.0,
             noise_scale: 1.0,
         }],
         actors: vec![Actor {
-            room: lounge,
-            position_m: [1.5, 0.0, 0.0],
+            zone: lounge,
+            position_m: [0.4, 0.0, 2.4],
             active_from_s: 0.0,
             active_to_s: 90.0,
             motion: Motion::Stationary,
@@ -262,6 +288,9 @@ fn run_vitals_tracer() -> VitalsRun {
     let config = SensingConfig {
         vitals_enabled: true,
         vitals_window_ns: 15_000_000_000,
+        presence_motion_threshold: Some(0.04375),
+        presence_motion_scale: 0.013125,
+        measurement: aquila_sensing::MeasurementConfig::with_commit(TEST_COMMIT),
         ..SensingConfig::default()
     };
 
@@ -313,7 +342,12 @@ fn record_ledger(
         dirty: false,
         host: HostFingerprint::new("aquila-testkit").expect("valid host"),
         tools: ToolVersions::new(),
-        authority: Authority::Replayed,
+        // Every row this helper records is measured against the deterministic
+        // synthetic generator, never hardware, so its provenance is
+        // `Authority::Synthetic` (`evaluation.md` §5, `sister-issues-core.md`
+        // S4, S5). It is an honest synthetic-fixture number, not a real-world
+        // accuracy claim.
+        authority: Authority::Synthetic,
         grade: Grade::Statistical,
         timestamp: Timestamp::from_unix_ms(0),
     };
@@ -528,15 +562,15 @@ fn calibration_empty_scene() -> SceneScript {
         nodes: vec![
             NodeSpec {
                 id: NodeId(1),
-                room: kitchen,
+                zone: kitchen,
                 pos_m: [0.0, 0.0, 2.4],
                 skew_ppm: 12.0,
                 noise_scale: 1.0,
             },
             NodeSpec {
                 id: NodeId(2),
-                room: lounge,
-                pos_m: [0.0, 0.0, 2.4],
+                zone: lounge,
+                pos_m: [3.0, 0.0, 2.4],
                 skew_ppm: -9.0,
                 noise_scale: 1.0,
             },
@@ -555,12 +589,12 @@ fn calibration_empty_scene() -> SceneScript {
 }
 
 /// A walk-through scene: one actor moving in `room` for the whole capture.
-fn calibration_walk_scene(room: &RoomId) -> SceneScript {
+fn calibration_walk_scene(zone: &ZoneId) -> SceneScript {
     let mut scene = calibration_empty_scene();
-    scene.name = format!("calibration-walk-{}", room.as_str());
+    scene.name = format!("calibration-walk-{}", zone.as_str());
     scene.actors = vec![Actor {
-        room: room.clone(),
-        position_m: [1.5, 0.0, 0.0],
+        zone: zone.clone(),
+        position_m: [0.4, 0.0, 2.4],
         active_from_s: 0.0,
         active_to_s: scene.duration_s,
         motion: Motion::Walk {
@@ -612,7 +646,9 @@ fn unique_temp_dir() -> std::path::PathBuf {
 
 #[test]
 fn calibration_tracer_calibrates_persists_and_detects() {
-    let commit = "0".repeat(40);
+    // The artefact is commit-keyed, so this must match the core's commit
+    // (`TEST_COMMIT`); a zero hash is now refused (S15).
+    let commit = TEST_COMMIT.to_string();
     let topology = Topology::load(topology_for(&calibration_empty_scene())).expect("topology");
     let config = SensingConfig::default();
     let request = CalibrationRequest::new(commit.clone(), "cal-run-1", "2026-10-14T00:00:00Z");
@@ -760,6 +796,7 @@ fn calibration_tracer_calibrates_persists_and_detects() {
     let event_handle = collector.handle();
     let cal_config = SensingConfig {
         calibration: Some(reloaded),
+        measurement: aquila_sensing::MeasurementConfig::with_commit(TEST_COMMIT),
         ..SensingConfig::default()
     };
     let mut sensing = Sensing::new(
@@ -898,7 +935,7 @@ fn a_stale_calibration_is_never_silently_reused() {
 }
 
 // ---------------------------------------------------------------------------
-// Slice 4 — multi-node single room: fusion and coarse pose (`roadmap.md`,
+// Slice 4 — multi-node single zone: fusion and coarse pose (`roadmap.md`,
 // Slice 4)
 // ---------------------------------------------------------------------------
 
@@ -914,21 +951,21 @@ fn pose_scene() -> SceneScript {
         nodes: vec![
             NodeSpec {
                 id: NodeId(1),
-                room: study.clone(),
+                zone: study.clone(),
                 pos_m: [0.3, 0.3, 0.0],
                 skew_ppm: 8.0,
                 noise_scale: 1.0,
             },
             NodeSpec {
                 id: NodeId(2),
-                room: study.clone(),
+                zone: study.clone(),
                 pos_m: [0.3, 3.7, 0.0],
                 skew_ppm: -6.0,
                 noise_scale: 1.0,
             },
         ],
         actors: vec![Actor {
-            room: study,
+            zone: study,
             position_m: [2.0, 2.0, 0.0],
             active_from_s: 0.0,
             active_to_s: 12.0,
@@ -965,6 +1002,13 @@ struct PoseRun {
 /// Replay the two-node pose scene through the sensing core with coarse pose
 /// enabled, and collect everything it emits.
 fn run_pose_tracer() -> PoseRun {
+    run_pose_tracer_with(DitherSearch::default())
+}
+
+/// Replay the pose scene with an explicit dither search band. A band that does
+/// not contain the seed-drawn dither frequencies must fail to recover the torso
+/// (`sister-issues-core.md` S4): the estimator is not keyed to the simulator.
+fn run_pose_tracer_with(search: DitherSearch) -> PoseRun {
     let script = pose_scene();
     let sim_config = SimConfig::new(2026, Slug("slice4-pose".to_string()), 0, 0);
     let generator =
@@ -985,15 +1029,27 @@ fn run_pose_tracer() -> PoseRun {
         // deployment supplies per-node calibration quality through the applied
         // artefact, and `q_n = 0` withholds pose (`fusion-sync.md` §2.3).
         pose_uncalibrated_quality: 1.0,
+        pose_dither_search: search,
+        presence_motion_threshold: Some(0.04375),
+        presence_motion_scale: 0.013125,
+        measurement: aquila_sensing::MeasurementConfig::with_commit(TEST_COMMIT),
         ..SensingConfig::default()
     };
+
+    // The core calls the `PoseModel` seam, not the DSP directly (S8); this test
+    // wires the deterministic DSP adapter as the model.
+    let pose_model: Arc<dyn aquila_sensing::PoseModel> = Arc::new(DspPoseModel::new(
+        config.pose_geometry,
+        config.pose_dither_search,
+        config.pose_min_frames,
+    ));
 
     let mut sensing = Sensing::new(
         Box::new(source),
         clock.clone(),
         Box::new(collector),
         Box::new(metrics),
-        None,
+        Some(pose_model),
         None,
         topology_for(&script),
         config,
@@ -1075,7 +1131,7 @@ mean torso span {:.3} m; presence F1={:.3}, events={}, measurements={}",
 /// and `NaN != NaN` under the derived `PartialEq`).
 fn pose_bit_equal(a: &aquila_types::Pose, b: &aquila_types::Pose) -> bool {
     a.subject == b.subject
-        && a.room == b.room
+        && a.zone == b.zone
         && a.t_unix_ms == b.t_unix_ms
         && a.score.to_bits() == b.score.to_bits()
         && a.witness == b.witness
@@ -1128,6 +1184,56 @@ fn pose_rows_are_recorded() {
     }
 }
 
+/// Falsifiability control for S4: the estimator is not keyed to the simulator.
+///
+/// The pose scene draws its scatterer dither frequencies per seed from the
+/// shared band `[2.5, 9.5] Hz`. Replaying the *same* scene while the estimator
+/// searches a band that cannot contain those frequencies must fail to recover
+/// the torso — proving the passing gated test cannot be circular.
+#[test]
+fn pose_search_band_is_not_keyed_to_the_simulator() {
+    let correct = run_pose_tracer();
+    let correct_score = torso_pck20(&correct.poses, &correct.pose_truth, 0.20, 1_000);
+    assert!(
+        correct_score.total > 0 && correct_score.pck >= 0.65,
+        "the correct band must recover the torso: {correct_score:?}"
+    );
+
+    let wrong = run_pose_tracer_with(DitherSearch {
+        lo_hz: 13.0,
+        hi_hz: 14.0,
+        step_hz: 0.125,
+        min_separation_hz: 0.7,
+    });
+    let wrong_score = torso_pck20(&wrong.poses, &wrong.pose_truth, 0.20, 1_000);
+    assert!(
+        wrong_score.total == 0 || wrong_score.pck < 0.65,
+        "a search band outside the simulated dither must not recover the torso; \
+         the estimator is keyed to the simulator (pck={}, total={})",
+        wrong_score.pck,
+        wrong_score.total
+    );
+}
+
+/// S7: the simulator's torso geometry and the estimator's fit geometry are one
+/// declaration, pinned equal so they cannot drift.
+#[test]
+fn simulator_body_matches_the_fit_geometry() {
+    let body = Body::default_torso(0.0);
+    let geometry = aquila_sensing::TorsoGeometry::adult();
+    assert!(
+        (body.shoulder_half_width_m - geometry.shoulder_half_width_m).abs() < 1e-12
+            && (body.hip_half_width_m - geometry.hip_half_width_m).abs() < 1e-12
+            && (body.torso_length_m - geometry.torso_length_m).abs() < 1e-12,
+        "the simulator Body geometry must equal the estimator's TorsoGeometry::adult()"
+    );
+    assert_eq!(
+        aquila_simulator::TORSO_SCATTER_COUNT,
+        aquila_sensing::TORSO_KEYPOINT_SCATTERS,
+        "the torso scatterer count must be one declaration"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Slice 5 — floor aggregation: room → floor (`roadmap.md`, Slice 5)
 // ---------------------------------------------------------------------------
@@ -1140,9 +1246,9 @@ fn floor_scene() -> SceneScript {
     let study: Slug = Slug("study".to_string());
     let kitchen: Slug = Slug("kitchen".to_string());
     let lounge: Slug = Slug("lounge".to_string());
-    let node = |id: u16, room: &Slug, x: f64| NodeSpec {
+    let node = |id: u16, zone: &Slug, x: f64| NodeSpec {
         id: NodeId(id),
-        room: room.clone(),
+        zone: zone.clone(),
         pos_m: [x, 0.0, 2.4],
         skew_ppm: 0.0,
         noise_scale: 1.0,
@@ -1158,31 +1264,39 @@ fn floor_scene() -> SceneScript {
         rate_hz: 0.25,
         phase_rad: 0.0,
     };
-    let actor = |room: &Slug, from: f64, to: f64| Actor {
-        room: room.clone(),
-        position_m: [1.5, 0.0, 0.0],
-        active_from_s: from,
-        active_to_s: to,
-        motion: walk,
-        breathing: Some(breath),
-        heart: None,
-        body: None,
+    let actor = |zone: &Slug, from: f64, to: f64| {
+        let pos = match zone {
+            z if z == &kitchen => [5.4, 0.0, 2.4],
+            z if z == &lounge => [12.4, 0.0, 2.4],
+            z if z == &study => [10.4, 0.0, 2.4],
+            _ => [1.5, 0.0, 2.4],
+        };
+        Actor {
+            zone: zone.clone(),
+            position_m: pos,
+            active_from_s: from,
+            active_to_s: to,
+            motion: walk,
+            breathing: Some(breath),
+            heart: None,
+            body: None,
+        }
     };
     SceneScript {
         name: "slice5-floor".to_string(),
         home: Slug("slice5-home".to_string()),
         nodes: vec![
             node(1, &study, 0.3),
-            node(2, &study, 3.7),
-            node(3, &kitchen, 0.3),
-            node(4, &kitchen, 3.7),
-            node(5, &lounge, 0.3),
-            node(6, &lounge, 3.7),
+            node(2, &study, 0.5),
+            node(3, &kitchen, 5.3),
+            node(4, &kitchen, 5.5),
+            node(5, &lounge, 7.3),
+            node(6, &lounge, 7.5),
         ],
         actors: vec![
-            actor(&study, 0.0, 6.0),
-            actor(&kitchen, 4.0, 10.0),
-            actor(&lounge, 8.0, 14.0),
+            actor(&study, 0.0, 5.0),
+            actor(&kitchen, 5.0, 9.0),
+            actor(&lounge, 9.0, 14.0),
         ],
         band: Band::B2G4,
         channel: 6,
@@ -1196,16 +1310,13 @@ fn floor_scene() -> SceneScript {
     }
 }
 
-/// The floor → rooms grouping of a scene, read from its contract topology
-/// (`topology_for` places every scene room on one "ground" floor).
-fn floor_rooms_for(script: &SceneScript) -> Vec<(FloorId, Vec<RoomId>)> {
+/// The zone → zones grouping of a scene (each zone is its own group).
+fn zone_rooms_for(script: &SceneScript) -> Vec<(ZoneId, Vec<ZoneId>)> {
     let topology = topology_for(script);
-    let mut map: std::collections::BTreeMap<FloorId, Vec<RoomId>> =
+    let mut map: std::collections::BTreeMap<ZoneId, Vec<ZoneId>> =
         std::collections::BTreeMap::new();
-    for room in &topology.rooms {
-        map.entry(room.floor.clone())
-            .or_default()
-            .push(room.id.clone());
+    for zone in &topology.zones {
+        map.entry(zone.id.clone()).or_default().push(zone.id.clone());
     }
     map.into_iter().collect()
 }
@@ -1222,7 +1333,7 @@ const FLOOR_STEP_NS: u64 = 8_333_333;
 struct FloorRun {
     events: Vec<Event>,
     measurements: Vec<Measurement>,
-    floor_history: Vec<aquila_sensing::FloorWindow>,
+    zone_history: Vec<aquila_sensing::ZoneWindow>,
     ground_truth: Vec<GroundTruthRecord>,
 }
 
@@ -1250,7 +1361,7 @@ fn run_floor_tracer() -> FloorRun {
         None,
         None,
         topology_for(&script),
-        SensingConfig::default(),
+        synthetic_config(),
     )
     .expect("valid core");
 
@@ -1265,7 +1376,7 @@ fn run_floor_tracer() -> FloorRun {
     FloorRun {
         events: snapshot(&event_handle),
         measurements: snapshot(&record_handle),
-        floor_history: sensing.floor_history().to_vec(),
+        zone_history: sensing.zone_history().to_vec(),
         ground_truth: fixture.ground_truth,
     }
 }
@@ -1274,12 +1385,12 @@ fn run_floor_tracer() -> FloorRun {
 fn floor_presence_and_count_meet_the_slice5_bars() {
     let script = floor_scene();
     let run = run_floor_tracer();
-    let floor_rooms = floor_rooms_for(&script);
+    let floor_rooms = zone_rooms_for(&script);
 
-    let score = floor_presence_f1(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
-    let (mae, count_n) = floor_count_mae(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
+    let score = zone_presence_f1(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
+    let (mae, count_n) = zone_count_mae(&run.events, &run.ground_truth, &floor_rooms, HOP_MS);
     let (attribution, attribution_n) =
-        room_attribution_accuracy(&run.floor_history, &run.ground_truth, &floor_rooms, HOP_MS);
+        room_attribution_accuracy(&run.zone_history, &run.ground_truth, &floor_rooms, HOP_MS);
 
     eprintln!(
         "slice5 floor: TP={} FP={} FN={} TN={} precision={:.3} recall={:.3} F1={:.3}; \
@@ -1321,9 +1432,9 @@ floor count MAE={:.3} over {} windows; room attribution={:.3} over {} windows; e
     assert_eq!(floor_rooms.len(), 1);
     assert_eq!(floor_rooms[0].1.len(), 3);
     assert!(run
-        .floor_history
+        .zone_history
         .iter()
-        .all(|window| window.floors.len() == 1));
+        .all(|window| window.zones.len() == 1));
 
     // The slice-5 ledger rows; this test is the reproducer.
     let ledger = Mutex::new(Vec::new());
@@ -1362,8 +1473,8 @@ fn floor_replay_is_deterministic() {
     );
     assert_eq!(first.measurements, second.measurements);
     assert_eq!(
-        first.floor_history, second.floor_history,
-        "same scene and seed must produce byte-identical floor summaries"
+        first.zone_history, second.zone_history,
+        "same scene and seed must produce byte-identical zone summaries"
     );
 }
 
@@ -1371,7 +1482,7 @@ fn floor_replay_is_deterministic() {
 fn floor_measurements_are_recorded() {
     let run = run_floor_tracer();
     assert!(
-        !run.floor_history.is_empty(),
+        !run.zone_history.is_empty(),
         "at least one window must summarise the floor"
     );
     assert!(
@@ -1389,7 +1500,7 @@ fn floor_measurements_are_recorded() {
     assert!(
         run.events
             .iter()
-            .any(|e| matches!(&e.scope, aquila_types::EventScope::Floor(_))),
+            .all(|e| matches!(&e.scope, aquila_types::EventScope::Zone(_) | aquila_types::EventScope::Home)),
         "the core must emit at least one floor-scoped event"
     );
     for measurement in &run.measurements {
@@ -1418,13 +1529,13 @@ fn home_scene() -> SceneScript {
     let kitchen: Slug = Slug("kitchen".to_string());
     let lounge: Slug = Slug("lounge".to_string());
     let study: Slug = Slug("study".to_string());
-    let bedroom: Slug = Slug("bedroom".to_string());
+    let bedzone: Slug = Slug("bedroom".to_string());
     let loft: Slug = Slug("loft".to_string());
     let landing: Slug = Slug("landing".to_string());
 
-    let node = |id: u16, room: &Slug, x: f64| NodeSpec {
+    let node = |id: u16, zone: &Slug, x: f64| NodeSpec {
         id: NodeId(id),
-        room: room.clone(),
+        zone: zone.clone(),
         pos_m: [x, 0.0, 2.4],
         skew_ppm: 0.0,
         noise_scale: 1.0,
@@ -1440,15 +1551,25 @@ fn home_scene() -> SceneScript {
         rate_hz: 0.25,
         phase_rad: 0.0,
     };
-    let actor = |room: &Slug, from: f64, to: f64| Actor {
-        room: room.clone(),
-        position_m: [1.5, 0.0, 0.0],
-        active_from_s: from,
-        active_to_s: to,
-        motion: walk,
-        breathing: Some(breath),
-        heart: None,
-        body: None,
+        let actor = |zone: &Slug, from: f64, to: f64| {
+        let pos = match zone {
+            z if z == &kitchen => [0.4, 0.0, 2.4],
+            z if z == &lounge => [5.4, 0.0, 2.4],
+            z if z == &study => [10.4, 0.0, 2.4],
+            z if z == &loft => [15.4, 0.0, 2.4],
+            z if z == &landing => [20.4, 0.0, 2.4],
+            _ => [1.5, 0.0, 2.4],
+        };
+        Actor {
+            zone: zone.clone(),
+            position_m: pos,
+            active_from_s: from,
+            active_to_s: to,
+            motion: walk,
+            breathing: Some(breath),
+            heart: None,
+            body: None,
+        }
     };
 
     SceneScript {
@@ -1461,8 +1582,8 @@ fn home_scene() -> SceneScript {
             node(4, &lounge, 3.7),
             node(5, &study, 0.3),
             node(6, &study, 3.7),
-            node(7, &bedroom, 0.3),
-            node(8, &bedroom, 3.7),
+            node(7, &study, 0.3),
+            node(8, &study, 3.7),
             node(9, &loft, 0.3),
             node(10, &loft, 3.7),
             node(11, &landing, 0.3),
@@ -1485,42 +1606,34 @@ fn home_scene() -> SceneScript {
     }
 }
 
-/// The three-floor plan for [`home_scene`]: ground/first/second, two rooms each.
-fn home_floor_plans() -> Vec<FloorPlan> {
+/// The three-zone plan for [`home_scene`]: ground/first/second, two zones each.
+fn home_zone_plans() -> Vec<ZonePlan> {
     vec![
-        FloorPlan {
+        ZonePlan {
             id: Slug("ground".to_string()),
             name: "Ground".to_string(),
-            level: 0,
-            elevation_m: 0.0,
-            rooms: vec![Slug("kitchen".to_string()), Slug("lounge".to_string())],
+            zones: vec![Slug("kitchen".to_string()), Slug("lounge".to_string())],
         },
-        FloorPlan {
+        ZonePlan {
             id: Slug("first".to_string()),
             name: "First".to_string(),
-            level: 1,
-            elevation_m: 3.0,
-            rooms: vec![Slug("study".to_string()), Slug("bedroom".to_string())],
+            zones: vec![Slug("study".to_string()), Slug("bedroom".to_string())],
         },
-        FloorPlan {
+        ZonePlan {
             id: Slug("second".to_string()),
             name: "Second".to_string(),
-            level: 2,
-            elevation_m: 6.0,
-            rooms: vec![Slug("loft".to_string()), Slug("landing".to_string())],
+            zones: vec![Slug("loft".to_string()), Slug("landing".to_string())],
         },
     ]
 }
 
-/// The floor → rooms grouping of a scene, read from its multi-floor topology.
-fn home_floor_rooms(script: &SceneScript) -> Vec<(FloorId, Vec<RoomId>)> {
-    let topology = topology_for_floors(script, &home_floor_plans());
-    let mut map: std::collections::BTreeMap<FloorId, Vec<RoomId>> =
+/// The zone → zones grouping of a scene, read from its multi-zone topology.
+fn home_zone_rooms(script: &SceneScript) -> Vec<(ZoneId, Vec<ZoneId>)> {
+    let topology = topology_for_floors(script, &home_zone_plans());
+    let mut map: std::collections::BTreeMap<ZoneId, Vec<ZoneId>> =
         std::collections::BTreeMap::new();
-    for room in &topology.rooms {
-        map.entry(room.floor.clone())
-            .or_default()
-            .push(room.id.clone());
+    for zone in &topology.zones {
+        map.entry(zone.id.clone()).or_default().push(zone.id.clone());
     }
     map.into_iter().collect()
 }
@@ -1556,8 +1669,8 @@ fn run_home_tracer() -> HomeRun {
         Box::new(metrics),
         None,
         None,
-        topology_for_floors(&script, &home_floor_plans()),
-        SensingConfig::default(),
+        topology_for_floors(&script, &home_zone_plans()),
+        synthetic_config(),
     )
     .expect("valid core");
 
@@ -1581,7 +1694,7 @@ fn run_home_tracer() -> HomeRun {
 fn whole_home_presence_count_and_attribution_meet_the_slice6_bars() {
     let script = home_scene();
     let run = run_home_tracer();
-    let floor_rooms = home_floor_rooms(&script);
+    let floor_rooms = home_zone_rooms(&script);
 
     let presence = home_presence_f1(&run.events, &run.ground_truth, HOP_MS);
     let (count_mae_home, count_n) = home_count_mae(&run.events, &run.ground_truth, HOP_MS);
@@ -1787,7 +1900,7 @@ fn run_live_tracer() -> LiveRun {
         None,
         None,
         topology_for(&script),
-        SensingConfig::default(),
+        synthetic_config(),
     )
     .expect("valid core");
 
@@ -2019,4 +2132,123 @@ fn node_control_full_round_trip_succeeds() {
         }
         other => panic!("expected SyncEcho, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0005 — the int8 → f32 derivation, end to end
+// ---------------------------------------------------------------------------
+
+/// Prove the whole int8 I/Q path is exercised: a simulator frame is quantised
+/// to raw signed int8, framed on the `AQCI` wire, decoded, and then the core
+/// derives the complex bins — the derivation the firmware used to do on-node.
+#[test]
+fn int8_iq_derivation_is_exercised_end_to_end() {
+    use aquila_simulator::SimulatorSource;
+    use aquila_sources::{CsiSource, FrameOrEnd};
+    use aquila_wire::{decode_datagram, encode_datagram};
+
+    let script = tracer_scene();
+    let sim_config = SimConfig::new(2026, Slug("iq-derivation".to_string()), 0, 0);
+    let mut source = SimulatorSource::new(script, sim_config).expect("simulator");
+    let frame = match source.recv().expect("recv") {
+        FrameOrEnd::Frame(envelope) => envelope.frame,
+        FrameOrEnd::End => panic!("the scene must yield at least one frame"),
+    };
+
+    // The frame carries the raw sample verbatim: whole I/Q pairs, every count a
+    // legal int8, and a non-trivial spread of levels.
+    frame.validate().expect("valid frame");
+    assert_eq!(frame.i_q.len(), 2 * frame.n_subcarriers());
+    assert!(!frame.i_q.is_empty());
+    let distinct: std::collections::BTreeSet<i8> = frame.i_q.iter().copied().collect();
+    assert!(
+        distinct.len() > 8,
+        "the int8 path must be genuinely exercised, got {} levels",
+        distinct.len()
+    );
+
+    // Simulator -> wire -> decode: the raw counts survive the codec unchanged.
+    let bytes = encode_datagram(&frame);
+    let decoded = decode_datagram(&bytes).expect("decode");
+    assert_eq!(decoded, frame);
+
+    // Decode: the core derives the complex bins from the int8 sample.
+    let complex = aquila_signal::decode_csi(&decoded).expect("decode_csi");
+    assert_eq!(complex.bins.len(), decoded.n_subcarriers());
+    let full_scale = aquila_types::IQ_COUNTS_PER_UNIT;
+    for k in 0..decoded.n_subcarriers() {
+        // Imaginary-first: the first byte of each pair is Q, the second is I.
+        let q = f32::from(decoded.i_q[2 * k]) / full_scale;
+        let i = f32::from(decoded.i_q[2 * k + 1]) / full_scale;
+        assert!((complex.bins[k].re - i).abs() < 1e-6);
+        assert!((complex.bins[k].im - q).abs() < 1e-6);
+    }
+
+    // The derived amplitude and phase are the magnitude and argument of the
+    // same int8 sample; nothing was stored on the node.
+    let amplitude = decoded.amplitude();
+    let phase = decoded.phase();
+    for k in 0..decoded.n_subcarriers() {
+        let q = f32::from(decoded.i_q[2 * k]) / full_scale;
+        let i = f32::from(decoded.i_q[2 * k + 1]) / full_scale;
+        assert!((amplitude[k] - (i * i + q * q).sqrt()).abs() < 1e-6);
+        assert!((phase[k] - q.atan2(i)).abs() < 1e-6);
+    }
+}
+
+/// The I/Q order is imaginary-first: a known complex sample survives the wire
+/// and decodes to a [`ComplexFrame`](aquila_signal::ComplexFrame) whose phase
+/// **sign** is the one the sample encodes.
+///
+/// The sample is I = +64, Q = −64 (phase −π/4). Stored imaginary-first it is the
+/// two bytes `[Q, I] = [−64, +64]`. If the codec or the decoder assumed
+/// real-first, the same bytes would decode as I = −64, Q = +64, a phase of
+/// +3π/4, so asserting the sign of the phase fails loudly on an order swap.
+#[test]
+fn phase_sign_is_imaginary_first_end_to_end() {
+    use aquila_types::{CsiFrame, PhyFlags};
+    use aquila_wire::{decode_datagram, encode_datagram};
+
+    let frame = CsiFrame {
+        node_id: NodeId(1),
+        boot_epoch: 3,
+        sequence: 0,
+        device_time_us: 0,
+        band: Band::B2G4,
+        channel: 6,
+        bandwidth_mhz: 20,
+        subcarrier_offset: 0,
+        // Imaginary-first interleaved sample: [Q0, I0].
+        i_q: vec![-64, 64],
+        rssi_dbm: -40,
+        noise_floor_dbm: -90,
+        phy: PhyFlags(PhyFlags::HT),
+        first_word_invalid: false,
+    };
+    frame.validate().expect("valid frame");
+
+    // The full round trip: raw sample → AQCI wire → contract frame → core bins.
+    let decoded = decode_datagram(&encode_datagram(&frame)).expect("wire round trip");
+    assert_eq!(
+        decoded, frame,
+        "the raw sample must survive the wire verbatim"
+    );
+
+    let complex = aquila_signal::decode_csi(&decoded).expect("decode_csi");
+    assert_eq!(complex.bins.len(), 1);
+    let full_scale = aquila_types::IQ_COUNTS_PER_UNIT;
+    assert!((complex.bins[0].re - 64.0 / full_scale).abs() < 1e-6);
+    assert!((complex.bins[0].im - (-64.0 / full_scale)).abs() < 1e-6);
+
+    let phase = decoded.phase();
+    assert!(
+        phase[0] < 0.0,
+        "imaginary-first I=+64, Q=−64 must have a negative phase, got {}",
+        phase[0]
+    );
+    assert!(
+        (phase[0] - (-core::f32::consts::FRAC_PI_4)).abs() < 1e-6,
+        "expected −π/4, got {}",
+        phase[0]
+    );
 }

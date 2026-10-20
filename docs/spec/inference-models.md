@@ -35,10 +35,9 @@ including licence handling.
 
 ### 0.1 The L0 contract crate
 
-ADR-0001 names the L0 vocabulary crate **`aquila-types`**; `data-contracts.md`
-§0.2 names it **`aquila-contracts`**. This is a genuine cross-doc discrepancy
-(flag, §8.1). Below, "the L0 crate" means whichever name is settled; the contract
-*types* are exactly those in `data-contracts.md`.
+The L0 vocabulary crate is **`aquila-types`** (ADR-0003 §2); the earlier
+`aquila-contracts` spelling is superseded. The contract *types* are exactly those
+in `data-contracts.md`. Below, "the L0 crate" means `aquila-types`.
 
 ## 1. The `PoseModel` / `VitalsModel` seam
 
@@ -154,7 +153,10 @@ Notes:
 
 The `FeatureVector` layout is owned by `aquila-signal` (`architecture.md` §3,
 `signal.md`); the ONNX tensor mapping is **internal to `aquila-inference`**. Both
-are pinned in the model card. Named dimensions:
+are pinned in the model card. Named dimensions — **provisional**: `T`, `S`, `L`
+and `F` depend on the firmware CSI rate and channel width and are confirmed
+against the ESP32-S3 capture path before freezing (§8.2 item 3), so treat this
+table as a working target, not a frozen contract:
 
 | Symbol | Meaning | v1 default |
 | --- | --- | --- |
@@ -499,8 +501,8 @@ model that fails to load does not abort unrelated subsystems; it reports
 - The Python side emits the same fixtures and PyTorch reference outputs; the
   parity gate (§2.4) compares them.
 - Everything is keyed by **code commit**, per the brief's commit-keyed ledger,
-  which `aquila-metrics` owns behind `MetricSink` (`LedgerMetricSink` for the
-  persistent ledger, `InMemoryMetricSink`/`RecordingMetricSink` for tests).
+  which `aquila-metrics` owns behind `MetricSink` (`JsonLedgerSink` for the
+  persistent ledger, `InMemoryMetricSink` for tests).
 - This matches `measurement.md`: `MetricKind` is deterministic/statistical/gated;
   no CI gating in v1 — the ledger records and diffs.
 - Gated metrics (presence F1, breathing MAE, torso-PCK@20) are computed only where
@@ -555,9 +557,9 @@ Nuances that must be honoured:
 
 ### 8.1 Flags
 
-1. **L0 crate name.** ADR-0001 says `aquila-types`; `data-contracts.md` §0.2 says
-   `aquila-contracts`. Resolve before any crate is created (conflicts with
-   ADR-0001 as written).
+1. **L0 crate name — resolved.** The L0 crate is `aquila-types` (ADR-0003 §2);
+   `data-contracts.md` §0.2's earlier `aquila-contracts` spelling is superseded.
+   No action remains.
 2. **Seam output shape.** `data-contracts.md` §1 maps `PoseModel`/`VitalsModel` →
    `Pose`/`VitalsReading`. This spec returns `PoseOutcome` (pose + presence/count
    heads) so the shared trunk is one call. Recommend `data-contracts.md` adopt

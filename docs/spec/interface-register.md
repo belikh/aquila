@@ -20,7 +20,7 @@ These types are declared exactly once. A second declaration anywhere is a defect
 
 | Concept | One canonical declaration | Relationship |
 | --- | --- | --- |
-| CSI frame | `aquila_types::CsiFrame` | The on-air/on-disk contract frame (`amplitude`/`phase` arrays, `data-contracts.md` §2). |
+| CSI frame | `aquila_types::CsiFrame` | The on-air/on-disk contract frame (raw signed int8 I/Q sample `i_q`, interleaved **imaginary-first** `[Q0, I0, …]`; `first_word_invalid` flags an unreliable leading complex sample; `data-contracts.md` §2, ADR-0006; amplitude/phase are derived). |
 | CSI conditioning frame | `aquila_signal::ComplexFrame` | `aquila-signal`'s **internal** decode representation (per-subcarrier `Complex32` bins), produced from the contract frame by `aquila_signal::decode_csi`. It is not a contract type and never crosses a crate boundary as a serialised shape. |
 | Feature vector | `aquila_types::FeatureVector` | The packed model-input carrier; constructed by `aquila-signal` (`NodeFeatures::feature_vector`) and re-exported by `aquila-inference`. |
 | SHA-256 | `aquila_types::sha256` / `to_hex` | The workspace's one hash; every crate calls it rather than carrying its own. |
@@ -42,7 +42,7 @@ These types are declared exactly once. A second declaration anywhere is a defect
 | `aquila-sensing` | 5 | L3 core | The single stateful core: time, calibration, windows, fusion, escalation. | `Sensing::new/step/calibrate/sink`; owns the `Clock` and `Sink` seams; internal `time`/`calibration`/`window`/`fusion`/`escalation` modules. | `aquila-types`, `aquila-geometry`, `aquila-signal`, `aquila-sources`, `aquila-inference`, `aquila-metrics` | `architecture.md` §4, `geometry-calibration.md`, `fusion-sync.md` |
 | `aquila-evaluation` | 6 | L4 edges | The `GroundTruth` seam, replay/sim harness, and scoring. | `GroundTruth::label/coverage/kind/provenance`; `Harness::run`; `CollectorSink`. | `aquila-types`, `aquila-sources`, `aquila-sensing`, `aquila-metrics`, `aquila-simulator` | `evaluation.md` |
 | `aquila-ha` | 6 | L4 edges | Map observations to Home Assistant entities; transports nothing. | `HaSink: Sink`; `EntityModel`. | `aquila-types`, `aquila-geometry`, `aquila-sensing` | `home-assistant.md` |
-| `aquila-api` | 7 | L4 edges | The private loopback HTTP+WS control plane and node-command relay. | `Server::bind/handle`; `Handle::publish`; `ChannelSink`. | `aquila-types`, `aquila-geometry`, `aquila-sensing`, `aquila-sources`, `aquila-ha` | `core-api.md` |
+| `aquila-api` | 7 | L4 edges | The private loopback HTTP+WS control plane, node-command relay and core OTA manager/signed image store. | `Server::bind/handle`; `Handle::publish`; `ChannelSink`; `FirmwareStore`; `OtaManager`. | `aquila-types`, `aquila-wire`, `aquila-geometry`, `aquila-metrics`, `aquila-sensing`, `aquila-sources`, `aquila-ha` | `core-api.md`, `firmware-ota.md` |
 | `aquila-dashboard` | 8 | L5 end adapters | Rust→WASM management UI served via sidebar ingress. | WASM entry point; Leptos SPA; client of `aquila-api`. | `aquila-types`, `aquila-api` | `dashboard.md` |
 
 ## Composition root and tooling (unlayered, exempt)
@@ -52,7 +52,7 @@ These types are declared exactly once. A second declaration anywhere is a defect
 | `aquila-addon` | binary | Composition root: wires adapters, serves dashboard + ingress; no domain logic. | any module crate | `architecture.md` §9, `home-assistant.md` §3 |
 | `aquila-capture` | binary (dev) | `record`/`synth`/`verify`/`provision` a Session; regenerates `node_wire.h`. | `aquila-types`, `aquila-session`, `aquila-sources`, `aquila-simulator`, `aquila-wire` | `capture-and-firmware.md` §8.3, §9.4 |
 | `aquila-testkit` | lib (dev-only) | Fakes, in-memory adapters, a deterministic generator, a virtual live node, fixtures. | any module crate, via `[dev-dependencies]` only | `testing.md` §3 |
-| `xtask` | binary (tooling) | `dag-check`, `check-scaffolding`, coverage/claims/ledger helpers. | any crate; never a product dependency | `repository-tooling.md` §5 |
+| `xtask` | binary (tooling) | `dag-check`, `check-scaffolding`, `coverage-floor`, `claims-verify`. | any crate; never a product dependency | `repository-tooling.md` §5 |
 
 ## Seams and their adapters
 
@@ -78,8 +78,7 @@ protocol in the same crate with the same adapters (ADR-0001 §3).
 | Node control plane (core ↔ node) | UDP request/response | `9101/udp` | core | `capture-and-firmware.md` §6 |
 | Private HTTP + WebSocket + HA ingress | HTTP/1.1 (+ WS, RFC 6455), loopback/ingress only | `8099/tcp` | add-on | `core-api.md`, `home-assistant.md` §3.1 |
 
-`6969/udp` (`home-assistant.md`), `8765` (`core-api.md` §2) and `8080`
-(`dashboard.md`) are superseded by this register (ADR-0003 §7–8).
+`6969/udp`, `8765` and `8080` are superseded by this register (ADR-0003 §7–8).
 
 ## Firmware OTA
 
@@ -109,8 +108,9 @@ aquila-sensing    -> aquila-types, aquila-geometry, aquila-signal,
 aquila-evaluation -> aquila-types, aquila-sources, aquila-sensing,
                      aquila-metrics, aquila-simulator
 aquila-ha         -> aquila-types, aquila-geometry, aquila-sensing
-aquila-api        -> aquila-types, aquila-geometry, aquila-sensing,
-                     aquila-sources, aquila-ha
+aquila-api        -> aquila-types, aquila-wire, aquila-geometry,
+                     aquila-metrics, aquila-sensing, aquila-sources,
+                     aquila-ha
 aquila-dashboard  -> aquila-types, aquila-api
 ```
 

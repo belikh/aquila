@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{require_finite_f32, require_non_empty, require_unit_interval, ValidationError};
-use crate::ids::{FloorId, HomeId, NodeId, RoomId};
+use crate::ids::{HomeId, NodeId, ZoneId};
 use crate::primitives::Witness;
 use crate::time::TimeSpan;
 
@@ -31,14 +31,15 @@ pub enum DetectionKind {
     Unknown = 255,
 }
 
-/// The scope of a detection: the home, or a room (a zone in v1).
+/// The scope of a detection: the home, or a zone (a virtual detection region).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DetectionScope {
     /// The whole home.
     Home(HomeId),
-    /// A room, which is the zone in v1.
-    Room(RoomId),
+    /// A zone, for example "bed" inside the bedroom or "shower" inside the
+    /// bathroom. A zone may span rooms or be coextensive with one.
+    Zone(ZoneId),
 }
 
 impl DetectionScope {
@@ -46,7 +47,7 @@ impl DetectionScope {
     pub fn validate(&self) -> Result<(), ValidationError> {
         match self {
             DetectionScope::Home(id) => id.validate(),
-            DetectionScope::Room(id) => id.validate(),
+            DetectionScope::Zone(id) => id.validate(),
         }
     }
 }
@@ -60,7 +61,7 @@ pub enum DetectionValue {
     /// A people count.
     Count(u8),
     /// Per-zone people counts, for an occupancy detection.
-    Occupancy(Vec<(RoomId, u8)>),
+    Occupancy(Vec<(ZoneId, u8)>),
 }
 
 /// A stateless inference for a zone or the home over a span.
@@ -102,7 +103,7 @@ impl Detection {
         }
 
         match (&self.kind, &self.value, &self.scope) {
-            (DetectionKind::Presence, DetectionValue::Probability(p), DetectionScope::Room(_)) => {
+            (DetectionKind::Presence, DetectionValue::Probability(p), DetectionScope::Zone(_)) => {
                 require_unit_interval("DetectionValue::Probability", *p)
             }
             (DetectionKind::Count, DetectionValue::Count(n), _) => {
@@ -115,7 +116,11 @@ impl Detection {
                     })
                 }
             }
-            (DetectionKind::Occupancy, DetectionValue::Occupancy(by_zone), DetectionScope::Home(_)) => {
+            (
+                DetectionKind::Occupancy,
+                DetectionValue::Occupancy(by_zone),
+                DetectionScope::Home(_),
+            ) => {
                 for (room, count) in by_zone {
                     room.validate()?;
                     if *count > MAX_COUNT_V1 {
@@ -169,10 +174,8 @@ pub enum EventKind {
 pub enum EventScope {
     /// The whole home.
     Home,
-    /// A floor.
-    Floor(FloorId),
-    /// A room.
-    Room(RoomId),
+    /// A zone (a virtual detection region).
+    Zone(ZoneId),
 }
 
 impl EventScope {
@@ -180,8 +183,7 @@ impl EventScope {
     pub fn validate(&self) -> Result<(), ValidationError> {
         match self {
             EventScope::Home => Ok(()),
-            EventScope::Floor(id) => id.validate(),
-            EventScope::Room(id) => id.validate(),
+            EventScope::Zone(id) => id.validate(),
         }
     }
 }
@@ -205,7 +207,7 @@ pub enum EventPayload {
     /// An occupancy change, per zone.
     Occupancy {
         /// The per-zone people counts.
-        by_zone: Vec<(RoomId, u8)>,
+        by_zone: Vec<(ZoneId, u8)>,
     },
     /// A vitals alert.
     Vitals {
@@ -250,8 +252,8 @@ impl EventPayload {
                 }
             }
             EventPayload::Occupancy { by_zone } => {
-                for (room, count) in by_zone {
-                    room.validate()?;
+                for (zone, count) in by_zone {
+                    zone.validate()?;
                     if *count > MAX_COUNT_V1 {
                         return Err(ValidationError::Range {
                             field: "EventPayload::Occupancy",
@@ -261,7 +263,11 @@ impl EventPayload {
                 }
                 Ok(())
             }
-            EventPayload::Vitals { metric, value, unit } => {
+            EventPayload::Vitals {
+                metric,
+                value,
+                unit,
+            } => {
                 require_non_empty("EventPayload::Vitals.metric", metric)?;
                 require_non_empty("EventPayload::Vitals.unit", unit)?;
                 require_finite_f32("EventPayload::Vitals.value", *value)

@@ -24,14 +24,14 @@ this spec uses. Numbers and external claims cite `../reference/sources.json`.
 | `repository-tooling.md` | Monorepo layout, toolchain, CI, guardrail checks. |
 | `interface-register.md` | The canonical crate/interface register: crate list, layers, seams, ports and the authoritative dependency edges (settled by ADR-0003). |
 | `testing.md` | Test tiers, `aquila-testkit`, fixtures, the honest-claims contract. |
-| `roadmap.md` | Nine tracer-bullet slices and the v1 exit criteria. |
+| `roadmap.md` | Ten tracer-bullet slices (1–10) and the v1 exit criteria. |
 | `risks.md` | Risk register and the open questions the tickets must resolve. |
 
 ## Resolved
 
 The five divergences formerly recorded here — the crate graph, the node
-data/control ports, `aquila-types` vs `aquila-contracts`, the source-seam name,
-and the `sensing frame` definition — are **resolved** by
+data/control ports, `aquila-types` vs the superseded `aquila-contracts`, the
+source-seam name, and the `sensing frame` definition — are **resolved** by
 `../adr/0003-interface-reconciliation.md`. The canonical crate list, seams,
 dependency edges, ports and contract version are registered in
 `interface-register.md`; `tools/dag.toml` enforces the graph via

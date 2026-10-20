@@ -83,11 +83,6 @@ impl<'a> Reader<'a> {
         Ok(u64::from_le_bytes(self.array::<8>()?))
     }
 
-    /// Read a little-endian IEEE-754 `f32`, preserving the exact bit pattern.
-    pub(crate) fn f32(&mut self) -> Result<f32, WireError> {
-        Ok(f32::from_le_bytes(self.array::<4>()?))
-    }
-
     /// Read a one-byte-length-prefixed UTF-8 string.
     pub(crate) fn string_u8(&mut self) -> Result<String, WireError> {
         let len = self.u8()? as usize;
@@ -137,11 +132,6 @@ impl Writer {
 
     /// Append a little-endian `u64`.
     pub(crate) fn u64(&mut self, value: u64) {
-        self.buf.extend_from_slice(&value.to_le_bytes());
-    }
-
-    /// Append a little-endian IEEE-754 `f32`.
-    pub(crate) fn f32(&mut self, value: f32) {
         self.buf.extend_from_slice(&value.to_le_bytes());
     }
 

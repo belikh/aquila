@@ -75,7 +75,11 @@ pub struct Violation {
 
 impl std::fmt::Display for Violation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DAG violation: {} -> {}\n  {}", self.from, self.to, self.detail)
+        write!(
+            f,
+            "DAG violation: {} -> {}\n  {}",
+            self.from, self.to, self.detail
+        )
     }
 }
 
@@ -97,6 +101,25 @@ pub fn evaluate(dag: &Dag, members: &[Member]) -> Result<Report, Vec<Violation>>
     let names: BTreeSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
     let mut violations = Vec::new();
     let mut edge_count = 0usize;
+
+    // Rule 0: every registered name is a real member. Without this, a crate can
+    // be named in the register and the DAG while absent from the workspace
+    // (`sister-issues-specs.md` D42/D52).
+    let mut registered: BTreeSet<&str> = BTreeSet::new();
+    registered.extend(dag.levels.keys().map(String::as_str));
+    registered.extend(dag.exempt.keys().map(String::as_str));
+    for name in &registered {
+        if !names.contains(*name) {
+            violations.push(Violation {
+                from: (*name).to_string(),
+                to: String::new(),
+                detail: format!(
+                    "`{name}` is registered in tools/dag.toml but is not a workspace member; \
+                     scaffold it or strike it (sister-issues-specs.md D42/D52)"
+                ),
+            });
+        }
+    }
 
     for member in members {
         if !dag.registered(&member.name) {
@@ -461,8 +484,10 @@ rev = 1
     #[test]
     fn a_cycle_fails() {
         let mut d = dag();
-        d.edges
-            .insert("aquila-types".to_string(), vec!["aquila-sensing".to_string()]);
+        d.edges.insert(
+            "aquila-types".to_string(),
+            vec!["aquila-sensing".to_string()],
+        );
         let members = vec![
             member("aquila-types", &[("aquila-sensing", DepKind::Normal)]),
             member("aquila-sensing", &[("aquila-types", DepKind::Normal)]),

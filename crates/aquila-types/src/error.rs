@@ -88,10 +88,7 @@ pub(crate) fn require_unit_interval(
 ///
 /// Used where the contract permits `NaN` to mean "no estimate" but never
 /// permits an infinity.
-pub(crate) fn require_not_infinite(
-    field: &'static str,
-    value: f32,
-) -> Result<(), ValidationError> {
+pub(crate) fn require_not_infinite(field: &'static str, value: f32) -> Result<(), ValidationError> {
     if value.is_infinite() {
         Err(ValidationError::NonFinite { field })
     } else {

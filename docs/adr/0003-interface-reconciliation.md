@@ -1,7 +1,7 @@
 # ADR-0003: Interface reconciliation — one crate graph, one port pair
 
 - Date: 2026-10-13
-- Status: Proposed
+- Status: Accepted
 - Deciders: Aquila design session
 - Related: `docs/spec/README.md` (Known divergences), `docs/adr/0001-module-architecture.md`,
   `docs/adr/0002-toolchain-and-repo.md`, `docs/spec/interface-register.md`

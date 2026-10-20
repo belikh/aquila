@@ -7,10 +7,10 @@
 
 /// The CSI data-plane magic, ASCII `AQCI` (`41 51 43 49`).
 ///
-/// `capture-and-firmware.md` §5.1 and the interface register name this plane
-/// `AQCI`. `data-contracts.md` §9.1 spells the same canonical body `AQCS`; this
-/// codec follows the task and §5 and uses `AQCI` for the data plane. See the
-/// crate-level *Layout decision* note.
+/// `capture-and-firmware.md` §5.1, the interface register and
+/// `data-contracts.md` §9.1 all name the single canonical data-plane body
+/// `AQCI`; there is no second spelling. See the crate-level *Layout decision*
+/// note.
 pub const CSI_MAGIC: [u8; 4] = *b"AQCI";
 
 /// The node control-plane magic, ASCII `AQCC` (`41 51 43 43`).
@@ -29,13 +29,23 @@ pub const CONTROL_VERSION: u8 = WIRE_MAJOR;
 /// The only CSI message type: a `CsiFrame`.
 pub const CSI_MESSAGE_TYPE: u8 = 1;
 
-/// The only subcarrier format: interleaved `f32` amplitude then `f32` phase.
-pub const SUBCARRIER_FORMAT_F32: u8 = 0;
+/// The only subcarrier format: interleaved signed int8 `Q, I` pairs
+/// (imaginary first), two bytes per subcarrier.
+///
+/// Carrying the raw int8 sample verbatim is ADR-0005; the imaginary-first byte
+/// order (`[Q0, I0, Q1, I1, …]`) is ADR-0006.
+pub const SUBCARRIER_FORMAT_INT8_IQ: u8 = 1;
+
+/// The CSI header flags byte's bit 0: the leading `I/Q` pair is unreliable.
+///
+/// The node nulls the first complex sample (two bytes) when it sets this; the
+/// core repeats the nulling and records the flag when decoding.
+pub const CSI_FLAG_FIRST_WORD_INVALID: u8 = 0x01;
 
 /// The fixed CSI header length in bytes.
 pub const CSI_HEADER_LEN: usize = 16;
 
-/// The fixed part of the CSI body, before the `f32` arrays, in bytes.
+/// The fixed part of the CSI body, before the `int8` I/Q payload, in bytes.
 pub const CSI_BODY_FIXED_LEN: usize = 28;
 
 /// The default CSI data-plane UDP port (node → core).
@@ -50,14 +60,22 @@ pub const MAX_DATAGRAM_LEN: usize = 1472;
 
 /// The largest supported subcarrier count.
 ///
-/// Derived from [`MAX_DATAGRAM_LEN`]: with `f32` amplitude plus `f32` phase
-/// (8 bytes per subcarrier) the body budget is
-/// `(1472 - 16 - 28) / 8 = 178`.
+/// Derived from [`MAX_DATAGRAM_LEN`]: with interleaved signed int8 `Q, I`
+/// (imaginary first, 2 bytes per subcarrier) the body budget is
+/// `(1472 - 16 - 28) / 2 = 714`.
 pub const MAX_SUBCARRIERS: u16 =
-    ((MAX_DATAGRAM_LEN - CSI_HEADER_LEN - CSI_BODY_FIXED_LEN) / 8) as u16;
+    ((MAX_DATAGRAM_LEN - CSI_HEADER_LEN - CSI_BODY_FIXED_LEN) / 2) as u16;
 
 /// The fixed control header length in bytes.
 pub const CONTROL_HEADER_LEN: usize = 12;
+
+/// The length of the AQCC control-plane authentication trailer in bytes.
+///
+/// An authenticated control message is the `AQCC` header and body followed by
+/// this HMAC-SHA256 tag, keyed by the per-node pairing token
+/// (`capture-and-firmware.md` §6.3). The plain framing is unchanged when the
+/// trailer is absent, so the tag is purely additive.
+pub const CONTROL_AUTH_LEN: usize = 32;
 
 /// The maximum length of a length-prefixed control string (a one-byte prefix).
 pub const MAX_CONTROL_STRING: usize = u8::MAX as usize;
@@ -65,9 +83,27 @@ pub const MAX_CONTROL_STRING: usize = u8::MAX as usize;
 /// The maximum number of source MACs in a config allow-list (a one-byte count).
 pub const MAX_SOURCE_MACS: usize = u8::MAX as usize;
 
-/// The control opcodes of `capture-and-firmware.md` §6.2.
+/// The default firmware-OTA chunk payload in bytes (`firmware-ota.md` §5).
+pub const OTA_DEFAULT_CHUNK_SIZE: u16 = 1024;
+
+/// The default firmware-OTA sliding-window depth (`firmware-ota.md` §5).
+pub const OTA_DEFAULT_WINDOW: u8 = 8;
+
+/// The largest firmware-OTA chunk payload the control datagram can carry.
 ///
-/// Each discriminant is the on-wire opcode byte.
+/// The OTA body is `offset(4) + len(2) + crc32(4) + bytes` inside the fixed
+/// 12-byte control header and the 32-byte auth trailer, so a chunk must fit
+/// within [`MAX_DATAGRAM_LEN`].
+pub const OTA_MAX_CHUNK_SIZE: u16 =
+    (MAX_DATAGRAM_LEN - CONTROL_HEADER_LEN - 10 - CONTROL_AUTH_LEN) as u16;
+
+/// The control opcodes of `capture-and-firmware.md` §6.2, including the
+/// firmware-OTA extension `0x0E`–`0x14` of `firmware-ota.md` §5.
+///
+/// Each discriminant is the on-wire opcode byte. Ticket #13 adds the OTA
+/// opcodes to the codec; the *firmware* agent that honours them is ticket #14,
+/// so the codec defines the wire contract the core now speaks and a future node
+/// will parse (one layout, two languages).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Opcode {
@@ -97,6 +133,20 @@ pub enum Opcode {
     FactoryReset = 0x0C,
     /// `0x0D` node → core: a noteworthy unsolicited event.
     Event = 0x0D,
+    /// `0x0E` core → node: start a firmware transfer (`firmware-ota.md` §5).
+    OtaBegin = 0x0E,
+    /// `0x0F` core → node: one image chunk.
+    OtaChunk = 0x0F,
+    /// `0x10` node → core: cumulative chunk acknowledgement.
+    OtaAck = 0x10,
+    /// `0x11` node → core: OTA progress/state.
+    OtaStatus = 0x11,
+    /// `0x12` core → node: finalise, verify and activate.
+    OtaEnd = 0x12,
+    /// `0x13` both: discard the transfer.
+    OtaAbort = 0x13,
+    /// `0x14` node → core: OTA outcome.
+    OtaResult = 0x14,
 }
 
 impl Opcode {
@@ -123,6 +173,13 @@ impl Opcode {
             0x0B => Some(Self::Identify),
             0x0C => Some(Self::FactoryReset),
             0x0D => Some(Self::Event),
+            0x0E => Some(Self::OtaBegin),
+            0x0F => Some(Self::OtaChunk),
+            0x10 => Some(Self::OtaAck),
+            0x11 => Some(Self::OtaStatus),
+            0x12 => Some(Self::OtaEnd),
+            0x13 => Some(Self::OtaAbort),
+            0x14 => Some(Self::OtaResult),
             _ => None,
         }
     }
@@ -150,8 +207,8 @@ pub(crate) mod csi_offset {
     pub(crate) const CHANNEL: usize = 13;
     /// Bandwidth in MHz (`u8`).
     pub(crate) const BANDWIDTH_MHZ: usize = 14;
-    /// Reserved, zero (`u8`).
-    pub(crate) const RESERVED: usize = 15;
+    /// Flags byte (`u8`): bit 0 is [`super::CSI_FLAG_FIRST_WORD_INVALID`].
+    pub(crate) const FLAGS: usize = 15;
 }
 
 /// Byte offsets within the fixed part of the CSI body.
@@ -174,8 +231,8 @@ pub(crate) mod csi_body_offset {
     pub(crate) const PHY_FLAGS: usize = 24;
     /// Reserved, zero (`u16`).
     pub(crate) const RESERVED: usize = 26;
-    /// The first `f32` amplitude word.
-    pub(crate) const AMPLITUDE: usize = 28;
+    /// The first interleaved signed int8 byte: `Q` (imaginary first), then `I`.
+    pub(crate) const IQ: usize = 28;
 }
 
 /// Byte offsets within the fixed 12-byte control header

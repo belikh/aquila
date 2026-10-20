@@ -76,13 +76,13 @@ API contract has a single source of truth.
 
 | Crate | Role | May depend on |
 | --- | --- | --- |
-| `aquila-dashboard` | Leptos SPA; HTTP+WS client; UI | `aquila-types` |
+| `aquila-dashboard` | Leptos SPA; HTTP client (v1 polls); UI | `aquila-types`, `aquila-api` |
 | `aquila-types` | API and stream types; leaf | — |
-| `aquila-core` | Sensing core; private HTTP+WS server | `aquila-types` |
+| `aquila-api` | Private HTTP+WS control plane; server | `aquila-types`, `aquila-geometry`, `aquila-sensing`, `aquila-sources`, `aquila-ha` |
 
-Enforced DAG: `dashboard → types ← core`. Workspace checks
-(`cargo-deny` and a dependency-DAG check) reject any edge from
-`aquila-dashboard` into `aquila-core`.
+Enforced DAG: `dashboard → api → types`. Workspace checks (`cargo-deny` and a
+dependency-DAG check) reject any edge from `aquila-dashboard` into the sensing
+core (`aquila-sensing`).
 
 ### Test seam
 
@@ -93,19 +93,20 @@ recorded fixtures, matching the project's fake-adapter pattern:
 /// Client seam for the core's private control plane.
 trait CoreApi {
     async fn get_home(&self) -> Result<HomeTree, ApiError>;
+    async fn get_state(&self) -> Result<Snapshot, ApiError>;
     async fn patch_room(&self, id: RoomId, patch: RoomPatch) -> Result<Room, ApiError>;
-    fn subscribe(&self, topics: &[Topic]) -> EventStream; // WS, decoupled
     // ...
 }
 ```
 
-`HttpCoreApi` is the real implementation (HTTP fetch + WS transport);
-`FakeCoreApi` serves recorded fixtures with a scripted `EventStream`.
-Components and flows are written against the trait.
+`HttpCoreApi` is the real implementation (HTTP fetch + poll scheduler);
+`FakeCoreApi` serves recorded fixtures. Components and flows are written against
+the trait. There is no `subscribe`/`EventStream` in v1 (§5): the seam is a poll
+loop, not a socket.
 
 ## 4. Serving and Home Assistant ingress
 
-The add-on image contains two artefacts: the `aquila-core` binary and the built
+The add-on image contains two artefacts: the `aquila-addon` binary and the built
 dashboard `dist/` (WASM, JS glue, CSS, bundled icon sprite). **One** HTTP server
 inside the add-on serves both the static assets and the `/api/v1/*` control
 plane on the same port, so the panel is same-origin and needs no CORS.
@@ -114,7 +115,7 @@ Indicative add-on manifest (`config.yaml`):
 
 ```yaml
 ingress: true
-ingress_port: 8080
+ingress_port: 8099
 panel_title: Aquila
 panel_icon: mdi:wifi
 panel_admin: false
@@ -140,77 +141,37 @@ panel_admin: false
 
 ## 5. Core private API (HTTP + WS)
 
-All paths are prefixed by `api_base()`. Bodies are JSON in `aquila-types`. This
-is deliberately small; the dashboard must not need more.
+All paths are prefixed by `api_base()`. Bodies are JSON in `aquila-types`.
+**The endpoint contract is `core-api.md` §6; this section does not restate it.**
+The dashboard consumes the canonical routes there — there are no aliases and no
+second table (`sister-issues-specs.md` D13). The routes it uses are:
 
-### HTTP
+- snapshot and structure: `GET /state`, `GET /schema`, and the home → floor →
+  room → node → node-pair CRUD of `core-api.md` §6 (`/home`, `/floors`,
+  `/rooms`, `/nodes`, `/node-pairs`);
+- the calibration wizard: `POST /calibration`, `GET /calibration/{id}`,
+  `GET /calibration/{id}/steps/{stepId}`,
+  `POST /calibration/{id}/steps/{stepId}/{complete,skip}`,
+  `POST /calibration/{id}/{commit,abort}`;
+- system health and metrics: `GET /health`, `GET /capabilities`,
+  `GET /metrics/snapshot`.
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/v1/home` | Whole topology tree: home, floors, rooms, nodes, pairs |
-| `PATCH` | `/api/v1/home` | Update home profile (name, locale, units, privacy) |
-| `POST` | `/api/v1/floors` | Create floor |
-| `PATCH` | `/api/v1/floors/{id}` | Rename/reorder floor |
-| `DELETE` | `/api/v1/floors/{id}` | Delete floor |
-| `POST` | `/api/v1/rooms` | Create room (within a floor) |
-| `PATCH` | `/api/v1/rooms/{id}` | Rename/move/reorder room |
-| `DELETE` | `/api/v1/rooms/{id}` | Delete room |
-| `GET` | `/api/v1/nodes` | List nodes with health summary |
-| `POST` | `/api/v1/nodes/pairing` | Begin node pairing; returns short-lived code |
-| `POST` | `/api/v1/nodes` | Register/approve a node into a room |
-| `GET` | `/api/v1/nodes/{id}` | Node detail + health + drift estimate |
-| `PATCH` | `/api/v1/nodes/{id}` | Rename/reassign node |
-| `DELETE` | `/api/v1/nodes/{id}` | Remove node |
-| `GET` | `/api/v1/pairs` | List node-pairs with quality/coherence |
-| `POST` | `/api/v1/pairs` | Create a node-pair |
-| `DELETE` | `/api/v1/pairs/{id}` | Remove a node-pair |
-| `GET` | `/api/v1/calibration` | Current global calibration profile + age |
-| `POST` | `/api/v1/calibrations` | Start a calibration session |
-| `GET` | `/api/v1/calibrations/{id}` | Session state, steps, captured measurements |
-| `POST` | `/api/v1/calibrations/{id}/actions` | `advance` / `retry` / `abort` |
-| `GET` | `/api/v1/system/health` | Core, pipeline, ingest, time-sync health |
-| `GET` | `/api/v1/models` | Active model versions + in-domain metrics |
-| `GET` | `/api/v1/measurements` | Commit-keyed ledger (list) |
-| `GET` | `/api/v1/measurements/{commit}` | Ledger entry detail + diff |
+Node registration is `POST /nodes` (commission); there is no separate
+`/nodes/pairing` route in the canonical set.
 
-### WebSocket
+### WebSocket — not in v1: polling
 
-`GET {api_base}/api/v1/stream` — one multiplexed stream. Client subscribes to
-topics; server sends a `snapshot` on subscribe, then throttled `update`
-deltas with a monotonic `seq`. A `seq` gap tells the client to re-subscribe for
-a fresh snapshot (resync).
+v1 serves **no WebSocket**: `GET /api/v1/stream` returns a typed `501`
+(`core-api.md` §10). The dashboard therefore **polls** the routes above (with
+backoff on failure) and renders each response in place; it opens no socket and
+does not reconnect-loop. The single multiplexed stream described in earlier
+drafts of this document is deferred with the core's stream: when it lands it
+will be the `aquila.v1` envelope of `core-api.md` §10, and only then does the
+dashboard switch from polling to push.
 
-Client → server:
+HTTP is used for topology CRUD, the initial load, ledger reads and (in v1) live
+updates; the client coalesces renders itself.
 
-```json
-{ "type": "subscribe",   "id": "sub-1", "topics": ["presence.home", "vitals.room:kitchen"] }
-{ "type": "unsubscribe", "id": "sub-1" }
-{ "type": "ping" }
-```
-
-Server → client (`StreamEvent`):
-
-```json
-{ "type": "snapshot", "topic": "vitals.room:kitchen", "seq": 12, "data": { } }
-{ "type": "update",   "topic": "presence.home",       "seq": 13, "data": { } }
-{ "type": "error",    "code": "topic_unknown",        "message": "..." }
-{ "type": "pong" }
-```
-
-Topics and indicative server-side rates (the client also coalesces renders):
-
-| Topic | Data | Max rate |
-| --- | --- | --- |
-| `presence.home` | per-room occupancy, person count | 5 Hz |
-| `presence.room:{id}` | occupancy, person count, confidence | 5 Hz |
-| `vitals.room:{id}` | breathing brpm, heart bpm, quality | 1 Hz |
-| `pose.room:{id}` | coarse keypoints/zone grid | 10 Hz |
-| `node.health` | per-node link, rate, drift, online | 0.2 Hz |
-| `calibration:{id}` | wizard step, progress, measurements | event-driven |
-| `system.health` | load, ingest, time-sync, queue depth | 0.2 Hz |
-
-HTTP is used for topology CRUD, the initial load, and ledger reads; the WS is
-used for anything live. The dashboard opens exactly one WS and multiplexes.
 
 ## 6. Screens and flows
 
@@ -219,14 +180,14 @@ used for anything live. The dashboard opens exactly one WS and multiplexes.
 | # | Screen | Route | Primary data | Key actions |
 | --- | --- | --- | --- | --- |
 | 1 | Shell / ingress frame | `#/` | — | navigate; system status pill; home selector |
-| 2 | Overview | `#/overview` | `presence.home`, `system.health` | drill into a room; jump to health |
-| 3 | Room live view | `#/rooms/{id}` | `presence.room`, `vitals.room`, `pose.room` | select room; pause/resume live |
+| 2 | Overview | `#/overview` | `GET /state` (presence/count), `GET /health` | drill into a room; jump to health |
+| 3 | Room live view | `#/rooms/{id}` | `GET /state` (presence/vitals) | select room; pause/resume live |
 | 4 | Structure | `#/structure` | `GET /home` | create/rename/reorder/delete floors, rooms |
-| 5 | Nodes | `#/nodes` | `GET /nodes`, `node.health` | pair, register, reassign, remove, inspect |
-| 6 | Node pairs | `#/pairs` | `GET /pairs` | create/remove pairs; view coherence |
-| 7 | Calibration wizard | `#/calibrate` | `calibration:{id}` | start; follow steps; apply global profile |
-| 8 | System health | `#/health` | `system.health`, `GET /models` | inspect node/pipeline/time-sync; view logs link |
-| 9 | Measurement ledger | `#/measurements` | `GET /measurements` | filter; view commit detail + diff |
+| 5 | Nodes | `#/nodes` | `GET /nodes`, `GET /health` | register, reassign, remove, inspect |
+| 6 | Node pairs | `#/pairs` | `GET /node-pairs` | create/remove pairs; view coherence |
+| 7 | Calibration wizard | `#/calibrate` | `GET /calibration/{id}` | start; follow steps; apply global profile |
+| 8 | System health | `#/health` | `GET /health`, `GET /metrics/snapshot` | inspect node/pipeline/time-sync; view logs link |
+| 9 | Measurement ledger | `#/measurements` | `GET /metrics/snapshot` | filter; view commit detail + diff |
 | 10 | Settings | `#/settings` | `GET /home` | units, locale, theme, privacy, about/licence |
 
 ### Key flows
@@ -237,31 +198,32 @@ calibration. Each step writes through the API and advances only on success.
 Because measurement is first-class, calibration records the baseline commit
 before the dashboard reports the home as "ready".
 
-**Node pairing.** `POST /nodes/pairing` returns a short-lived code; the node is
-flashed and joins the core's control channel; it appears as *pending* in Nodes →
-operator approves it into a room via `POST /nodes` (or rejects it).
+**Node registration.** The node is flashed and joins the core's control
+channel; it appears as *pending* in Nodes → the operator commissions it into a
+room via `POST /nodes` (or rejects it). There is no separate pairing route in
+the canonical set (`core-api.md` §6).
 
 **Calibration wizard (global).** Preconditions are checked first (all nodes
 online, time-sync healthy). Steps: empty-home baseline → per-floor/room
 reference positions → activity/breathing reference → review results (per-node
-corrections, residual error, resulting commit) → apply. Progress streams over
-`calibration:{id}`; the operator can `advance`, `retry` a step, or `abort`. The
-applied global calibration profile and its age are shown on Overview and Health.
+corrections, residual error, resulting commit) → apply. Progress is re-read via
+`GET /calibration/{id}` on the poll interval; the operator can advance, skip or
+retry a step, or abort. The applied global calibration profile and its age are
+shown on Overview and Health.
 
 **Live monitoring.** Overview shows whole-home occupancy and per-room vitals
 cards; Room live view drills in with a coarse top-down zone/pose view and vitals
-sparklines. Everything is driven by the single WS subscription for the visible
-scope only.
+sparklines. Everything is driven by a single poll of `GET /state` per interval,
+scoped to the visible rooms.
 
 **Change management.** Structural edits (floors/rooms/nodes/pairs) are ordinary
 CRUD; after any change that invalidates calibration, the UI surfaces a clear
 "recalibrate" banner rather than silently using stale corrections.
 
-**Failure and empty states.** If the WS drops or the core is unreachable, the
-dashboard keeps the last snapshot, marks it stale, reconnects with backoff, and
-re-subscribes on success. Missing rooms/nodes show explicit empty states with
-the next action, never blank panels. CRUD failures are surfaced with the core's
-error, not swallowed.
+**Failure and empty states.** If a poll fails or the core is unreachable, the
+dashboard keeps the last snapshot, marks it stale, and retries with backoff.
+Missing rooms/nodes show explicit empty states with the next action, never blank
+panels. CRUD failures are surfaced with the core's error, not swallowed.
 
 ## 7. Accessibility
 
@@ -310,11 +272,11 @@ Target WCAG 2.2 AA.
 
 ## 9. Testing and fixtures
 
-- `FakeCoreApi` with recorded HTTP fixtures and a scripted `EventStream`
-  drives component and flow tests; no network in unit/component tests.
-- Tests cover: topology CRUD rendering and validation, WS subscribe/snapshot/
-  delta/resync, stale-on-disconnect behaviour, the calibration wizard state
-  machine (advance/retry/abort), and accessibility-critical structure (landmarks,
+- `FakeCoreApi` with recorded HTTP fixtures drives component and flow tests; no
+  network in unit/component tests.
+- Tests cover: topology CRUD rendering and validation, poll refresh and
+  stale-on-failed-poll behaviour, the calibration wizard state machine
+  (advance/skip/retry/abort), and accessibility-critical structure (landmarks,
   labels, live-region throttling).
 - Optional WASM-level smoke tests via `wasm-bindgen-test` for the transport
   adapter. No browser automation is committed as part of v1.
@@ -325,5 +287,7 @@ Target WCAG 2.2 AA.
   the supported HA versions, or whether the self-contained theme is always used.
 - Whether node pairing should also offer a QR/serial path in v1 or only the
   text code.
-- Whether the ledger view should expose diffing between arbitrary commits in v1
-  or only the latest commit's diff.
+- **Ledger view scope — settled.** v1 exposes the **current** commit's snapshot
+  only (`GET /metrics/snapshot`, `core-api.md` §6/§13); the dashboard has no
+  `GET /measurements/{commit}` route. Arbitrary-commit diffing is deferred until
+  a core-api read contract for it exists.

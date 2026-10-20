@@ -8,16 +8,18 @@
 //!
 //! Scope: the fixed header and body fields, the magics, versions, ports, size
 //! limits and opcodes are emitted, with `_Static_assert`s pinning the struct
-//! sizes. The variable `f32` subcarrier arrays are reached through the emitted
-//! offset macros, not a C array member; emitting a full variable-length struct
-//! is a documented gap to be closed with the firmware component.
+//! sizes. The variable interleaved `int8` I/Q sample is reached through the
+//! emitted offset macros, not a fixed C array member; emitting a full
+//! variable-length struct is a documented gap to be closed with the firmware
+//! component.
 
 use core::fmt::Write as _;
 
 use crate::constants::{
-    control_offset, csi_body_offset, csi_offset, Opcode, CONTROL_MAGIC, CONTROL_PORT,
-    CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE,
-    MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_F32, WIRE_MAJOR, WIRE_MINOR,
+    control_offset, csi_body_offset, csi_offset, Opcode, CONTROL_AUTH_LEN, CONTROL_MAGIC,
+    CONTROL_PORT, CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN,
+    CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_DATAGRAM_LEN, MAX_SUBCARRIERS, OTA_DEFAULT_CHUNK_SIZE,
+    OTA_DEFAULT_WINDOW, OTA_MAX_CHUNK_SIZE, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
 };
 
 /// Render the canonical layout as a C header (`node_wire.h`).
@@ -46,7 +48,11 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "#define AQ_CSI_MESSAGE_TYPE {CSI_MESSAGE_TYPE}u");
     let _ = writeln!(
         s,
-        "#define AQ_SUBCARRIER_FORMAT_F32 {SUBCARRIER_FORMAT_F32}u"
+        "#define AQ_SUBCARRIER_FORMAT_INT8_IQ {SUBCARRIER_FORMAT_INT8_IQ}u"
+    );
+    let _ = writeln!(
+        s,
+        "#define AQ_CSI_FLAG_FIRST_WORD_INVALID {CSI_FLAG_FIRST_WORD_INVALID}u"
     );
     let _ = writeln!(s);
 
@@ -58,21 +64,24 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "#define AQ_CSI_MAX_SUBCARRIERS {MAX_SUBCARRIERS}u");
     let _ = writeln!(s, "#define AQ_CSI_MAX_DATAGRAM_LEN {MAX_DATAGRAM_LEN}u");
     let _ = writeln!(s, "#define AQ_CONTROL_HEADER_LEN {}", control_offset::BODY);
+    let _ = writeln!(s, "#define AQ_CONTROL_AUTH_LEN {CONTROL_AUTH_LEN}u");
+    let _ = writeln!(
+        s,
+        "#define AQ_OTA_DEFAULT_CHUNK_SIZE {OTA_DEFAULT_CHUNK_SIZE}u"
+    );
+    let _ = writeln!(s, "#define AQ_OTA_DEFAULT_WINDOW {OTA_DEFAULT_WINDOW}u");
+    let _ = writeln!(s, "#define AQ_OTA_MAX_CHUNK_SIZE {OTA_MAX_CHUNK_SIZE}u");
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* Variable-length CSI payload. */");
     let _ = writeln!(
         s,
-        "/* Interleaved f32 amplitude[n], then f32 phase[n]; 8 bytes per subcarrier. */"
+        "/* Interleaved signed int8 I/Q, Q then I (imaginary first) per subcarrier; 2 bytes per subcarrier. */"
     );
-    let _ = writeln!(s, "#define AQ_CSI_FLOAT_BYTES 4u");
+    let _ = writeln!(s, "#define AQ_CSI_PAYLOAD_BYTES_PER_SUBCARRIER 2u");
     let _ = writeln!(
         s,
-        "#define AQ_CSI_PAYLOAD_FLOATS(n_subcarriers) (2u * (n_subcarriers))"
-    );
-    let _ = writeln!(
-        s,
-        "#define AQ_CSI_PAYLOAD_BYTES(n_subcarriers) (8u * (n_subcarriers))"
+        "#define AQ_CSI_PAYLOAD_BYTES(n_subcarriers) (2u * (n_subcarriers))"
     );
     let _ = writeln!(
         s,
@@ -94,6 +103,13 @@ pub fn generate_c_header() -> String {
     emit_opcode(&mut s, "AQ_OP_IDENTIFY", Opcode::Identify);
     emit_opcode(&mut s, "AQ_OP_FACTORY_RESET", Opcode::FactoryReset);
     emit_opcode(&mut s, "AQ_OP_EVENT", Opcode::Event);
+    emit_opcode(&mut s, "AQ_OP_OTA_BEGIN", Opcode::OtaBegin);
+    emit_opcode(&mut s, "AQ_OP_OTA_CHUNK", Opcode::OtaChunk);
+    emit_opcode(&mut s, "AQ_OP_OTA_ACK", Opcode::OtaAck);
+    emit_opcode(&mut s, "AQ_OP_OTA_STATUS", Opcode::OtaStatus);
+    emit_opcode(&mut s, "AQ_OP_OTA_END", Opcode::OtaEnd);
+    emit_opcode(&mut s, "AQ_OP_OTA_ABORT", Opcode::OtaAbort);
+    emit_opcode(&mut s, "AQ_OP_OTA_RESULT", Opcode::OtaResult);
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* CSI header field offsets. */");
@@ -115,7 +131,7 @@ pub fn generate_c_header() -> String {
         "AQ_CSI_OFF_BANDWIDTH_MHZ",
         csi_offset::BANDWIDTH_MHZ,
     );
-    emit_offset(&mut s, "AQ_CSI_OFF_RESERVED", csi_offset::RESERVED);
+    emit_offset(&mut s, "AQ_CSI_OFF_FLAGS", csi_offset::FLAGS);
     let _ = writeln!(s);
 
     let _ = writeln!(
@@ -167,11 +183,7 @@ pub fn generate_c_header() -> String {
         "AQ_CSI_BODY_OFF_RESERVED",
         csi_body_offset::RESERVED,
     );
-    emit_offset(
-        &mut s,
-        "AQ_CSI_BODY_OFF_AMPLITUDE",
-        csi_body_offset::AMPLITUDE,
-    );
+    emit_offset(&mut s, "AQ_CSI_BODY_OFF_IQ", csi_body_offset::IQ);
     let _ = writeln!(s);
 
     let _ = writeln!(s, "/* Control header field offsets. */");
@@ -200,7 +212,10 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "    uint8_t  band;");
     let _ = writeln!(s, "    uint8_t  channel;");
     let _ = writeln!(s, "    uint8_t  bandwidth_mhz;");
-    let _ = writeln!(s, "    uint8_t  reserved;");
+    let _ = writeln!(
+        s,
+        "    uint8_t  flags; /* bit0 = AQ_CSI_FLAG_FIRST_WORD_INVALID */"
+    );
     let _ = writeln!(s, "}} aq_csi_header_t;");
     let _ = writeln!(s);
     let _ = writeln!(s, "typedef struct {{");
@@ -231,18 +246,17 @@ pub fn generate_c_header() -> String {
     );
     let _ = writeln!(s, "typedef struct {{");
     let _ = writeln!(s, "    aq_csi_body_fixed_t fixed;");
-    let _ = writeln!(s, "    float payload[]; /* C99 flexible array member */");
+    let _ = writeln!(
+        s,
+        "    int8_t payload[]; /* C99 flexible array member: interleaved Q,I (imaginary first) */"
+    );
     let _ = writeln!(s, "}} aq_csi_body_t;");
     let _ = writeln!(s);
     let _ = writeln!(
         s,
-        "/* Accessors: amplitude is payload[0..n), phase is payload[n..2n). */"
+        "/* Accessors: the raw interleaved I/Q sample begins at payload[0]. */"
     );
-    let _ = writeln!(s, "#define AQ_CSI_AMPLITUDE(body) ((body)->payload)");
-    let _ = writeln!(
-        s,
-        "#define AQ_CSI_PHASE(body) ((body)->payload + (body)->fixed.n_subcarriers)"
-    );
+    let _ = writeln!(s, "#define AQ_CSI_IQ(body) ((int8_t *)((body)->payload))");
     let _ = writeln!(s);
 
     let _ = writeln!(

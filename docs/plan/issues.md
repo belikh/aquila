@@ -25,8 +25,20 @@ Blocking edges are recorded as native GitHub issue dependencies.
 
 ## Status (verify with `gh issue list --state all`)
 
-- Closed (done): **#2 #3 #4 #5 #6 #7 #8 #12**.
-- Open: **#9 #10 #11 #13 #14 #15**.
+- Closed (done): **#2–#15** (the whole plan; note #16 was never created), plus
+  **#17** (live verification), **#19** (core `/api/v1/health` reconciliation) and
+  **#20** (invalid `SensorDeviceClass.MEASUREMENT`) — the last two were found and
+  fixed *while* verifying #17.
+- Open: **#1** (the map itself), **#18** (component should discover the core
+  add-on instead of a hand-entered hostname), **#21** (migrate `DeviceInfo`
+  `via_device` to `via_device_id`; HA deprecation, works until 2027.8), and
+  **#22** (hardware bring-up: the ESP32-S3 runbook and its software
+  prerequisites P1–P6 — see `hardware-bring-up.md`).
+
+#17–#21 are post-plan operational issues found during live verification, not
+frontier tickets from the map. Live-verified on HA 2026.10.1: add-on **0.1.4**
+running (stable `instance_id`, dashboard served via ingress), component **0.2.3**
+config entry `loaded` with 17 entities. Latest tag: **`v0.1.6`**.
 
 ## Working the plan
 

@@ -68,12 +68,12 @@ pub use calibration::{
 };
 pub use clock::{ManualClock, SystemClock};
 pub use config::{MeasurementConfig, SensingConfig};
-pub use engine::{FloorWindow, HomeWindow, Sensing, StepReport};
+pub use engine::{HomeWindow, Sensing, StepReport, ZoneWindow};
 pub use error::{CalibrationError, InvalidationReason, SensingError, SinkError};
 pub use escalation::{
-    aggregate_floor, aggregate_floor_vitals, aggregate_home, convolve,
-    floor_presence_probability, home_presence_probability, Conflict, FloorSummary, FloorVitals,
-    HomeLocation, HomeSummary, RoomCoverage, RoomSummary, RoomVitals,
+    aggregate_home, aggregate_home_vitals, convolve, home_presence_probability,
+    zone_presence_probability, Conflict, HomeLocation, HomeSummary, HomeVitals, ZoneAggregate,
+    ZoneCoverage, ZoneSummary, ZoneVitals,
 };
 pub use fusion::{
     clamp_logit, fuse_torso_ranges, mix_count_pmf, node_count_pmf, node_fusion_weight,
@@ -81,7 +81,8 @@ pub use fusion::{
     NodeTorsoRanges, TorsoEstimate, TorsoGeometry, TORSO_KEYPOINT_SCATTERS,
 };
 pub use pose::{
-    estimate_room_pose, extract_torso_ranges, PoseNodeInput, DEFAULT_TORSO_DITHER_HZ,
+    estimate_zone_pose, extract_torso_ranges, DitherSearch, DspPoseModel, PoseNodeInput,
+    DEFAULT_DITHER_SEARCH_STEP_HZ,
 };
 pub use sink::Sink;
 pub use time::{NodeClockFit, TimeSync};

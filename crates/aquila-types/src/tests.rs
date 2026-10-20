@@ -49,11 +49,11 @@ fn csi_frame() -> CsiFrame {
         channel: 6,
         bandwidth_mhz: 20,
         subcarrier_offset: -32,
-        amplitude: vec![0.0, 1.5, 2.5],
-        phase: vec![0.0, 0.25, -0.25],
+        i_q: vec![0, 0, 2, 1, 2, -1],
         rssi_dbm: -40,
         noise_floor_dbm: -90,
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
+        first_word_invalid: false,
     }
 }
 
@@ -105,40 +105,27 @@ fn home() -> Home {
     }
 }
 
-fn floor() -> Floor {
-    Floor {
-        id: slug("ground-floor"),
-        home: slug("home-01"),
-        name: "Ground".to_string(),
-        level: 0,
-        elevation_m: 0.0,
-    }
-}
-
-fn room() -> Room {
-    Room {
+fn zone() -> Zone {
+    Zone {
         id: slug("kitchen-01"),
-        floor: slug("ground-floor"),
-        name: "Kitchen".to_string(),
-        kind: RoomKind::Kitchen,
         origin_home_m: [0.0, 0.0, 0.0],
-        yaw_deg: 0.0,
-        area_m2: Some(12.5),
+        extent_home_m: [5.0, 5.0, 5.0],
+        name: "Kitchen".to_string(),
     }
 }
 
-fn topology_node(id: u16, room_id: &str) -> Node {
+fn topology_node(id: u16, zone_id: &str) -> Node {
     Node {
         id: node(id),
-        room: slug(room_id),
+        zone: slug(zone_id),
         name: format!("node-{id}"),
         mac: MacAddr([0x02, 0, 0, 0, 0, id as u8]),
         device: DeviceType::Esp32S3,
         firmware: FirmwareRef {
             version: "1.0.0".to_string(),
-            sha256: [7u8; 32],
+            sha256: Some([7u8; 32]),
         },
-        pos_room_m: Some([1.0, 2.0, 2.5]),
+        pos_home_m: [1.0, 2.0, 2.5],
         installed_unix_ms: 1_700_000_000_000,
     }
 }
@@ -146,15 +133,16 @@ fn topology_node(id: u16, room_id: &str) -> Node {
 fn topology() -> Topology {
     Topology {
         home: home(),
-        floors: vec![floor()],
-        rooms: vec![room()],
-        nodes: vec![topology_node(1, "kitchen-01"), topology_node(2, "kitchen-01")],
+        zones: vec![zone()],
+        nodes: vec![
+            topology_node(1, "kitchen-01"),
+            topology_node(2, "kitchen-01"),
+        ],
         pairs: vec![NodePair {
             id: slug("pair-1-2"),
             home: slug("home-01"),
             tx: node(1),
             rx: node(2),
-            scope: PairScope::Room,
         }],
     }
 }
@@ -172,7 +160,7 @@ fn session() -> Session {
             git_sha: "38001ab".to_string(),
             dirty: false,
         },
-        config_hash: [1u8; 32],
+        config_hash: Some([1u8; 32]),
         seed: 7,
         artifacts: vec![SessionArtifact {
             path: "stream.bin".to_string(),
@@ -181,7 +169,7 @@ fn session() -> Session {
         }],
         ground_truth: Some(GroundTruthRef {
             path: "ground_truth.jsonl".to_string(),
-            sha256: [3u8; 32],
+            sha256: Some([3u8; 32]),
             kind: GtKind::Manual,
         }),
         notes: "fixture".to_string(),
@@ -275,7 +263,7 @@ fn baseline() -> Baseline {
 fn vitals_reading() -> VitalsReading {
     VitalsReading {
         subject: Some(SubjectId(1)),
-        room: slug("kitchen-01"),
+        zone: slug("kitchen-01"),
         span: span(),
         breathing: Some(Estimate {
             value: 15.0,
@@ -292,7 +280,7 @@ fn vitals_reading() -> VitalsReading {
 
 fn detection() -> Detection {
     Detection {
-        scope: DetectionScope::Room(slug("kitchen-01")),
+        scope: DetectionScope::Zone(slug("kitchen-01")),
         span: span(),
         kind: DetectionKind::Presence,
         confidence: 0.9,
@@ -308,7 +296,7 @@ fn event() -> Event {
         home: slug("home-01"),
         t_unix_ms: 1_700_000_000_000,
         dedup_key: "home-01:presence_changed:kitchen-01".to_string(),
-        scope: EventScope::Room(slug("kitchen-01")),
+        scope: EventScope::Zone(slug("kitchen-01")),
         kind: EventKind::PresenceChanged,
         payload: EventPayload::Presence {
             occupied: true,
@@ -373,13 +361,13 @@ fn every_record_round_trips() {
         frames: vec![envelope()],
     });
     round_trip(&home());
-    round_trip(&floor());
-    round_trip(&room());
+    round_trip(&zone());
+    round_trip(&zone());
     round_trip(&topology_node(1, "kitchen-01"));
     round_trip(&topology());
     round_trip(&Pose {
         subject: SubjectId(1),
-        room: slug("kitchen-01"),
+        zone: slug("kitchen-01"),
         t_unix_ms: 1_700_000_000_000,
         keys: pose_keys(),
         score: 0.75,
@@ -399,7 +387,7 @@ fn every_record_round_trips() {
         session: slug("session-01"),
         t_unix_ms: 1_700_000_000_000,
         kind: GtKind::CameraResearch,
-        scope: EventScope::Room(slug("kitchen-01")),
+        scope: EventScope::Zone(slug("kitchen-01")),
         payload: EventPayload::Count { people: 2 },
     });
     round_trip(&ledger_record(MetricKind::Gated));
@@ -480,26 +468,26 @@ fn csi_frame_invariants() {
     assert!(csi_frame().validate().is_ok());
     assert_eq!(csi_frame().n_subcarriers(), 3);
 
-    let mut mismatched = csi_frame();
-    mismatched.phase.pop();
-    assert!(mismatched.validate().is_err());
+    // An odd-length interleaved sample is not whole I/Q pairs.
+    let mut odd = csi_frame();
+    odd.i_q.pop();
+    assert!(odd.validate().is_err());
 
+    // An empty sample carries no subcarriers.
     let mut empty = csi_frame();
-    empty.amplitude.clear();
-    empty.phase.clear();
+    empty.i_q.clear();
     assert!(empty.validate().is_err());
 
-    let mut negative = csi_frame();
-    negative.amplitude[0] = -1.0;
-    assert!(negative.validate().is_err());
-
-    let mut wrapped = csi_frame();
-    wrapped.phase[0] = 4.0;
-    assert!(wrapped.validate().is_err());
-
-    let mut infinite = csi_frame();
-    infinite.phase[0] = f32::INFINITY;
-    assert!(infinite.validate().is_err());
+    // The derived amplitude and phase are finite for every int8 sample.
+    let frame = csi_frame();
+    assert_eq!(frame.amplitude().len(), 3);
+    assert_eq!(frame.phase().len(), 3);
+    assert!(frame.amplitude().iter().all(|a| a.is_finite()));
+    assert!(frame.phase().iter().all(|p| p.is_finite()));
+    // The sample is imaginary-first: subcarrier 0 is (I, Q) = (0, 0), so its
+    // amplitude is 0, and subcarrier 1 is (I, Q) = (1, 2).
+    assert!((frame.amplitude_at(0)).abs() < 1e-6);
+    assert!((frame.amplitude_at(1) - 5.0_f32.sqrt() / 64.0).abs() < 1e-6);
 }
 
 #[test]
@@ -529,7 +517,7 @@ fn sensing_frame_scope_invariant() {
 fn pose_invariants() {
     let valid = Pose {
         subject: SubjectId(1),
-        room: slug("kitchen-01"),
+        zone: slug("kitchen-01"),
         t_unix_ms: 0,
         keys: pose_keys(),
         score: 0.5,
@@ -590,7 +578,7 @@ fn detection_value_kind_scope_coupling() {
     let mut wrong_scope = detection();
     wrong_scope.kind = DetectionKind::Occupancy;
     wrong_scope.value = DetectionValue::Occupancy(vec![(slug("kitchen-01"), 1)]);
-    wrong_scope.scope = DetectionScope::Room(slug("kitchen-01"));
+    wrong_scope.scope = DetectionScope::Zone(slug("kitchen-01"));
     assert!(wrong_scope.validate().is_err());
 
     let mut too_many = detection();
@@ -678,7 +666,7 @@ fn topology_referential_integrity() {
     assert!(duplicate_node.validate().is_err());
 
     let mut missing_room = topology();
-    missing_room.nodes[0].room = slug("nowhere");
+    missing_room.nodes[0].zone = slug("nowhere");
     assert!(missing_room.validate().is_err());
 
     let mut unprovisioned = topology();
@@ -689,19 +677,9 @@ fn topology_referential_integrity() {
     self_pair.pairs[0].rx = self_pair.pairs[0].tx;
     assert!(self_pair.validate().is_err());
 
-    let mut mismatched_scope = topology();
-    mismatched_scope.pairs[0].scope = PairScope::CrossFloor;
-    assert!(mismatched_scope.validate().is_err());
-
-    let mut duplicate_level = topology();
-    duplicate_level.floors.push(Floor {
-        id: slug("first-floor"),
-        home: slug("home-01"),
-        name: "First".to_string(),
-        level: 0,
-        elevation_m: 3.0,
-    });
-    assert!(duplicate_level.validate().is_err());
+    let mut duplicate_zone = topology();
+    duplicate_zone.zones.push(zone());
+    assert!(duplicate_zone.validate().is_err());
 }
 
 #[test]

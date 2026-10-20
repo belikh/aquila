@@ -12,10 +12,10 @@
 //! coherence and indoor RSSI is multipath-biased, so a path-loss "range" is
 //! accurate to roughly a factor of two at best. Every continuous coordinate
 //! produced here is therefore **advisory only**, carries an honest per-link
-//! range sigma, and is demoted to room level when its 95 % ellipse exceeds the
-//! room. It is never a hard input to presence, pose or vitals.
+//! range sigma, and is demoted to zone level when its 95 % ellipse exceeds the
+//! zone. It is never a hard input to presence, pose or vitals.
 
-use aquila_types::{Confidence, NodeId, RoomId};
+use aquila_types::{Confidence, NodeId, ZoneId};
 use serde::{Deserialize, Serialize};
 
 use crate::confidence::unit_confidence;
@@ -41,7 +41,7 @@ pub const CHI2_95_2DOF: f32 = 5.991_464_7;
 /// continuous estimate is advisory and never fully certain.
 pub const TRILATERATION_CONFIDENCE_CAP: f32 = 0.6;
 /// Fallback room extent, in metres, when a room has no surveyed area.
-pub const DEFAULT_ROOM_EXTENT_M: f32 = 5.0;
+pub const DEFAULT_ZONE_EXTENT_M: f32 = 5.0;
 /// Two attribution candidates closer than this are reported as `ambiguous`.
 pub const AMBIGUITY_MARGIN: f32 = 0.1;
 /// RSSI mapped to zero link confidence, in dBm.
@@ -146,13 +146,10 @@ pub enum PositionMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PositionResolution {
-    /// Room-level: the guaranteed resolution of v1.
-    Room,
-    /// Zone-level: best-effort. In v1 a zone is a room, so this coincides with
-    /// room resolution.
+    /// Zone-level: the guaranteed resolution of v1.
     Zone,
-    /// Sub-room: advisory only, never a hard input.
-    SubRoomAdvisory,
+    /// Sub-zone: advisory only, never a hard input.
+    SubZoneAdvisory,
 }
 
 /// A 95 % positional error ellipse: `[major, minor, orientation]`.
@@ -178,12 +175,12 @@ pub struct PositionEstimate {
     pub method: PositionMethod,
     /// The resolution reached.
     pub resolution: PositionResolution,
-    /// The attributed room, when one separates.
-    pub room: Option<RoomId>,
+    /// The attributed zone, when one separates.
+    pub zone: Option<ZoneId>,
     /// The advisory position in the home frame, in metres.
     pub position_home_m: Option<[f32; 2]>,
-    /// The advisory position in room-local metres, when the room is known.
-    pub position_room_m: Option<[f32; 2]>,
+    /// The advisory position in zone-local metres, when the zone is known.
+    pub position_zone_m: Option<[f32; 2]>,
     /// The 95 % error ellipse, when a coordinate is offered.
     pub error_ellipse_95_m: Option<ErrorEllipse>,
     /// Always `true` in v1: a continuous coordinate is advisory.

@@ -1,12 +1,12 @@
 //! The `record` subcommand: bind the CSI data port and write a `.aqs` Session.
 //!
 //! One CSI frame per datagram arrives on the data plane
-//! (`capture-and-firmware.md` §5). The live source decodes each frame; `record`
-//! re-encodes it through [`aquila_wire::encode_datagram`] and stores the exact
-//! `AQCI` bytes the container carries (`capture-and-firmware.md` §8.2), so
-//! replay always runs the real decoder. Re-encoding a decoded frame reproduces
-//! the canonical wire form; the tool does not claim to preserve bytes that a
-//! forward-compatible decoder ignored.
+//! (`capture-and-firmware.md` §5). The live source decodes each frame **and
+//! retains the raw datagram**; `record` stores those exact received `AQCI`
+//! bytes in the container (`capture-and-firmware.md` §8.2; `record.rs`'s
+//! `last_datagram`). Replay therefore runs the real decoder on the bytes the
+//! node actually sent, so a field a forward-compatible decoder ignored is still
+//! preserved (`sister-issues-core.md` S17).
 //!
 //! Time comes only from a [`Clock`](aquila_types::Clock); the capture tool
 //! stamps each record with the host monotonic arrival in microseconds.
@@ -19,7 +19,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use aquila_session::{Manifest, SessionWriter};
 use aquila_sources::{CsiSource, FrameOrEnd, LiveConfig, UdpLiveSource};
 use aquila_types::{BuildId, Clock, CoreTime, NodeId, Session, Slug, CONTRACT_VERSION};
-use aquila_wire::{encode_datagram, CSI_DATA_PORT};
+use aquila_wire::CSI_DATA_PORT;
 
 use crate::cli::Options;
 use crate::error::CaptureError;
@@ -92,9 +92,11 @@ pub(crate) fn run(options: &Options) -> Result<(), CaptureError> {
                     }
                 }
                 seen.insert(node);
+                // Store the exact received datagram, not a re-encoding: the
+                // live source retains the bytes that produced `envelope.frame`.
                 records.push((
                     envelope.host_rx_mono_ns / 1_000,
-                    encode_datagram(&envelope.frame),
+                    source.last_datagram().to_vec(),
                 ));
             }
         }
@@ -125,7 +127,7 @@ pub(crate) fn run(options: &Options) -> Result<(), CaptureError> {
             git_sha: concat!("aquila-capture/", env!("CARGO_PKG_VERSION")).to_string(),
             dirty: false,
         },
-        config_hash: [0u8; 32],
+        config_hash: None,
         seed: 0,
         artifacts: vec![],
         ground_truth: None,

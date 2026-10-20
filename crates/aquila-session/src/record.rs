@@ -104,9 +104,15 @@ impl Record {
     #[must_use]
     pub const fn host_arrival_us(&self) -> Option<u64> {
         match self {
-            Self::Csi { host_arrival_us, .. }
-            | Self::GroundTruth { host_arrival_us, .. }
-            | Self::Event { host_arrival_us, .. } => Some(*host_arrival_us),
+            Self::Csi {
+                host_arrival_us, ..
+            }
+            | Self::GroundTruth {
+                host_arrival_us, ..
+            }
+            | Self::Event {
+                host_arrival_us, ..
+            } => Some(*host_arrival_us),
             Self::Annotation { .. } => None,
         }
     }
@@ -125,8 +131,14 @@ impl Record {
                 out.extend_from_slice(&host_arrival_us.to_le_bytes());
                 out.extend_from_slice(datagram);
             }
-            Self::GroundTruth { host_arrival_us, json }
-            | Self::Event { host_arrival_us, json } => {
+            Self::GroundTruth {
+                host_arrival_us,
+                json,
+            }
+            | Self::Event {
+                host_arrival_us,
+                json,
+            } => {
                 out.extend_from_slice(&host_arrival_us.to_le_bytes());
                 out.extend_from_slice(json.as_bytes());
             }
@@ -174,9 +186,7 @@ impl Record {
                     json,
                 })
             }
-            RecordKind::Annotation => Ok(Self::Annotation {
-                json: utf8(body)?,
-            }),
+            RecordKind::Annotation => Ok(Self::Annotation { json: utf8(body)? }),
         }
     }
 }

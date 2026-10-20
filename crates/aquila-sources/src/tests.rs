@@ -62,11 +62,11 @@ fn frame(node: u16, sequence: u64) -> CsiFrame {
         channel: 6,
         bandwidth_mhz: 20,
         subcarrier_offset: -32,
-        amplitude: (0..64).map(|k| (k as f32) * 0.5 + 1.0).collect(),
-        phase: (0..64).map(|k| (k as f32 / 64.0) - 0.5).collect(),
+        i_q: (0..128).map(|i| ((i * 5 + 7) % 200) as u8 as i8).collect(),
         rssi_dbm: -40,
         noise_floor_dbm: -90,
         phy: PhyFlags(PhyFlags::HT),
+        first_word_invalid: false,
     }
 }
 
@@ -84,7 +84,7 @@ fn session_bytes(frames: &[CsiFrame]) -> Vec<u8> {
             git_sha: "deadbeef".into(),
             dirty: false,
         },
-        config_hash: [0u8; 32],
+        config_hash: None,
         seed: 7,
         artifacts: vec![],
         ground_truth: None,
@@ -199,6 +199,9 @@ fn udp_live_source_counts_bad_frames_and_keeps_going() {
     };
     assert_eq!(env.frame, good);
     assert_eq!(env.host_rx_mono_ns, 5);
+    // The exact bytes behind the frame are retained, so `record` stores what
+    // the node actually sent rather than a re-encoding (S17).
+    assert_eq!(source.last_datagram(), encode_datagram(&good).as_slice());
     let snapshot = stats.snapshot();
     assert_eq!(snapshot.decoded, 1);
     assert_eq!(snapshot.bad_frame, 1);
@@ -264,6 +267,36 @@ fn control_round_trips_over_loopback() {
     let (received, from) = node.recv().unwrap();
     assert_eq!(received, message);
     assert_eq!(from, core.local_addr().unwrap());
+}
+
+#[test]
+fn authenticated_control_carries_a_verifiable_trailer() {
+    use aquila_wire::{decode_control_authenticated, SetCsi, CONTROL_AUTH_LEN};
+
+    let token = [0x5Au8; 32];
+    let core = NodeControl::bind_any().unwrap().with_token(token);
+    let node = UdpSocket::bind("127.0.0.1:0").unwrap();
+    node.set_read_timeout(None).unwrap();
+
+    let message = ControlMessage {
+        request_id: 0x1234,
+        body: ControlBody::SetCsi(SetCsi { enable: true }),
+    };
+    core.send(node.local_addr().unwrap(), &message).unwrap();
+
+    let mut buffer = vec![0u8; 512];
+    let (len, _) = node.recv_from(&mut buffer).unwrap();
+    assert_eq!(
+        len,
+        encode_control(&message).unwrap().len() + CONTROL_AUTH_LEN,
+        "an authenticated message carries the trailer"
+    );
+    assert_eq!(
+        decode_control_authenticated(&buffer[..len], &token).unwrap(),
+        message
+    );
+    // A different token cannot verify it, so the node would reject it.
+    assert!(decode_control_authenticated(&buffer[..len], &[0u8; 32]).is_err());
 }
 
 #[test]

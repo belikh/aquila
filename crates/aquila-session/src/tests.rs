@@ -22,7 +22,7 @@ fn demo_session() -> Session {
             git_sha: "deadbeefdeadbeef".into(),
             dirty: false,
         },
-        config_hash: [0u8; 32],
+        config_hash: None,
         seed: 42,
         artifacts: vec![],
         ground_truth: None,
@@ -46,11 +46,11 @@ fn demo_datagram(node: u16, sequence: u64) -> Vec<u8> {
         channel: 6,
         bandwidth_mhz: 20,
         subcarrier_offset: -1,
-        amplitude: vec![1.0, 2.0],
-        phase: vec![0.0, -0.5],
+        i_q: vec![1, 0, 2, -1],
         rssi_dbm: -40,
         noise_floor_dbm: -90,
         phy: aquila_types::PhyFlags(aquila_types::PhyFlags::HT),
+        first_word_invalid: false,
     };
     aquila_wire::encode_datagram(&frame)
 }
@@ -182,7 +182,10 @@ fn rejects_unknown_record_type() {
 fn digest_is_stable_for_identical_input() {
     assert_eq!(demo_container(), demo_container());
     let report = verify_bytes(&demo_container()).unwrap();
-    assert_eq!(report.digest, verify_bytes(&demo_container()).unwrap().digest);
+    assert_eq!(
+        report.digest,
+        verify_bytes(&demo_container()).unwrap().digest
+    );
 }
 
 #[test]
@@ -201,9 +204,10 @@ fn empty_container_round_trips() {
     let writer = SessionWriter::new(&demo_manifest()).unwrap();
     assert_eq!(writer.record_count(), 0);
     let bytes = writer.finish().unwrap();
-    assert_eq!(bytes.len(), HEADER_FIXED_LEN + TRAILER_LEN + {
-        demo_manifest().to_canonical_json().unwrap().len()
-    });
+    assert_eq!(
+        bytes.len(),
+        HEADER_FIXED_LEN + TRAILER_LEN + { demo_manifest().to_canonical_json().unwrap().len() }
+    );
     let reader = SessionReader::from_bytes(&bytes).unwrap();
     assert!(reader.is_empty());
     assert_eq!(reader.verify().unwrap().frames, 0);

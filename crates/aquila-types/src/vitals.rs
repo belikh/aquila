@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{require_finite_f32, require_unit_interval, ValidationError};
-use crate::ids::{RoomId, SubjectId};
+use crate::ids::{SubjectId, ZoneId};
 use crate::primitives::Witness;
 use crate::time::TimeSpan;
 
@@ -53,8 +53,8 @@ pub enum VitalsStatus {
 pub struct VitalsReading {
     /// The subject, or `None` for a zone-scoped reading.
     pub subject: Option<SubjectId>,
-    /// The room (the zone in v1) the reading is attributed to.
-    pub room: RoomId,
+    /// The zone the reading is attributed to.
+    pub zone: ZoneId,
     /// The window the estimate covers.
     pub span: TimeSpan,
     /// Breathing rate, in breaths per minute (brpm).
@@ -76,7 +76,7 @@ impl VitalsReading {
     /// * Breathing is plausible in `[4, 60]` brpm and heart rate in `[30, 220]`
     ///   bpm; the producer drops out-of-range values rather than emitting them.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        self.room.validate()?;
+        self.zone.validate()?;
         self.span.validate()?;
 
         if let Some(breathing) = &self.breathing {

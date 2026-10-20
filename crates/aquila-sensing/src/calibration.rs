@@ -55,9 +55,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use aquila_geometry::Topology;
-use aquila_types::{
-    sha256, to_hex, CsiEnvelope, DeviceType, HomeId, NodeId, NodeQuality, RoomId,
-};
+use aquila_types::{sha256, to_hex, CsiEnvelope, DeviceType, HomeId, NodeId, NodeQuality, ZoneId};
 use serde::{Deserialize, Serialize};
 
 use crate::config::SensingConfig;
@@ -185,33 +183,16 @@ pub struct WorldFrame {
     pub units: String,
 }
 
-/// A floor's frame and its learned cross-floor slab attenuation.
+/// A zone's frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FloorFrame {
-    /// The floor's identity.
-    pub floor_id: String,
-    /// The floor's level.
-    pub index: i8,
-    /// The floor plane's elevation in the home frame, in metres.
-    pub elevation_m: f32,
-    /// The learned slab attenuation for cross-floor links, in dB (0 when no
-    /// cross-floor link exists).
-    pub slab_attenuation_db: f32,
-}
-
-/// A room's frame.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RoomFrame {
-    /// The room's identity.
-    pub room_id: String,
-    /// The floor the room belongs to.
-    pub floor_id: String,
-    /// The planar transform of the room frame in the world frame
-    /// `[x_m, y_m, yaw_rad]`.
-    pub transform_world: [f32; 3],
-    /// The room polygon in the floor frame, when surveyed (empty in v1).
-    pub polygon_floor_m: Vec<[f32; 2]>,
-    /// The confidence in the room frame.
+pub struct ZoneFrame {
+    /// The zone's identity.
+    pub zone_id: String,
+    /// The zone's origin in the home frame, in metres `[x_m, y_m, z_m]`.
+    pub origin_home_m: [f32; 3],
+    /// The zone's half-extents in x/y/z, in metres.
+    pub extent_home_m: [f32; 3],
+    /// The confidence in the zone frame.
     pub confidence: f32,
 }
 
@@ -220,10 +201,8 @@ pub struct RoomFrame {
 pub struct FramesCalibration {
     /// The world frame.
     pub world: WorldFrame,
-    /// The floors.
-    pub floors: Vec<FloorFrame>,
-    /// The rooms.
-    pub rooms: Vec<RoomFrame>,
+    /// The zones.
+    pub zones: Vec<ZoneFrame>,
 }
 
 /// A node's placement.
@@ -273,13 +252,22 @@ impl ClockCalibration {
 /// A node's channel configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChannelCalibration {
+    /// Whether the channel facts were derived from observed frames.
+    ///
+    /// `false` means the node carried no frames in the capture, so the numeric
+    /// fields below are placeholders (`0`) and the band is `"unknown"`; a
+    /// consumer MUST treat them as unknown, never as measurements
+    /// (`sister-issues-core.md` S16). It defaults to `false` when absent, so an
+    /// older artefact is read as unknown rather than assumed to be known.
+    #[serde(default)]
+    pub known: bool,
     /// The band label: `"2.4ghz"`, `"5ghz"` or `"unknown"`.
     pub band: String,
-    /// The primary channel.
+    /// The primary channel (meaningful only when `known`).
     pub primary_channel: u8,
-    /// The channel width in MHz.
+    /// The channel width in MHz (meaningful only when `known`).
     pub bandwidth_mhz: u8,
-    /// The subcarrier count.
+    /// The subcarrier count (meaningful only when `known`).
     pub subcarriers: usize,
 }
 
@@ -299,10 +287,6 @@ pub struct GainDrift {
 pub struct NodeCalibration {
     /// The node's dense identity.
     pub node_id: u16,
-    /// The floor the node is on.
-    pub floor_id: String,
-    /// The room the node is mounted in, when known.
-    pub room_id: Option<String>,
     /// The zone the node belongs to, when known.
     pub zone_id: Option<String>,
     /// The placement.
@@ -388,8 +372,8 @@ pub struct LinkCalibration {
 pub struct NodeBaseline {
     /// The node's dense identity.
     pub node_id: u16,
-    /// The room the node is mounted in.
-    pub room_id: String,
+    /// The zone the node belongs to.
+    pub zone_id: String,
     /// The mean over windows of the window's amplitude standard deviation.
     pub amplitude_std_mean: f32,
     /// The same value in dB.
@@ -432,13 +416,11 @@ pub struct ZoneDetection {
     pub quality: ZoneQuality,
 }
 
-/// One calibrated zone. In v1 a zone is a room (`CONTEXT.md`).
+/// One calibrated zone.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZoneCalibration {
-    /// The zone identity (`RoomId` in v1).
+    /// The zone identity.
     pub zone_id: String,
-    /// The owning room.
-    pub room_id: String,
     /// The human-readable label.
     pub label: String,
     /// The adjacent zone ids.
@@ -551,10 +533,10 @@ impl CalibrationArtifact {
             .map(|n| n.quality)
     }
 
-    /// The detection thresholds for a room (the v1 zone), if present.
+    /// The detection thresholds for a zone, if present.
     #[must_use]
-    pub fn zone_for_room(&self, room: &RoomId) -> Option<&ZoneCalibration> {
-        self.zones.iter().find(|z| z.room_id == room.as_str())
+    pub fn zone_for_zone(&self, zone: &ZoneId) -> Option<&ZoneCalibration> {
+        self.zones.iter().find(|z| z.zone_id == zone.as_str())
     }
 
     /// The canonical body string used for content addressing: the artefact with
@@ -567,8 +549,7 @@ impl CalibrationArtifact {
         body.calibration_id = String::new();
         body.body_sha256 = String::new();
         body.invalidation.history_pointer = String::new();
-        serde_json::to_string(&body)
-            .map_err(|error| CalibrationError::Json(error.to_string()))
+        serde_json::to_string(&body).map_err(|error| CalibrationError::Json(error.to_string()))
     }
 
     /// Seal the artefact: compute `body_sha256` and `calibration_id`.
@@ -619,10 +600,7 @@ impl CalibrationArtifact {
     pub fn from_json(json: &str) -> Result<Self, CalibrationError> {
         let artifact: Self = serde_json::from_str(json)
             .map_err(|error| CalibrationError::Json(error.to_string()))?;
-        if !artifact
-            .schema_version
-            .starts_with("aquila.calibration/v1")
-        {
+        if !artifact.schema_version.starts_with("aquila.calibration/v1") {
             return Err(CalibrationError::UnsupportedSchema {
                 found: artifact.schema_version,
             });
@@ -665,7 +643,10 @@ impl CalibrationArtifact {
                 expected: expect.core_commit.clone(),
             });
         }
-        let firmware = self.nodes.first().map_or_else(String::new, |n| n.firmware.clone());
+        let firmware = self
+            .nodes
+            .first()
+            .map_or_else(String::new, |n| n.firmware.clone());
         if !expect.firmware.is_empty() && firmware != expect.firmware {
             reasons.push(InvalidationReason::FirmwareChanged {
                 found: firmware,
@@ -835,17 +816,14 @@ impl CalibrationRequest {
 pub struct CalibrationInputs {
     /// The empty-home baseline capture.
     pub empty_home: Vec<CsiEnvelope>,
-    /// Labelled walk-through captures, one per room.
-    pub walkthrough: Vec<(RoomId, Vec<CsiEnvelope>)>,
+    /// Labelled walk-through captures, one per zone.
+    pub walkthrough: Vec<(ZoneId, Vec<CsiEnvelope>)>,
 }
 
 impl CalibrationInputs {
     /// Construct inputs from an empty-home capture and labelled walk-throughs.
     #[must_use]
-    pub fn new(
-        empty_home: Vec<CsiEnvelope>,
-        walkthrough: Vec<(RoomId, Vec<CsiEnvelope>)>,
-    ) -> Self {
+    pub fn new(empty_home: Vec<CsiEnvelope>, walkthrough: Vec<(ZoneId, Vec<CsiEnvelope>)>) -> Self {
         Self {
             empty_home,
             walkthrough,
@@ -921,7 +899,7 @@ pub fn calibrate(
 
     // Per-node empty-home and walk-through analyses.
     let empty_nodes = analyse_nodes(&inputs.empty_home, hop_ns);
-    let walk_nodes: BTreeMap<RoomId, BTreeMap<NodeId, NodeAnalysis>> = inputs
+    let walk_nodes: BTreeMap<ZoneId, BTreeMap<NodeId, NodeAnalysis>> = inputs
         .walkthrough
         .iter()
         .map(|(room, frames)| (room.clone(), analyse_nodes(frames, hop_ns)))
@@ -937,11 +915,6 @@ pub fn calibrate(
         let placement = build_placement(topology, node.id);
         nodes.push(NodeCalibration {
             node_id: node.id.0,
-            floor_id: topology.floor_of(node.id).value.map_or_else(
-                || node.room.as_str().to_string(),
-                |f| f.as_str().to_string(),
-            ),
-            room_id: Some(node.room.as_str().to_string()),
             zone_id: topology
                 .zone_of(node.id)
                 .value
@@ -961,7 +934,12 @@ pub fn calibrate(
         if let Some(analysis) = analysis {
             node_baselines.push(NodeBaseline {
                 node_id: node.id.0,
-                room_id: node.room.as_str().to_string(),
+                zone_id: topology
+                    .zone_of(node.id)
+                    .value
+                    .flatten()
+                    .map(|z| z.as_str().to_string())
+                    .unwrap_or_default(),
                 amplitude_std_mean: analysis.amplitude_std_mean as f32,
                 amplitude_std_db: db20(analysis.amplitude_std_mean) as f32,
                 mean_amplitude_db: analysis.mean_amplitude_db as f32,
@@ -985,10 +963,10 @@ pub fn calibrate(
     // Zones, thresholds and per-zone preservation F1.
     let mut zones = Vec::new();
     let mut separation_min = f64::INFINITY;
-    for room in &topology.model().rooms {
-        let room_id = room.id.clone();
-        let walk = walk_nodes.get(&room_id);
-        let zone = build_zone(topology, &room_id, &empty_nodes, walk, &links, target_fpr)?;
+    for zone_config in &topology.model().zones {
+        let zone_id = zone_config.id.clone();
+        let walk = walk_nodes.get(&zone_id);
+        let zone = build_zone(topology, &zone_id, &empty_nodes, walk, &links, target_fpr)?;
         separation_min = separation_min.min(f64::from(zone.detection.quality.separation));
         zones.push(zone);
     }
@@ -1004,7 +982,10 @@ pub fn calibrate(
     let metrics = QualityMetrics {
         link_coverage: link_coverage(&links, topology),
         baseline_snr_db: finite_or(
-            links.iter().map(|l| f64::from(l.baseline.snr_db)).fold(f64::INFINITY, f64::min),
+            links
+                .iter()
+                .map(|l| f64::from(l.baseline.snr_db))
+                .fold(f64::INFINITY, f64::min),
             0.0,
         ),
         excess_dynamic_range_db: finite_or(
@@ -1092,9 +1073,9 @@ struct NodeAnalysis {
     device_ns: Vec<f64>,
     host_ns: Vec<f64>,
     band: aquila_types::Band,
-    channel: u8,
-    bandwidth_mhz: u8,
-    subcarriers: usize,
+    channel: Option<u8>,
+    bandwidth_mhz: Option<u8>,
+    subcarriers: Option<usize>,
 }
 
 /// Group a capture's envelopes by node and analyse each.
@@ -1119,10 +1100,7 @@ fn analyse_node(envelopes: &[&CsiEnvelope], hop_ns: u64) -> NodeAnalysis {
     let mut windows: BTreeMap<u64, Vec<CsiEnvelope>> = BTreeMap::new();
     for envelope in envelopes {
         let slot = envelope.host_rx_mono_ns / hop_ns;
-        windows
-            .entry(slot)
-            .or_default()
-            .push((*envelope).clone());
+        windows.entry(slot).or_default().push((*envelope).clone());
     }
 
     let window_stds: Vec<f64> = windows
@@ -1133,7 +1111,7 @@ fn analyse_node(envelopes: &[&CsiEnvelope], hop_ns: u64) -> NodeAnalysis {
 
     let bins = envelopes
         .iter()
-        .map(|e| e.frame.amplitude.len())
+        .map(|e| e.frame.n_subcarriers())
         .min()
         .unwrap_or(0);
     let mut mean_amplitude_db = 0.0_f64;
@@ -1145,12 +1123,12 @@ fn analyse_node(envelopes: &[&CsiEnvelope], hop_ns: u64) -> NodeAnalysis {
         for k in 0..bins {
             let mut sum = 0.0_f64;
             for envelope in envelopes {
-                sum += f64::from(envelope.frame.amplitude[k]);
+                sum += f64::from(envelope.frame.amplitude_at(k));
             }
             let mean = sum / n;
             let mut var = 0.0_f64;
             for envelope in envelopes {
-                let d = f64::from(envelope.frame.amplitude[k]) - mean;
+                let d = f64::from(envelope.frame.amplitude_at(k)) - mean;
                 var += d * d;
             }
             let std = (var / n).sqrt();
@@ -1177,9 +1155,11 @@ fn analyse_node(envelopes: &[&CsiEnvelope], hop_ns: u64) -> NodeAnalysis {
         device_ns,
         host_ns,
         band: first.map_or(aquila_types::Band::Unknown, |e| e.frame.band),
-        channel: first.map_or(0, |e| e.frame.channel),
-        bandwidth_mhz: first.map_or(0, |e| e.frame.bandwidth_mhz),
-        subcarriers: first.map_or(0, |e| e.frame.amplitude.len()),
+        // No frame means genuinely unknown, not channel 0 at 0 MHz with 0
+        // subcarriers (`sister-issues-core.md` S16).
+        channel: first.map(|e| e.frame.channel),
+        bandwidth_mhz: first.map(|e| e.frame.bandwidth_mhz),
+        subcarriers: first.map(|e| e.frame.n_subcarriers()),
     }
 }
 
@@ -1192,16 +1172,18 @@ fn build_node_clock_and_channel(
     let firmware = format!("{} {}", device_label(node.device), node.firmware.version);
     let channel = analysis.map_or_else(
         || ChannelCalibration {
+            known: false,
             band: "unknown".to_string(),
             primary_channel: 0,
             bandwidth_mhz: 0,
             subcarriers: 0,
         },
         |a| ChannelCalibration {
+            known: a.channel.is_some() && a.bandwidth_mhz.is_some() && a.subcarriers.is_some(),
             band: band_label(a.band).to_string(),
-            primary_channel: a.channel,
-            bandwidth_mhz: a.bandwidth_mhz,
-            subcarriers: a.subcarriers,
+            primary_channel: a.channel.unwrap_or(0),
+            bandwidth_mhz: a.bandwidth_mhz.unwrap_or(0),
+            subcarriers: a.subcarriers.unwrap_or(0),
         },
     );
 
@@ -1305,7 +1287,7 @@ fn affine_fit(analysis: &NodeAnalysis) -> Option<AffineFit> {
 
 /// Build a node's placement block from the topology.
 fn build_placement(topology: &Topology, node: NodeId) -> Placement {
-    match topology.node(node).and_then(|n| n.pos_room_m) {
+    match topology.node(node).map(|n| n.pos_home_m) {
         Some(pos) => Placement {
             position_m: Some([pos[0], pos[1]]),
             yaw_rad: None,
@@ -1329,9 +1311,7 @@ fn candidate_pairs(topology: &Topology) -> Vec<(NodeId, NodeId)> {
     let mut out = Vec::new();
     for (i, a) in nodes.iter().enumerate() {
         for b in nodes.iter().skip(i + 1) {
-            if topology.scope_of(*a, *b).is_some() {
-                out.push((*a, *b));
-            }
+            out.push((*a, *b));
         }
     }
     out
@@ -1353,7 +1333,7 @@ fn build_link(
     }
     let bins = pooled
         .iter()
-        .map(|e| e.frame.amplitude.len())
+        .map(|e| e.frame.n_subcarriers())
         .min()
         .unwrap_or(0);
     if bins == 0 {
@@ -1369,12 +1349,12 @@ fn build_link(
     for k in 0..bins {
         let mut sum = 0.0_f64;
         for envelope in &pooled {
-            sum += f64::from(envelope.frame.amplitude[k]);
+            sum += f64::from(envelope.frame.amplitude_at(k));
         }
         let mean = sum / n;
         let mut var = 0.0_f64;
         for envelope in &pooled {
-            let d = f64::from(envelope.frame.amplitude[k]) - mean;
+            let d = f64::from(envelope.frame.amplitude_at(k)) - mean;
             var += d * d;
         }
         let std = (var / n).sqrt();
@@ -1398,12 +1378,11 @@ fn build_link(
         .sum::<f64>()
         / n;
     let range_m = 10.0_f64.powf((REFERENCE_RSSI_DBM - rssi_mean) / (10.0 * PATH_LOSS_EXPONENT));
-    let relation = topology
-        .proximity_relation(a, b)
-        .map_or("far", relation_label);
-    let scope = topology
-        .scope_of(a, b)
-        .map_or("inter_floor", aquila_geometry::scope_label);
+    let pa = topology.position(a).value.unwrap_or([0.0, 0.0, 0.0]);
+    let pb = topology.position(b).value.unwrap_or([0.0, 0.0, 0.0]);
+    let distance_m = ((pa[0] - pb[0]).powi(2) + (pa[1] - pb[1]).powi(2) + (pa[2] - pb[2]).powi(2)).sqrt();
+    let relation = relation_label(aquila_geometry::relation_for_distance(distance_m));
+    let scope = if distance_m <= 2.0 { "intra_zone" } else { "inter_zone" }.to_string();
 
     let start_ns = pooled.iter().map(|e| e.host_rx_mono_ns).min().unwrap_or(0);
     let end_ns = pooled.iter().map(|e| e.host_rx_mono_ns).max().unwrap_or(0);
@@ -1438,7 +1417,7 @@ fn build_link(
 /// Build one zone's detection thresholds and calibration F1.
 fn build_zone(
     topology: &Topology,
-    room: &RoomId,
+    zone: &ZoneId,
     empty_nodes: &BTreeMap<NodeId, NodeAnalysis>,
     walk_nodes: Option<&BTreeMap<NodeId, NodeAnalysis>>,
     links: &[LinkCalibration],
@@ -1448,7 +1427,7 @@ fn build_zone(
         .model()
         .nodes
         .iter()
-        .filter(|n| n.room == *room)
+        .filter(|n| topology.zone_of(n.id).value.flatten() == Some(zone))
         .map(|n| n.id)
         .collect();
 
@@ -1522,12 +1501,11 @@ fn build_zone(
         .collect();
 
     let label = topology
-        .room(room)
-        .map_or_else(|| room.as_str().to_string(), |r| r.name.clone());
+        .zone(zone)
+        .map_or_else(|| zone.as_str().to_string(), |z| z.name.clone());
 
     Ok(ZoneCalibration {
-        zone_id: room.as_str().to_string(),
-        room_id: room.as_str().to_string(),
+        zone_id: zone.as_str().to_string(),
         label,
         adjacency: Vec::new(),
         detection: ZoneDetection {
@@ -1577,45 +1555,30 @@ fn classify(window_std: f64, baseline_std: f64, threshold_db: f64, scale_floor_d
 }
 
 /// Build the floors and rooms frames.
-fn build_frames(topology: &Topology, links: &[LinkCalibration]) -> FramesCalibration {
-    let floors = topology
+fn build_frames(topology: &Topology, _links: &[LinkCalibration]) -> FramesCalibration {
+    let zones = topology
         .model()
-        .floors
+        .zones
         .iter()
-        .map(|floor| FloorFrame {
-            floor_id: floor.id.as_str().to_string(),
-            index: floor.level,
-            elevation_m: floor.elevation_m,
-            slab_attenuation_db: slab_attenuation(links),
+        .map(|zone| ZoneFrame {
+            zone_id: zone.id.as_str().to_string(),
+            origin_home_m: zone.origin_home_m,
+            extent_home_m: zone.extent_home_m,
+            confidence: 0.8,
         })
         .collect();
-    let rooms = topology
+    let origin_ref = topology
         .model()
-        .rooms
-        .iter()
-        .map(|room| RoomFrame {
-            room_id: room.id.as_str().to_string(),
-            floor_id: room.floor.as_str().to_string(),
-            transform_world: [
-                room.origin_home_m[0],
-                room.origin_home_m[1],
-                room.yaw_deg.to_radians(),
-            ],
-            polygon_floor_m: Vec::new(),
-            confidence: if room.area_m2.is_some() { 0.8 } else { 0.3 },
-        })
-        .collect();
+        .zones
+        .first()
+        .map_or_else(|| "world".to_string(), |z| format!("zone:{}:origin", z.id.as_str()));
     FramesCalibration {
         world: WorldFrame {
             kind: "enu".to_string(),
-            origin_ref: topology.model().rooms.first().map_or_else(
-                || "world".to_string(),
-                |r| format!("room:{}:corner", r.id.as_str()),
-            ),
+            origin_ref,
             units: "metre".to_string(),
         },
-        floors,
-        rooms,
+        zones,
     }
 }
 
@@ -1911,7 +1874,9 @@ impl CalibrationStore {
 
 /// Strip a `sha256:` prefix, returning the bare hex name.
 fn hex_name(calibration_id: &str) -> &str {
-    calibration_id.strip_prefix("sha256:").unwrap_or(calibration_id)
+    calibration_id
+        .strip_prefix("sha256:")
+        .unwrap_or(calibration_id)
 }
 
 /// Map a filesystem error to a typed calibration error.

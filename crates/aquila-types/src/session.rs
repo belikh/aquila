@@ -65,16 +65,24 @@ pub enum GtKind {
 pub struct GroundTruthRef {
     /// The path of the ground-truth artefact.
     pub path: String,
-    /// SHA-256 digest of the artefact.
-    pub sha256: [u8; 32],
+    /// SHA-256 digest of the artefact, or `None` when the digest is not known.
+    /// An absent digest is `None`, never an all-zero hash that reads as real
+    /// (`sister-issues-core.md` S14).
+    pub sha256: Option<[u8; 32]>,
     /// The provenance kind.
     pub kind: GtKind,
 }
 
 impl GroundTruthRef {
-    /// Validate that the path is non-empty.
+    /// Validate that the path is non-empty and any digest is non-zero.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        require_non_empty("GroundTruthRef.path", &self.path)
+        require_non_empty("GroundTruthRef.path", &self.path)?;
+        if self.sha256 == Some([0u8; 32]) {
+            return Err(ValidationError::Invariant {
+                detail: "GroundTruthRef.sha256 must not be the all-zero hash".to_string(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -97,8 +105,10 @@ pub struct Session {
     pub contract: ContractVersion,
     /// The build that produced the session.
     pub build: BuildId,
-    /// SHA-256 of the canonical configuration.
-    pub config_hash: [u8; 32],
+    /// SHA-256 of the canonical configuration, or `None` when it is not known.
+    /// An unknown configuration is `None`, never an all-zero hash presented as a
+    /// content address (`sister-issues-core.md` S14).
+    pub config_hash: Option<[u8; 32]>,
     /// The RNG seed for any stochastic step.
     pub seed: u64,
     /// The session's artefacts.
@@ -134,6 +144,11 @@ impl Session {
         }
         for artifact in &self.artifacts {
             artifact.validate()?;
+        }
+        if self.config_hash == Some([0u8; 32]) {
+            return Err(ValidationError::Invariant {
+                detail: "Session.config_hash must not be the all-zero hash".to_string(),
+            });
         }
         if let Some(gt) = &self.ground_truth {
             gt.validate()?;

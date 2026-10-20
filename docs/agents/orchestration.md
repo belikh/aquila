@@ -20,7 +20,10 @@ choices rather than by the domain. These rules exist to stop that recurring.
    a TOML parser, or a hash crate, it must be present in the dev shell or
    `[workspace.dependencies]` **before** the agent runs — not forbidden in the
    prompt. `nix develop` (Rust + wasm32 + trunk), `nix develop .#ha` (Python +
-   Home Assistant).
+   Home Assistant), `nix develop .#esp` (ESP-IDF v5.5.2 + the `xtensa-esp32s3`
+   toolchain). The ESP32-S3 firmware **does** compile in `.#esp` — an earlier
+   "cannot compile" claim was false; compile it with the shell above and do not
+   treat a missing host ESP-IDF as a blocker.
 4. **Do not over-restrict scope.** "Edit ONLY this crate", "do NOT add
    dependencies", "do NOT create issues" are tools for isolation, not policy.
    When the correct fix needs a shared type, a new crate the register already

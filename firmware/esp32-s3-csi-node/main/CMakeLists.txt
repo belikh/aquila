@@ -4,6 +4,7 @@ idf_component_register(
     REQUIRES
         csi_node
         node_control
+        node_ota
         node_wire
         esp_wifi
         esp_event

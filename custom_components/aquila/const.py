@@ -16,7 +16,7 @@ MANUFACTURER: Final = "Aquila"
 
 #: Component version; must match ``manifest.json`` ``version`` and is the value
 #: compared against the core's ``min_component_version`` (home-assistant.md §9).
-COMPONENT_VERSION: Final = "0.1.0"
+COMPONENT_VERSION: Final = "0.2.3"
 
 #: The API major the component speaks; the core's ``api_version`` major must match.
 API_MAJOR: Final = 1
@@ -25,7 +25,8 @@ API_MAJOR: Final = 1
 #: (``aquila_core`` → ``aquila-core``); see home-assistant.md §2/§4.
 DEFAULT_URL: Final = "http://aquila-core:8099"
 
-#: Coordinator reconciliation cadence in seconds (home-assistant.md §6.2).
+#: Coordinator poll cadence in seconds (home-assistant.md §6.2). v1 has no
+#: WebSocket stream (core-api.md §10), so polling is the primary source.
 DEFAULT_UPDATE_INTERVAL: Final = 60
 MIN_UPDATE_INTERVAL: Final = 10
 MAX_UPDATE_INTERVAL: Final = 600
@@ -69,6 +70,42 @@ METRIC_SELF_TEST: Final = "self_test"
 METRIC_CORE_CONNECTED: Final = "core_connected"
 METRIC_FIRMWARE: Final = "firmware"
 
+# Firmware snapshot keys (firmware-ota.md §7). The coordinator merges the
+# core's per-node firmware state and OTA job into ``node["firmware"]``; the
+# update entity reads them. ``update_percentage`` is 0–100 to match Home
+# Assistant's ``update`` platform; the core serves a 0–1 job fraction.
+FIRMWARE_INSTALLED_VERSION: Final = "installed_version"
+FIRMWARE_LATEST_VERSION: Final = "latest_version"
+FIRMWARE_IMAGE_ID: Final = "image_id"
+FIRMWARE_IN_PROGRESS: Final = "in_progress"
+FIRMWARE_UPDATE_PERCENTAGE: Final = "update_percentage"
+FIRMWARE_UPDATE_AVAILABLE: Final = "update_available"
+FIRMWARE_RELEASE_NOTES: Final = "release_notes"
+FIRMWARE_PENDING: Final = "pending"
+FIRMWARE_LAST_RESULT: Final = "last_result"
+
+# ``GET /api/v1/firmware`` manifest keys (firmware-ota.md §7).
+MANIFEST_ITEMS: Final = "items"
+IMAGE_ID: Final = "id"
+IMAGE_VERSION: Final = "version"
+IMAGE_NOTES: Final = "notes"
+
+# ``GET /api/v1/nodes/{node}/firmware/job`` keys (core-api.md §7).
+JOB_IMAGE_ID: Final = "imageId"
+JOB_IMAGE_ID_SNAKE: Final = "image_id"
+JOB_STATE: Final = "state"
+JOB_PROGRESS: Final = "progress"
+JOB_PROGRESS_FRACTION: Final = "fraction"
+JOB_PROGRESS_RECEIVED: Final = "receivedBytes"
+JOB_PROGRESS_TOTAL: Final = "totalBytes"
+JOB_STATE_RUNNING: Final = "running"
+
+# Service field names (firmware-ota.md §7).
+SERVICE_FIELD_NODE: Final = "node"
+SERVICE_FIELD_IMAGE_ID: Final = "image_id"
+SERVICE_FIELD_VERSION: Final = "version"
+SERVICE_FIELD_FORCE: Final = "force"
+
 # Snapshot ``health`` keys (home-assistant.md §6).
 HEALTH_CORE_CONNECTED: Final = "core_connected"
 HEALTH_NODES_ONLINE: Final = "nodes_online"
@@ -78,8 +115,11 @@ HEALTH_CLOCK_DRIFT_MS: Final = "clock_drift_ms"
 HEALTH_LAST_PACKET_TS: Final = "last_packet_ts"
 HEALTH_SELF_TEST_OK: Final = "self_test_ok"
 
-# ``GET /api/v1/health`` contract fields (home-assistant.md §5.2).
+# ``GET /api/v1/health`` contract fields (core-api.md §4.1, home-assistant.md
+# §5.2). The version lives in the canonical ``api`` object (``{major, minor}``);
+# ``api_version`` is a tolerated legacy alias for a core that still sends it.
 HEALTH_INSTANCE_ID: Final = "instance_id"
+HEALTH_API: Final = "api"
 HEALTH_API_VERSION: Final = "api_version"
 HEALTH_MIN_COMPONENT_VERSION: Final = "min_component_version"
 
@@ -90,20 +130,6 @@ CALIBRATION_STATES: Final = (
     "calibrated",
     "degraded",
 )
-
-# WebSocket event types (home-assistant.md §5.2).
-EVENT_TYPE_STATE: Final = "state"
-EVENT_TYPE_HEALTH: Final = "health"
-EVENT_TYPE_FIRMWARE: Final = "firmware"
-
-# WS stream constants. The subprotocol is required by core-api.md §10.1; the
-# reconnect policy (base 1 s, factor 2, cap 30 s, jitter) is from §10.5.
-WS_PATH: Final = "/api/v1/stream"
-WS_SUBPROTOCOL: Final = "aquila.v1"
-WS_HEARTBEAT_S: Final = 30
-WS_RECONNECT_BASE: Final = 1.0
-WS_RECONNECT_FACTOR: Final = 2.0
-WS_RECONNECT_MAX: Final = 30.0
 
 PLATFORMS: Final = [
     Platform.BINARY_SENSOR,

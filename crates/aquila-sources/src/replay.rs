@@ -57,11 +57,7 @@ impl ReplaySource {
     /// # Errors
     ///
     /// Returns a typed [`SourceError`] if the session cannot be read or parsed.
-    pub fn open(
-        path: &Path,
-        mode: ReplayMode,
-        clock: Arc<dyn Clock>,
-    ) -> Result<Self, SourceError> {
+    pub fn open(path: &Path, mode: ReplayMode, clock: Arc<dyn Clock>) -> Result<Self, SourceError> {
         let reader = SessionReader::open(path)?;
         Ok(Self::from_reader(reader, mode, clock))
     }
@@ -119,7 +115,9 @@ impl ReplaySource {
         match self.mode {
             ReplayMode::Deterministic => self.clock.now().as_nanos(),
             ReplayMode::Realtime => {
-                let base = *self.base_ns.get_or_insert_with(|| self.clock.now().as_nanos());
+                let base = *self
+                    .base_ns
+                    .get_or_insert_with(|| self.clock.now().as_nanos());
                 let target = base.saturating_add(recorded_us.saturating_mul(1_000));
                 while self.clock.now().as_nanos() < target {
                     std::thread::sleep(Duration::from_millis(1));

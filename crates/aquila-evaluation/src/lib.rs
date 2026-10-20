@@ -9,7 +9,11 @@
 //! - [`GroundTruth`] — the only source of reference labels; never a runtime
 //!   input. [`FixtureGroundTruth`] is the v1 default adapter, labelling a
 //!   Session from a committed fixture set or a scene's synthesised reference
-//!   stream.
+//!   stream. [`ReferenceVitalsGroundTruth`] labels breathing/heart rate from a
+//!   reference-sensor JSONL file (hardware-gated: unverified until the
+//!   respiratory belt / chest strap arrive). [`MmFiLabelGroundTruth`] is a
+//!   skeleton pose adapter (hardware-gated: unverified until the MM-Fi corpus
+//!   / research camera rig arrive).
 //! - [`Harness::run`] — pairs a run's emitted events with reference records on
 //!   the common clock and returns an [`EvaluationReport`], refusing to state a
 //!   metric it cannot pair (zero paired samples is *not measured*).
@@ -31,7 +35,7 @@ mod tests;
 pub use collector::CollectorSink;
 pub use error::EvaluationError;
 pub use ground_truth::{
-    Coverage, EvalScope, FixtureGroundTruth, GroundTruth, ReferenceKind, ReferenceProvenance,
-    ReferenceRecord,
+    Coverage, EvalScope, FixtureGroundTruth, GroundTruth, MmFiLabelGroundTruth, ReferenceKind,
+    ReferenceProvenance, ReferenceRecord, ReferenceVitalsGroundTruth,
 };
 pub use harness::{presence_f1, EvaluationReport, Harness};

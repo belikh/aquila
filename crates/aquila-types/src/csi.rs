@@ -1,8 +1,10 @@
 //! The raw sensing sample and its core-side wrappers.
 //!
 //! A [`CsiFrame`] is one received 802.11 packet's complex channel state
-//! information from a single node: a complex coefficient per subcarrier plus
-//! capture metadata. A modem output, not raw I/Q. It is the pure node frame.
+//! information from a single node: a raw signed int8 I/Q sample per subcarrier
+//! plus capture metadata. It carries the esp-csi sample verbatim, so the node
+//! performs no floating-point conversion (ADR-0005); amplitude and phase are
+//! **derived** in the core. It is the pure node frame.
 //!
 //! [`CsiEnvelope`] is the core-side wrapper: the node frame stays pure, and the
 //! core adds arrival data from the [`Clock`](crate::Clock) seam.
@@ -11,26 +13,67 @@
 //! fixed span. It is not a new kind of CSI — the same envelopes, placed on a
 //! grid.
 
-use core::f32::consts::PI;
 use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{require_finite_f32, ValidationError};
+use crate::error::ValidationError;
 use crate::ids::NodeId;
 use crate::primitives::{Band, PhyFlags};
 use crate::time::TimeSpan;
 
-/// The capture metadata for one CSI frame (fields other than the subcarrier
-/// arrays).
+/// The nominal number of raw int8 I/Q counts one unit of the core's working
+/// amplitude represents.
 ///
-/// The number of subcarriers is **derived** from `amplitude.len()` and is not a
-/// separate stored field, so it cannot disagree with the arrays.
+/// The wire and the node carry the esp-csi sample verbatim as signed int8
+/// counts (ADR-0005). The esp-csi gain is arbitrary, so the core's derived
+/// accessors (and `aquila-signal::decode_csi`) divide by this nominal full-scale
+/// to recover the arbitrary linear unit the signal pipeline is engineered in.
+/// A realistic capture fills a useful fraction of the int8 range, so the scale
+/// is a count-per-unit constant, not a data-dependent gain.
+pub const IQ_COUNTS_PER_UNIT: f32 = 64.0;
+
+/// The nominal centre frequency of an 802.11 channel, in MHz.
+///
+/// This is the one channel→frequency map (`sister-issues-core.md` S12). The
+/// 2.4 GHz band is `2407 + 5·channel` for channels 1–13, but channel 14 is
+/// 2484 MHz, **not** the linear `2407 + 5·14 = 2477`. The 5 GHz band is
+/// `5000 + 5·channel` for the standard UNII channels. `Band::Unknown` and
+/// channel 0 map to 0 (unknown), never a fabricated frequency.
+#[must_use]
+pub const fn channel_centre_freq_mhz(band: Band, channel: u8) -> u32 {
+    match band {
+        Band::B2G4 => {
+            if channel == 14 {
+                2484
+            } else {
+                2407 + channel as u32 * 5
+            }
+        }
+        Band::B5G => {
+            if channel == 0 {
+                0
+            } else {
+                5000 + channel as u32 * 5
+            }
+        }
+        Band::Unknown => 0,
+    }
+}
+
+/// The capture metadata for one CSI frame (fields other than the raw sample).
+///
+/// The number of subcarriers is **derived** from `i_q.len() / 2` and is not a
+/// separate stored field, so it cannot disagree with the sample.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CsiFrame {
     /// On-air identity of the sending node.
     pub node_id: NodeId,
-    /// Boot epoch; incremented every boot and persisted in node NVS.
+    /// Boot epoch: a fresh value each boot, **not** persisted.
+    ///
+    /// The node draws it from its RNG at boot (`main.c`); the core keys
+    /// per-node state to `(node_id, boot_epoch)` and treats a change as a
+    /// reboot, never splicing across it (`sister-issues-firmware-ha.md` F18).
     pub boot_epoch: u16,
     /// Monotonic within `(node, boot_epoch, band, channel)`.
     pub sequence: u64,
@@ -42,66 +85,116 @@ pub struct CsiFrame {
     pub channel: u8,
     /// The channel width in MHz: 20 or 40.
     pub bandwidth_mhz: u8,
-    /// The subcarrier index of the first element of `amplitude`/`phase`.
+    /// The subcarrier index of the first interleaved sample in `i_q`.
     pub subcarrier_offset: i16,
-    /// Per-subcarrier amplitude, linear and arbitrary, in ascending index
-    /// order. Every element is non-negative and finite.
-    pub amplitude: Vec<f32>,
-    /// Per-subcarrier phase, in radians, wrapped to `[-π, π]`. Per-frame phase
-    /// is uncalibrated; cross-frame phase comparison is out of scope for v1.
-    pub phase: Vec<f32>,
+    /// The raw complex channel sample per subcarrier, interleaved `Q, I`
+    /// (**imaginary first**) in ascending subcarrier index order:
+    /// `[Q0, I0, Q1, I1, …]`, matching the esp-csi sample. Each element is the
+    /// signed int8 the capture produced; the node does not convert it.
+    /// `n_subcarriers == i_q.len() / 2`. Amplitude and phase are derived from
+    /// this sample ([`CsiFrame::amplitude`], [`CsiFrame::phase`]).
+    pub i_q: Vec<i8>,
     /// Whole-frame received signal strength, in dBm.
     pub rssi_dbm: i8,
     /// Whole-frame noise floor, in dBm.
     pub noise_floor_dbm: i8,
     /// PHY status flags.
     pub phy: PhyFlags,
+    /// ESP32 quirk: the leading `I/Q` pair is unreliable. The node marks the
+    /// frame and nulls the first complex sample (two bytes); the core repeats
+    /// the nulling and records the flag when decoding ([`crate::CsiFrame`] is
+    /// the pure node frame, so the flag travels on the wire header's flags
+    /// byte, bit 0).
+    pub first_word_invalid: bool,
 }
 
 impl CsiFrame {
-    /// The number of subcarriers, derived from the amplitude array.
+    /// The number of subcarriers, derived from the interleaved sample.
     #[must_use]
     pub fn n_subcarriers(&self) -> usize {
-        self.amplitude.len()
+        self.i_q.len() / 2
+    }
+
+    /// The derived in-phase component of subcarrier `k`, in the core's working
+    /// unit (raw counts divided by [`IQ_COUNTS_PER_UNIT`]).
+    ///
+    /// The sample is imaginary-first, so the in-phase byte of subcarrier `k` is
+    /// the *second* byte of its pair (`i_q[2k + 1]`).
+    ///
+    /// Returns `0.0` when `k` is out of range.
+    #[must_use]
+    pub fn i_at(&self, k: usize) -> f32 {
+        self.i_q
+            .get(2 * k + 1)
+            .map_or(0.0, |v| f32::from(*v) / IQ_COUNTS_PER_UNIT)
+    }
+
+    /// The derived quadrature component of subcarrier `k`, in the core's
+    /// working unit (raw counts divided by [`IQ_COUNTS_PER_UNIT`]).
+    ///
+    /// The sample is imaginary-first, so the quadrature byte of subcarrier `k`
+    /// is the *first* byte of its pair (`i_q[2k]`).
+    ///
+    /// Returns `0.0` when `k` is out of range.
+    #[must_use]
+    pub fn q_at(&self, k: usize) -> f32 {
+        self.i_q
+            .get(2 * k)
+            .map_or(0.0, |v| f32::from(*v) / IQ_COUNTS_PER_UNIT)
+    }
+
+    /// The derived per-subcarrier amplitude (`√(I² + Q²)`), linear and
+    /// arbitrary, in ascending index order.
+    #[must_use]
+    pub fn amplitude(&self) -> Vec<f32> {
+        (0..self.n_subcarriers())
+            .map(|k| self.amplitude_at(k))
+            .collect()
+    }
+
+    /// The derived amplitude of subcarrier `k` (`√(I² + Q²)`).
+    #[must_use]
+    pub fn amplitude_at(&self, k: usize) -> f32 {
+        let i = self.i_at(k);
+        let q = self.q_at(k);
+        (i * i + q * q).sqrt()
+    }
+
+    /// The derived per-subcarrier phase (`atan2(Q, I)`), in radians, wrapped to
+    /// `[-π, π]`. Per-frame phase is uncalibrated; cross-frame phase comparison
+    /// is out of scope for v1.
+    #[must_use]
+    pub fn phase(&self) -> Vec<f32> {
+        (0..self.n_subcarriers())
+            .map(|k| self.phase_at(k))
+            .collect()
+    }
+
+    /// The derived phase of subcarrier `k` (`atan2(Q, I)`), in radians.
+    #[must_use]
+    pub fn phase_at(&self, k: usize) -> f32 {
+        self.q_at(k).atan2(self.i_at(k))
     }
 
     /// Validate the per-frame invariants that do not require neighbouring
-    /// frames: array agreement, non-negativity, finiteness and phase wrapping.
+    /// frames: a non-empty, even-length interleaved I/Q sample.
+    ///
+    /// The raw sample is already exact int8, so there is nothing to range-check
+    /// here; amplitude and phase are finite for every possible sample.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        let n = self.amplitude.len();
-        if n == 0 {
+        if self.i_q.is_empty() {
             return Err(ValidationError::Length {
-                field: "amplitude",
+                field: "i_q",
                 actual: 0,
-                expected: 1,
+                expected: 2,
             });
         }
-        if self.phase.len() != n {
+        if !self.i_q.len().is_multiple_of(2) {
             return Err(ValidationError::Length {
-                field: "phase",
-                actual: self.phase.len(),
-                expected: n,
+                field: "i_q",
+                actual: self.i_q.len(),
+                expected: self.i_q.len() + 1,
             });
-        }
-        for (i, a) in self.amplitude.iter().enumerate() {
-            require_finite_f32("amplitude", *a)?;
-            if *a < 0.0 {
-                return Err(ValidationError::Range {
-                    field: "amplitude",
-                    detail: format!("element {i} is negative"),
-                });
-            }
-        }
-        for (i, p) in self.phase.iter().enumerate() {
-            require_finite_f32("phase", *p)?;
-            // A small epsilon tolerates the rounding of a value exactly at the
-            // wrap boundary, which is produced by atan2.
-            if !(-PI..=PI).contains(p) {
-                return Err(ValidationError::Range {
-                    field: "phase",
-                    detail: format!("element {i} is outside [-π, π]"),
-                });
-            }
         }
         Ok(())
     }

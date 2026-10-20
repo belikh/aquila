@@ -6,8 +6,11 @@
 # a user opts into a local build; it is not the default because the Rust + ONNX
 # toolchain is heavy.
 build_from:
-  amd64: ghcr.io/home-assistant/amd64-base-debian:bookworm
-  aarch64: ghcr.io/home-assistant/aarch64-base-debian:bookworm
+  # Pinned by tag and digest (repository-tooling.md §12). The digest is the
+  # arch-specific manifest the add-on builder resolves; `release.yml` passes the
+  # same value as `BUILD_FROM` to `docker buildx`.
+  amd64: ghcr.io/home-assistant/amd64-base-debian:bookworm@sha256:7da3f90a8e2fdc3095cc93b0dfb751c9c21356e11b30a6493c7ac15270b4e809
+  aarch64: ghcr.io/home-assistant/aarch64-base-debian:bookworm@sha256:68f4c1a11d10facc5442ff11509a164463f98b154c80dc1dfeedbc267dd71665
 
 labels:
   org.opencontainers.image.title: Aquila Core

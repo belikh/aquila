@@ -4,15 +4,24 @@
 //! representation, [`ComplexFrame`] — the per-subcarrier [`Complex32`] bins the
 //! DSP consumes. It is deliberately not a contract type: the one canonical
 //! `CsiFrame` lives in `aquila-types` (`data-contracts.md` §2). [`decode_csi`]
-//! converts that contract frame into a [`ComplexFrame`], and [`decode_record`]
-//! decodes a raw ESP32 CSI record for the record-level path. Both are total
-//! functions of their input: they allocate but perform no IO and hold no
-//! globals (`signal.md` §4.1).
+//! derives those bins from the raw signed int8 I/Q sample the contract frame
+//! carries (ADR-0005), and [`decode_record`] decodes a raw ESP32 CSI record for
+//! the record-level path. Both are total functions of their input: they
+//! allocate but perform no IO and hold no globals (`signal.md` §4.1).
 
 use aquila_types::{Band, CsiFrame as ContractFrame, NodeId};
 
 use crate::error::DecodeError;
-use crate::math::{cos_approx, sin_approx};
+
+/// The largest raw CSI record the record-level decoder accepts, in bytes.
+///
+/// Derived from the wire's `MAX_SUBCARRIERS` (714), two signed int8 bytes per
+/// subcarrier (`capture-and-firmware.md` §5.1). The superseded 612-byte cap
+/// (`sister-issues-core.md` S13) came from the old 56-byte header layout and
+/// rejected a legal 714-subcarrier frame. `aquila-signal` cannot depend on
+/// `aquila-wire` in the DAG, so the value is mirrored and pinned by the boundary
+/// test.
+const MAX_RECORD_BYTES: usize = 1428;
 
 /// Channel width; determines the expected subcarrier count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -216,58 +225,41 @@ pub struct ComplexFrame {
 /// derives the same nominal label the transport seam always used. It is never
 /// read by the DSP (`signal.md` §2).
 fn centre_freq_hz(band: Band, channel: u8) -> u32 {
-    match band {
-        Band::B2G4 => 2_407 + u32::from(channel) * 5,
-        Band::B5G => 5_000 + u32::from(channel) * 5,
-        Band::Unknown => 0,
-    }
+    aquila_types::channel_centre_freq_mhz(band, channel)
 }
 
 /// Decode the canonical contract frame into the conditioning representation.
 ///
 /// This is the one conversion from the on-air/on-disk `aquila_types::CsiFrame`
-/// (ordered `amplitude`/`phase` arrays, `data-contracts.md` §2) to a
-/// [`ComplexFrame`] (per-subcarrier [`Complex32`] bins). The reconstruction
-/// `re = a·cos(φ)`, `im = a·sin(φ)` inverts the magnitude and argument the wire
-/// carries, using the crate's deterministic [`cos_approx`]/[`sin_approx`] so the
-/// conversion is bit-identical across hosts.
+/// (a raw signed int8 I/Q sample, interleaved `Q, I` — **imaginary first** —
+/// `data-contracts.md` §2 and ADR-0005) to a [`ComplexFrame`] (per-subcarrier
+/// [`Complex32`] bins). The frame's derived accessors
+/// ([`aquila_types::CsiFrame::i_at`], [`aquila_types::CsiFrame::q_at`]) apply the
+/// imaginary-first order, so each complex sample becomes one [`Complex32`],
+/// divided by [`aquila_types::IQ_COUNTS_PER_UNIT`] to recover the core's working
+/// unit; the conversion is exact and introduces no clamping or `NaN`
+/// (`signal.md` D3). The old on-node amplitude/phase derivation (`√(I²+Q²)`,
+/// `atan2(Q, I)`) now lives here, in the core.
+///
+/// When the frame's `first_word_invalid` flag is set (the leading pair is
+/// unreliable), the first [`Complex32`] bin is zeroed and
+/// [`FrameFlags::first_word_zeroed`] is recorded, matching [`decode_record`].
 ///
 /// # Errors
 ///
-/// Returns [`DecodeError`] when the contract frame carries no subcarriers,
-/// mismatched `amplitude`/`phase` lengths, or a non-finite sample. A valid
-/// contract frame never fails.
+/// Returns [`DecodeError`] when the contract frame carries no subcarriers or an
+/// odd-length sample. A valid contract frame never fails.
 pub fn decode_csi(frame: &ContractFrame) -> Result<ComplexFrame, DecodeError> {
-    let n = frame.amplitude.len();
-    if n == 0 {
+    if frame.i_q.is_empty() {
         return Err(DecodeError::EmptyFrame);
     }
-    if frame.phase.len() != n {
-        return Err(DecodeError::LengthMismatch {
-            amplitude: n,
-            phase: frame.phase.len(),
-        });
+    if !frame.i_q.len().is_multiple_of(2) {
+        return Err(DecodeError::OddIqLength(frame.i_q.len()));
     }
+    let n = frame.i_q.len() / 2;
     let mut bins = Vec::with_capacity(n);
-    for i in 0..n {
-        let amplitude = frame.amplitude[i];
-        let phase = frame.phase[i];
-        if !amplitude.is_finite() {
-            return Err(DecodeError::NonFiniteSample {
-                field: "amplitude",
-                index: i,
-            });
-        }
-        if !phase.is_finite() {
-            return Err(DecodeError::NonFiniteSample {
-                field: "phase",
-                index: i,
-            });
-        }
-        bins.push(Complex32::new(
-            amplitude * cos_approx(phase),
-            amplitude * sin_approx(phase),
-        ));
+    for k in 0..n {
+        bins.push(Complex32::new(frame.i_at(k), frame.q_at(k)));
     }
 
     let bandwidth = if frame.bandwidth_mhz >= 40 {
@@ -283,13 +275,19 @@ pub fn decode_csi(frame: &ContractFrame) -> Result<ComplexFrame, DecodeError> {
         bandwidth,
         rssi_dbm: frame.rssi_dbm,
         noise_floor_dbm: frame.noise_floor_dbm,
-        first_word_invalid: false,
+        first_word_invalid: frame.first_word_invalid,
     };
-    let flags = FrameFlags {
+    let mut flags = FrameFlags {
         first_word_zeroed: false,
         rssi_anomaly: !(-100..=0).contains(&frame.rssi_dbm),
         noise_floor_anomaly: !(-120..=0).contains(&frame.noise_floor_dbm),
     };
+    if frame.first_word_invalid {
+        if let Some(first) = bins.first_mut() {
+            *first = Complex32::ZERO;
+        }
+        flags.first_word_zeroed = true;
+    }
 
     Ok(ComplexFrame { meta, bins, flags })
 }
@@ -315,7 +313,7 @@ pub fn decode_record(
     if raw.is_empty() {
         return Err(DecodeError::EmptyRecord);
     }
-    if raw.len() > 612 {
+    if raw.len() > MAX_RECORD_BYTES {
         return Err(DecodeError::TooLarge(raw.len()));
     }
     if !raw.len().is_multiple_of(2) {

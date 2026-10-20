@@ -8,8 +8,8 @@ use aquila_simulator::{
     Actor, Impairments, Motion, NodeSpec, SceneScript, SimConfig, SimulatorSource,
 };
 use aquila_types::{
-    Band, DeviceType, FirmwareRef, Floor, Home, MacAddr, Node, NodeId, Room, RoomId, RoomKind, Slug,
-    Topology, CONTRACT_VERSION,
+    Band, DeviceType, FirmwareRef, Home, MacAddr, Node, NodeId, Slug, Topology, Zone,
+    CONTRACT_VERSION,
 };
 
 use crate::{CollectorSink, EvalScope, FixtureGroundTruth, GroundTruth, Harness};
@@ -20,19 +20,19 @@ fn slug(value: &str) -> Slug {
 
 /// A deterministic single-node scene with one swaying actor present throughout.
 fn scene() -> SceneScript {
-    let lounge: RoomId = slug("lounge");
+    let lounge: Slug = slug("lounge");
     SceneScript {
         name: "eval".to_string(),
         home: slug("eval-home"),
         nodes: vec![NodeSpec {
             id: NodeId(1),
-            room: lounge.clone(),
+            zone: lounge.clone(),
             pos_m: [0.0, 0.0, 2.4],
             skew_ppm: 0.0,
             noise_scale: 1.0,
         }],
         actors: vec![Actor {
-            room: lounge,
+            zone: lounge,
             position_m: [1.5, 0.0, 0.0],
             active_from_s: 0.0,
             active_to_s: 20.0,
@@ -58,18 +58,17 @@ fn scene() -> SceneScript {
     }
 }
 
-/// A minimal one-floor topology for a scene, mirroring the simulator's needs.
+/// A minimal topology for a scene, mirroring the simulator's needs.
 fn topology_for_scene(script: &SceneScript) -> Topology {
     let home = script.home.clone();
-    let floor = slug("ground");
     let firmware = FirmwareRef {
         version: "eval".to_string(),
-        sha256: [0u8; 32],
+        sha256: None,
     };
-    let mut rooms: Vec<RoomId> = Vec::new();
+    let mut zones: Vec<Slug> = Vec::new();
     for node in &script.nodes {
-        if !rooms.contains(&node.room) {
-            rooms.push(node.room.clone());
+        if !zones.contains(&node.zone) {
+            zones.push(node.zone.clone());
         }
     }
     Topology {
@@ -79,23 +78,13 @@ fn topology_for_scene(script: &SceneScript) -> Topology {
             time_zone: "Australia/Sydney".to_string(),
             contract: CONTRACT_VERSION,
         },
-        floors: vec![Floor {
-            id: floor.clone(),
-            home: home.clone(),
-            name: "Ground".to_string(),
-            level: 0,
-            elevation_m: 0.0,
-        }],
-        rooms: rooms
+        zones: zones
             .iter()
-            .map(|room| Room {
-                id: room.clone(),
-                floor: floor.clone(),
-                name: room.as_str().to_string(),
-                kind: RoomKind::Unknown,
+            .map(|zone| Zone {
+                id: zone.clone(),
                 origin_home_m: [0.0, 0.0, 0.0],
-                yaw_deg: 0.0,
-                area_m2: None,
+                extent_home_m: [5.0, 5.0, 5.0],
+                name: zone.as_str().to_string(),
             })
             .collect(),
         nodes: script
@@ -103,16 +92,16 @@ fn topology_for_scene(script: &SceneScript) -> Topology {
             .iter()
             .map(|spec| Node {
                 id: spec.id,
-                room: spec.room.clone(),
+                zone: spec.zone.clone(),
                 name: format!("node-{}", spec.id.0),
                 mac: MacAddr([0, 0, 0, 0, 0, spec.id.0 as u8]),
                 device: DeviceType::Esp32S3,
                 firmware: firmware.clone(),
-                pos_room_m: Some([
+                pos_home_m: [
                     spec.pos_m[0] as f32,
                     spec.pos_m[1] as f32,
                     spec.pos_m[2] as f32,
-                ]),
+                ],
                 installed_unix_ms: 0,
             })
             .collect(),
@@ -144,7 +133,18 @@ fn scores_a_simulated_run() {
         None,
         None,
         topology_for_scene(&script),
-        SensingConfig::default(),
+        SensingConfig {
+            // A declared synthetic-fixture baseline, so the deterministic
+            // generator drives presence decisions (`sister-issues-core.md` S9).
+            presence_motion_threshold: Some(0.04375),
+            presence_motion_scale: 0.013125,
+            // A real-looking build identity: the default's empty commit is
+            // refused (`sister-issues-core.md` S15).
+            measurement: aquila_sensing::MeasurementConfig::with_commit(
+                "0123456789abcdef0123456789abcdef01234567",
+            ),
+            ..SensingConfig::default()
+        },
     )
     .expect("valid core");
 
@@ -161,7 +161,7 @@ fn scores_a_simulated_run() {
 
     let scope = EvalScope {
         sessions: vec![config.session.clone()],
-        rooms: vec![slug("lounge")],
+        zones: vec![slug("lounge")],
     };
     let report = Harness::new()
         .run(&truth, &config.session, &events, &scope)

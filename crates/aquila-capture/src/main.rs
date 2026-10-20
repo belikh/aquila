@@ -8,7 +8,8 @@
 //! rule). It is **not** part of the runtime; it exists so a developer can:
 //!
 //! - `record` — bind the CSI data port (`9100/udp`) and write a `.aqs` Session
-//!   from live nodes, carrying one re-encoded `AQCI` datagram per CSI record.
+//!   from live nodes, carrying one exact received `AQCI` datagram per CSI
+//!   record (replay runs the real decoder on those bytes).
 //! - `synth` — write a deterministic `.aqs` Session from a scene script via
 //!   [`aquila_simulator`], so the codec and the pipeline are exercised in CI
 //!   without hardware.
@@ -19,9 +20,9 @@
 //!   channel (`capture-and-firmware.md` §6.3); this tool only prepares the NVS
 //!   document an operator would flash.
 //!
-//! The wire bytes are owned by [`aquila_wire`]: every datagram written by
-//! `record` is produced by `aquila_wire::encode_datagram`, so the firmware, the
-//! Session and the core cannot drift.
+//! The wire bytes are owned by [`aquila_wire`]: `record` stores the exact bytes
+//! the node sent, and `synth` stores `aquila_wire::encode_datagram`'s output,
+//! so the firmware, the Session and the core cannot drift.
 //!
 //! No hardware is required: `synth` plus one committed golden Session covers the
 //! codec and the pipeline (`capture-and-firmware.md` §8.3).

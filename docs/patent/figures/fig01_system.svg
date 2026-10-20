@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 620" width="850" height="620" font-family="Arial,Helvetica,sans-serif" font-size="10">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#000"/></marker>
+  </defs>
+  <rect x="10" y="10" width="830" height="600" fill="none" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="28" text-anchor="middle" font-size="13" font-weight="bold">Fig. 1</text>
+  <text x="425" y="44" text-anchor="middle" font-size="11">Wi-Fi sensing mesh with Jennison closure-phase processing</text>
+
+  <!-- Nodes column -->
+  <text x="100" y="90" text-anchor="middle" font-size="10" font-weight="bold">incoherent Wi-Fi sensor nodes</text>
+  <g transform="translate(40,110)">
+    <rect x="0" y="0" width="120" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="60" y="18" text-anchor="middle" font-weight="bold">Node 1</text>
+    <text x="60" y="34" text-anchor="middle" font-size="8">Wi-Fi radio + CSI</text>
+    <text x="60" y="46" text-anchor="middle" font-size="8">indep. LO + clock</text>
+  </g>
+  <g transform="translate(40,180)">
+    <rect x="0" y="0" width="120" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="60" y="18" text-anchor="middle" font-weight="bold">Node 2</text>
+    <text x="60" y="34" text-anchor="middle" font-size="8">Wi-Fi radio + CSI</text>
+    <text x="60" y="46" text-anchor="middle" font-size="8">indep. LO + clock</text>
+  </g>
+  <g transform="translate(40,250)">
+    <rect x="0" y="0" width="120" height="50" fill="#fff" stroke="#000" stroke-width="1.2"/>
+    <text x="60" y="18" text-anchor="middle" font-weight="bold">Node N</text>
+    <text x="60" y="34" text-anchor="middle" font-size="8">Wi-Fi radio + CSI</text>
+    <text x="60" y="46" text-anchor="middle" font-size="8">indep. LO + clock</text>
+  </g>
+  <path d="M160,160 L250,240" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <path d="M160,230 L250,240" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+  <path d="M160,300 L250,240" stroke="#000" stroke-width="1" marker-end="url(#arr)"/>
+
+  <!-- Sensing core -->
+  <g transform="translate(250,200)">
+    <rect x="0" y="0" width="220" height="140" fill="#fff" stroke="#000" stroke-width="1.6"/>
+    <text x="110" y="22" text-anchor="middle" font-weight="bold">Sensing core</text>
+    <line x1="0" y1="40" x2="220" y2="40" stroke="#000" stroke-width="0.8"/>
+    <text x="110" y="58" text-anchor="middle" font-size="9">closure-phase engine</text>
+    <text x="110" y="74" text-anchor="middle" font-size="9">(directed packet loops)</text>
+    <line x1="0" y1="90" x2="220" y2="90" stroke="#000" stroke-width="0.8"/>
+    <text x="110" y="108" text-anchor="middle" font-size="9">3-D scatterer tracking</text>
+    <text x="110" y="124" text-anchor="middle" font-size="9">per-zone output</text>
+  </g>
+
+  <!-- Scatterer / person -->
+  <g transform="translate(250,30)">
+    <circle cx="110" cy="40" r="26" fill="#fff" stroke="#000" stroke-width="1.4"/>
+    <text x="110" y="45" text-anchor="middle" font-weight="bold">moving</text>
+    <text x="110" y="58" text-anchor="middle" font-weight="bold">scatterer</text>
+    <text x="110" y="70" text-anchor="middle" font-size="8">(person / object)</text>
+  </g>
+  <path d="M220,60 Q180,110 140,120" stroke="#000" stroke-width="1" marker-end="url(#arr)" fill="none"/>
+  <path d="M120,130 Q180,140 250,200" stroke="#000" stroke-width="1" marker-end="url(#arr)" fill="none"/>
+
+  <!-- Home outline -->
+  <path d="M10,420 L840,420 L840,600 L10,600 Z" fill="none" stroke="#000" stroke-width="1.2"/>
+  <text x="425" y="438" text-anchor="middle" font-size="9" font-weight="bold">monitored home (zones)</text>
+  <line x1="150" y1="460" x2="150" y2="570" stroke="#000" stroke-width="0.8" stroke-dasharray="4 4"/>
+  <line x1="425" y1="460" x2="425" y2="570" stroke="#000" stroke-width="0.8" stroke-dasharray="4 4"/>
+  <line x1="700" y1="460" x2="700" y2="570" stroke="#000" stroke-width="0.8" stroke-dasharray="4 4"/>
+  <text x="150" y="472" text-anchor="middle" font-size="8">zone 1</text>
+  <text x="425" y="472" text-anchor="middle" font-size="8">zone 2</text>
+  <text x="700" y="472" text-anchor="middle" font-size="8">zone 3</text>
+</svg>

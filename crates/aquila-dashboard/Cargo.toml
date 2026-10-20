@@ -1,0 +1,47 @@
+[package]
+name = "aquila-dashboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Aquila management dashboard — Leptos CSR UI served over HA ingress (ticket #10)."
+
+[dependencies]
+aquila-types = { path = "../aquila-types" }
+aquila-api = { path = "../aquila-api" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# The whole Leptos/web-sys stack is compiled only for the WASM SPA. The host
+# build therefore stays a small, dependency-light stub and `cargo test
+# --workspace` never has to resolve the browser crates (`dashboard.md` §2,
+# ticket #10 build gate).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+leptos = { version = "0.8", features = ["csr"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Location",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlSelectElement",
+    "HtmlButtonElement",
+    "Node",
+    "Event",
+    "EventTarget",
+    "MouseEvent",
+    "HashChangeEvent",
+    "Request",
+    "RequestInit",
+    "Response",
+    "Headers",
+    "console",
+] }
+
+[lints]
+workspace = true

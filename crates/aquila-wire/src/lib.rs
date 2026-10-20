@@ -24,22 +24,16 @@
 //!
 //! # Layout decision
 //!
-//! Two specification sections describe the CSI data plane. `capture-and-firmware.md`
-//! §5.1 names it `AQCI` with a 56-byte header carrying a factory MAC and
-//! `int8`-interleaved I/Q; `data-contracts.md` §9.1 calls the *canonical on-air*
-//! format `AQCS` with a 16-byte header and `f32` amplitude/phase arrays. The two
-//! conflict, and §9.1 is the only one that round-trips the frozen `CsiFrame`
-//! shape (`data-contracts.md` §2/§8) through the required
-//! `encode_datagram`/`decode_datagram` signatures.
-//!
-//! This crate therefore adopts the **§9.1 canonical layout** — the header and
-//! body offsets, the major/minor version rules and the `f32` payload — under
-//! the **`AQCI` magic** that the task and §5.1 name. The divergences from §9.1
-//! are the magic (`AQCI` not `AQCS`) and the identity field (the dense
-//! [`NodeId`](aquila_types::NodeId) that `CsiFrame` carries, not a MAC). The
-//! MAC↔`NodeId` translation that `ADR-0003` §3 places at the seam is provided
-//! by [`NodeIdentityMap`], which `aquila-sources` maintains from the topology.
-//! This is recorded as the crate's pinned layout decision.
+//! The CSI data plane is one layout under the `AQCI` magic that
+//! `capture-and-firmware.md` §5.1 and the interface register name. The header
+//! and body offsets are those of `data-contracts.md` §9.1; the payload is the
+//! raw signed int8 I/Q sample the esp-csi capture produced — the verbatim
+//! sample is ADR-0005, the imaginary-first byte order is ADR-0006 — two bytes
+//! per subcarrier, not a derived `f32` amplitude/phase pair. The identity
+//! field is the dense [`NodeId`](aquila_types::NodeId) that `CsiFrame` carries,
+//! not a MAC; the MAC↔`NodeId` translation that `ADR-0003` §3 places at the
+//! seam is provided by [`NodeIdentityMap`], which `aquila-sources` maintains
+//! from the topology.
 //!
 //! # Example
 //!
@@ -56,11 +50,11 @@
 //!     channel: 6,
 //!     bandwidth_mhz: 20,
 //!     subcarrier_offset: -32,
-//!     amplitude: vec![1.0, 2.0, 3.0],
-//!     phase: vec![0.0, -0.5, 0.5],
+//!     i_q: vec![10, -3, 20, 0, -30, 15],
 //!     rssi_dbm: -40,
 //!     noise_floor_dbm: -90,
 //!     phy: PhyFlags(PhyFlags::HT),
+//!     first_word_invalid: false,
 //! };
 //!
 //! let bytes = encode_datagram(&frame);
@@ -69,6 +63,7 @@
 //!
 //! Australian English throughout (serialisation, behaviour, normalise).
 
+mod auth;
 mod c_header;
 mod constants;
 mod control;
@@ -80,17 +75,20 @@ mod identity;
 #[cfg(test)]
 mod tests;
 
+pub use auth::{control_auth_tag, verify_control_auth};
 pub use c_header::generate_c_header;
 pub use constants::{
-    Opcode, CONTROL_HEADER_LEN, CONTROL_MAGIC, CONTROL_PORT, CONTROL_VERSION, CSI_BODY_FIXED_LEN,
-    CSI_DATA_PORT, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_CONTROL_STRING,
-    MAX_DATAGRAM_LEN, MAX_SOURCE_MACS, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_F32, WIRE_MAJOR,
-    WIRE_MINOR,
+    Opcode, CONTROL_AUTH_LEN, CONTROL_HEADER_LEN, CONTROL_MAGIC, CONTROL_PORT, CONTROL_VERSION,
+    CSI_BODY_FIXED_LEN, CSI_DATA_PORT, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN, CSI_MAGIC,
+    CSI_MESSAGE_TYPE, MAX_CONTROL_STRING, MAX_DATAGRAM_LEN, MAX_SOURCE_MACS, MAX_SUBCARRIERS,
+    OTA_DEFAULT_CHUNK_SIZE, OTA_DEFAULT_WINDOW, OTA_MAX_CHUNK_SIZE, SUBCARRIER_FORMAT_INT8_IQ,
+    WIRE_MAJOR, WIRE_MINOR,
 };
 pub use control::{
-    decode_control, encode_control, message_mac, result_message, Ack, AckStatus, ControlBody,
-    ControlMessage, EventNotice, JoinAck, JoinRequest, SetConfig, SetCsi, Status, SyncEcho,
-    SyncPing,
+    decode_control, decode_control_authenticated, encode_control, encode_control_authenticated,
+    message_mac, result_message, Ack, AckStatus, ControlBody, ControlMessage, EventNotice, JoinAck,
+    JoinRequest, OtaAbort, OtaAck, OtaAckStatus, OtaBegin, OtaChunk, OtaEnd, OtaOutcome, OtaResult,
+    OtaState, OtaStatus, SetConfig, SetCsi, Status, SyncEcho, SyncPing,
 };
 pub use datagram::{datagram_len, decode_datagram, encode_datagram};
 pub use error::{DecodeError, WireError};

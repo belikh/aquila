@@ -1,9 +1,10 @@
 //! The CSI data plane: one `CsiFrame` per UDP datagram, little-endian.
 //!
-//! The layout is the canonical on-air format of `data-contracts.md` §9.1, which
-//! maps one-for-one onto the frozen [`CsiFrame`] shape, carried under the
-//! `AQCI` magic named by `capture-and-firmware.md` §5.1 and the interface
-//! register. See the crate-level *Layout decision* note for the reconciliation.
+//! The layout is the canonical on-air format of `data-contracts.md` §9.1,
+//! carried under the `AQCI` magic named by `capture-and-firmware.md` §5.1 and
+//! the interface register. The payload is the raw signed int8 I/Q sample the
+//! node captured (ADR-0005): interleaved `Q, I` (**imaginary first**), two
+//! bytes per subcarrier.
 //!
 //! ```text
 //! offset size field
@@ -11,13 +12,13 @@
 //!      4    1 wire_major
 //!      5    1 wire_minor
 //!      6    1 msg_type = 1
-//!      7    1 sc_format = 0
+//!      7    1 sc_format = 1 (INT8_IQ)
 //!      8    2 node_id
 //!     10    2 payload_len
 //!     12    1 band
 //!     13    1 channel
 //!     14    1 bandwidth_mhz
-//!     15    1 reserved = 0
+//!     15    1 flags: bit0 = first_word_invalid
 //!     16    8 sequence
 //!     24    8 device_time_us
 //!     32    2 boot_epoch
@@ -27,15 +28,14 @@
 //!     39    1 noise_floor_dbm (i8)
 //!     40    2 phy_flags
 //!     42    2 reserved = 0
-//!     44   4n amplitude[0..n] (f32)
-//!  44+4n   4n phase[0..n] (f32)
+//!     44   2n i_q[0..2n] (i8, interleaved Q,I per subcarrier)
 //! ```
 
 use aquila_types::{Band, CsiFrame, NodeId, PhyFlags};
 
 use crate::constants::{
-    CSI_BODY_FIXED_LEN, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_SUBCARRIERS,
-    SUBCARRIER_FORMAT_F32, WIRE_MAJOR, WIRE_MINOR,
+    CSI_BODY_FIXED_LEN, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE,
+    MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
 };
 use crate::cursor::{Reader, Writer};
 use crate::error::WireError;
@@ -49,7 +49,7 @@ pub fn datagram_len(n_subcarriers: usize) -> Option<usize> {
     if n_subcarriers == 0 || n_subcarriers > MAX_SUBCARRIERS as usize {
         return None;
     }
-    Some(CSI_HEADER_LEN + CSI_BODY_FIXED_LEN + 8 * n_subcarriers)
+    Some(CSI_HEADER_LEN + CSI_BODY_FIXED_LEN + 2 * n_subcarriers)
 }
 
 /// Map a [`Band`] to its on-wire byte.
@@ -74,14 +74,14 @@ const fn band_from_u8(value: u8) -> Band {
 /// Encode one [`CsiFrame`] as an `AQCI` datagram.
 ///
 /// The function is total: it never fails and never panics. A frame whose
-/// `amplitude` is longer than [`MAX_SUBCARRIERS`] is clamped to the wire budget
-/// (such a frame could not cross the MTU anyway); a frame whose `phase` is
-/// shorter than its `amplitude` is padded with `0.0`. Frames obeying the
-/// [`CsiFrame`] invariants round-trip exactly.
+/// interleaved sample is longer than [`MAX_SUBCARRIERS`] pairs is clamped to the
+/// wire budget (such a frame could not cross the MTU anyway); an odd trailing
+/// byte is dropped. Frames obeying the [`CsiFrame`] invariants round-trip
+/// exactly.
 #[must_use]
 pub fn encode_datagram(frame: &CsiFrame) -> Vec<u8> {
-    let n = frame.amplitude.len().min(MAX_SUBCARRIERS as usize);
-    let payload_len = CSI_BODY_FIXED_LEN + 8 * n;
+    let n = frame.n_subcarriers().min(MAX_SUBCARRIERS as usize);
+    let payload_len = CSI_BODY_FIXED_LEN + 2 * n;
 
     let mut w = Writer::new();
     // Fixed header.
@@ -89,13 +89,18 @@ pub fn encode_datagram(frame: &CsiFrame) -> Vec<u8> {
     w.u8(WIRE_MAJOR);
     w.u8(WIRE_MINOR);
     w.u8(CSI_MESSAGE_TYPE);
-    w.u8(SUBCARRIER_FORMAT_F32);
+    w.u8(SUBCARRIER_FORMAT_INT8_IQ);
     w.u16(frame.node_id.0);
     w.u16(payload_len as u16);
     w.u8(band_to_u8(frame.band));
     w.u8(frame.channel);
     w.u8(frame.bandwidth_mhz);
-    w.u8(0); // reserved
+    let flags = if frame.first_word_invalid {
+        CSI_FLAG_FIRST_WORD_INVALID
+    } else {
+        0
+    };
+    w.u8(flags);
 
     // Fixed body.
     w.u64(frame.sequence);
@@ -108,12 +113,9 @@ pub fn encode_datagram(frame: &CsiFrame) -> Vec<u8> {
     w.u16(frame.phy.0);
     w.u16(0); // reserved
 
-    // Amplitude, then phase.
-    for i in 0..n {
-        w.f32(frame.amplitude[i]);
-    }
-    for i in 0..n {
-        w.f32(frame.phase.get(i).copied().unwrap_or(0.0));
+    // Interleaved signed int8 I/Q, imaginary (Q) then real (I) per subcarrier (ADR-0006).
+    for i in 0..2 * n {
+        w.i8(frame.i_q.get(i).copied().unwrap_or(0));
     }
 
     w.into_vec()
@@ -150,7 +152,7 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         return Err(WireError::UnknownMessageType(msg_type));
     }
     let sc_format = r.u8()?;
-    if sc_format != SUBCARRIER_FORMAT_F32 {
+    if sc_format != SUBCARRIER_FORMAT_INT8_IQ {
         return Err(WireError::UnknownSubcarrierFormat(sc_format));
     }
     let node_id = NodeId(r.u16()?);
@@ -158,7 +160,7 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
     let band = band_from_u8(r.u8()?);
     let channel = r.u8()?;
     let bandwidth_mhz = r.u8()?;
-    let _reserved = r.u8()?;
+    let flags = r.u8()?;
 
     // Fail early, with a clean truncation, if the declared payload is not all
     // present.
@@ -183,7 +185,7 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         });
     }
 
-    let expected_payload = CSI_BODY_FIXED_LEN + 8 * n as usize;
+    let expected_payload = CSI_BODY_FIXED_LEN + 2 * n as usize;
     if payload_len != expected_payload {
         return Err(WireError::LengthMismatch {
             declared: payload_len,
@@ -197,13 +199,9 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
     let _body_reserved = r.u16()?;
 
     let count = n as usize;
-    let mut amplitude = Vec::with_capacity(count);
-    for _ in 0..count {
-        amplitude.push(r.f32()?);
-    }
-    let mut phase = Vec::with_capacity(count);
-    for _ in 0..count {
-        phase.push(r.f32()?);
+    let mut i_q = Vec::with_capacity(2 * count);
+    for _ in 0..2 * count {
+        i_q.push(r.i8()?);
     }
 
     // Bytes beyond the declared payload are ignored (forward-compatible).
@@ -216,10 +214,10 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         channel,
         bandwidth_mhz,
         subcarrier_offset,
-        amplitude,
-        phase,
+        i_q,
         rssi_dbm,
         noise_floor_dbm,
         phy,
+        first_word_invalid: flags & CSI_FLAG_FIRST_WORD_INVALID != 0,
     })
 }

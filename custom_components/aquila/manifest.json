@@ -6,9 +6,9 @@
   "documentation": "https://github.com/belikh/aquila",
   "issue_tracker": "https://github.com/belikh/aquila/issues",
   "integration_type": "hub",
-  "iot_class": "local_push",
-  "version": "0.1.0",
-  "dependencies": ["frontend", "http"],
+  "iot_class": "local_polling",
+  "version": "0.2.3",
+  "dependencies": ["http"],
   "requirements": [],
   "loggers": ["custom_components.aquila"]
 }

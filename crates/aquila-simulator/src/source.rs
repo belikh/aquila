@@ -24,14 +24,14 @@ use aquila_session::{Manifest, SessionWriter};
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
     Band, BuildId, CsiEnvelope, CsiFrame, EventPayload, EventScope, GroundTruthRecord,
-    GroundTruthRef, GtKind, Keypoint, KeypointId, PhyFlags, Pose, RoomId, Session, SessionId,
-    SubjectId, Witness, CONTRACT_VERSION, KEYPOINT_COUNT,
+    GroundTruthRef, GtKind, Keypoint, KeypointId, PhyFlags, Pose, Session, SessionId,
+    SubjectId, Witness, ZoneId, CONTRACT_VERSION, KEYPOINT_COUNT,
 };
 use aquila_wire::{decode_datagram, encode_datagram};
 
 use crate::error::SimError;
 use crate::rng::{signed4, unit4};
-use crate::scene::{SceneScript, SPEED_OF_LIGHT_MPS};
+use crate::scene::{Body, SceneScript, SPEED_OF_LIGHT_MPS};
 
 /// The scattering strength of each dynamic term (torso/limbs).
 const ACTOR_SCATTER: f64 = 0.7;
@@ -40,6 +40,37 @@ const ACTOR_SCATTER: f64 = 0.7;
 /// actor. A body distributes its scattering over the torso keypoints, so each
 /// single point is weaker than the point-actor [`ACTOR_SCATTER`].
 const ACTOR_TORSO_SCATTER: f64 = 0.5;
+
+/// The modelled esp-csi fixed-point gain: the int8 counts one unit of the
+/// synthesised linear field maps to.
+///
+/// The real receiver selects a gain so a typical frame fills a useful fraction
+/// of the int8 range without clipping (ADR-0005). The simulator models that as a
+/// **fixed gain sized to the scene's bounded field**: baseline and scatterers
+/// sum coherently to at most ~3.5 units, so a gain of 28 maps the busiest frame
+/// to ~100 counts and leaves headroom. This replaces the old gain that drove the
+/// composite field past 127 and silently saturated (`sister-issues-core.md`
+/// S10). The core divides by `aquila_types::IQ_COUNTS_PER_UNIT` regardless, so
+/// the modelled gain sets the absolute amplitude scale, never the derived phase.
+const SIM_IQ_SCALE: f64 = 28.0;
+
+/// The modelled receiver noise floor, in dBm. The reported RSSI is this floor
+/// plus the frame's signal-to-noise ratio, so it is derived from a link budget
+/// rather than a tuned clamp of the quantised mean (`sister-issues-core.md`
+/// S10).
+const SIM_NOISE_FLOOR_DBM: f64 = -95.0;
+
+/// The int8 magnitude at which the quantiser would clip; reaching it is flagged
+/// on the frame rather than left silent.
+const IQ_CLIP_LIMIT: f64 = 127.0;
+
+/// Quantise one synthesised complex component to the raw int8 the node emits,
+/// reporting whether the modelled gain drove it past the int8 range.
+fn quantise_i8(value: f64) -> (i8, bool) {
+    let scaled = (value * SIM_IQ_SCALE).round();
+    let clipped = scaled.abs() > IQ_CLIP_LIMIT;
+    (scaled.clamp(-128.0, 127.0) as i8, clipped)
+}
 
 // Stream tags keep independent draws independent.
 const TAG_LOSS: u64 = 11;
@@ -81,10 +112,13 @@ impl SimConfig {
 ///
 /// Frames are yielded node-by-node within each tick, in configured node order,
 /// with the tick advancing after the last node. Impairments drop frames (a
-/// sequence gap) or null the first subcarrier.
+/// sequence gap) or null the first complex sample and set `first_word_invalid`.
 pub struct SimulatorSource {
     script: SceneScript,
     config: SimConfig,
+    /// The per-actor pose bodies with the seed-drawn dither frequencies applied
+    /// (`sister-issues-core.md` S4). `None` for a non-body actor.
+    bodies: Vec<Option<Body>>,
     total_ticks: usize,
     total_frames: usize,
     cursor: usize,
@@ -101,9 +135,23 @@ impl SimulatorSource {
         script.validate()?;
         let total_ticks = total_ticks(&script);
         let total_frames = total_ticks * script.nodes.len();
+        // Draw each body's scatterer dither frequencies per seed, so the
+        // synthetic pose signature is unknown to the estimator (S4).
+        let bodies = script
+            .actors
+            .iter()
+            .enumerate()
+            .map(|(index, actor)| {
+                actor
+                    .body
+                    .as_ref()
+                    .map(|body| body.randomised_dither(config.seed, index))
+            })
+            .collect();
         Ok(Self {
             script,
             config,
+            bodies,
             total_ticks,
             total_frames,
             cursor: 0,
@@ -256,26 +304,41 @@ impl SimulatorSource {
     /// makes them unrecoverable. This is a correction, not a tuning: the
     /// dynamics are unchanged and determinism (`§7.1`) still holds, because the
     /// centre is a pure function of `(band, channel)`.
+    ///
+    /// The synthesised complex `H_k` is then quantised to the raw signed int8
+    /// `I/Q` the hardware emits, so the frame the core receives is byte-identical
+    /// in kind to a live one (ADR-0005).
     fn synth_frame(&self, node_index: usize, tick: usize) -> CsiFrame {
         let node = &self.script.nodes[node_index];
         let t = tick as f64 / self.script.tick_hz;
         let n = self.script.subcarriers;
         let centre_hz = centre_freq_hz(self.script.band, self.script.channel);
-        let mut amplitude = Vec::with_capacity(n);
-        let mut phase = Vec::with_capacity(n);
+        let noise_scale = self.script.noise_amplitude * self.script.nodes[node_index].noise_scale;
+        let mut i_q = Vec::with_capacity(2 * n);
+        let mut field_power = 0.0_f64;
+        let mut saturated = false;
 
         for k in 0..n {
-            let f_rf = centre_hz
-                + (k as f64 - n as f64 / 2.0) * self.script.subcarrier_spacing_hz;
+            let f_rf = centre_hz + (k as f64 - n as f64 / 2.0) * self.script.subcarrier_spacing_hz;
             let (mut re, mut im) = self.baseline(node_index, k);
-            for actor in &self.script.actors {
-                if actor.room != node.room || !actor.present(t) {
+            for (index, actor) in self.script.actors.iter().enumerate() {
+                if actor.zone != node.zone || !actor.present(t) {
                     continue;
                 }
-                if let Some(paths) = actor.torso_scatter_path_lengths_m(node.pos_m, t) {
+                if let Some(body) = self.bodies[index].as_ref() {
                     // A body-carrying actor scatters from its four torso
-                    // keypoints, each with its own radial dither, so the CSI
-                    // carries a pose-correlated signature.
+                    // keypoints, each with its own seed-drawn radial dither, so
+                    // the CSI carries a pose-correlated signature.
+                    let common = actor
+                        .breathing
+                        .as_ref()
+                        .map_or(0.0, |rhythm| rhythm.displacement_m(t))
+                        + actor
+                            .heart
+                            .as_ref()
+                            .map_or(0.0, |rhythm| rhythm.displacement_m(t));
+                    let paths =
+                        body.scatter_path_lengths_m(actor.position_at(t), node.pos_m, t, common);
                     for d in paths {
                         let theta = -TAU * f_rf * d / SPEED_OF_LIGHT_MPS;
                         re += ACTOR_TORSO_SCATTER * theta.cos();
@@ -291,26 +354,59 @@ impl SimulatorSource {
             re += self.noise(node_index, tick, k, TAG_NOISE_RE);
             im += self.noise(node_index, tick, k, TAG_NOISE_IM);
 
-            amplitude.push((re * re + im * im).sqrt() as f32);
-            phase.push(im.atan2(re) as f32);
+            // The unquantised field power, for the link-budget RSSI.
+            field_power += re * re + im * im;
+
+            // Model the hardware: quantise the complex sample to signed int8,
+            // imaginary-first (Q then I), matching the esp-csi wire order.
+            let (q, q_clipped) = quantise_i8(im);
+            let (i, i_clipped) = quantise_i8(re);
+            saturated |= q_clipped || i_clipped;
+            i_q.push(q);
+            i_q.push(i);
         }
 
-        if self.is_impaired(node_index, tick) {
-            // A nulled first subcarrier stands in for the capture layer's
-            // `FIRST_WORD_INVALID`; the frozen `CsiFrame` has no such flag
-            // (ADR-0004 chose the f32 layout), so the impairment is expressed
-            // as an unusable subcarrier rather than an invented field.
-            amplitude[0] = 0.0;
+        let first_word_invalid = self.is_impaired(node_index, tick);
+        if first_word_invalid {
+            // The capture layer's `FIRST_WORD_INVALID`: the leading complex
+            // sample (two bytes) is nulled and the frame marks the flag, exactly
+            // as the node and the core decoder do (`capture-and-firmware.md`
+            // §7.4).
+            i_q[0] = 0;
+            i_q[1] = 0;
         }
 
-        let mean = amplitude.iter().map(|a| f64::from(*a)).sum::<f64>() / n as f64;
-        let rssi = (-90.0 + 15.0 * mean).clamp(-120.0, -10.0).round() as i8;
-        let noise_floor = (f64::from(rssi) - 30.0).clamp(-120.0, -10.0).round() as i8;
+        // The reported RSSI comes from a link budget: the modelled noise floor
+        // plus the frame's signal-to-noise ratio, derived from the *unquantised*
+        // field power, never a tuned clamp of the quantised mean
+        // (`sister-issues-core.md` S10).
+        let mean_power = field_power / n as f64;
+        let noise_power = 2.0 * noise_scale * noise_scale;
+        let snr_linear = if noise_power > 0.0 {
+            (mean_power / noise_power).max(1.0)
+        } else {
+            1.0
+        };
+        let rssi = (SIM_NOISE_FLOOR_DBM + 10.0 * snr_linear.log10())
+            .clamp(-120.0, -10.0)
+            .round() as i8;
+        let noise_floor = SIM_NOISE_FLOOR_DBM.clamp(-120.0, -10.0).round() as i8;
 
         let mut phy = PhyFlags::HT | PhyFlags::SHORT_GI;
         if self.script.bandwidth_mhz >= 40 {
             phy |= PhyFlags::SECONDARY_PRESENT;
         }
+        if saturated {
+            // Never silently clip: mark frames the modelled gain could not fit.
+            phy |= PhyFlags::IQ_SATURATED;
+        }
+
+        // PROVISIONAL: the contract has not yet pinned the HT20/HT40
+        // subcarrier-offset convention, so `-(n/2)` is a placeholder shared with
+        // the firmware, not a verified bin map (signal.md §7; S11, F19). The
+        // simulator must agree with the node byte-for-byte; when a real capture
+        // fixes the map, both change together.
+        let subcarrier_offset = -((n / 2) as i16);
 
         CsiFrame {
             node_id: node.id,
@@ -320,12 +416,12 @@ impl SimulatorSource {
             band: self.script.band,
             channel: self.script.channel,
             bandwidth_mhz: self.script.bandwidth_mhz,
-            subcarrier_offset: -((n / 2) as i16),
-            amplitude,
-            phase,
+            subcarrier_offset,
+            i_q,
             rssi_dbm: rssi,
             noise_floor_dbm: noise_floor,
             phy: PhyFlags(phy),
+            first_word_invalid,
         }
     }
 }
@@ -376,12 +472,7 @@ impl CsiSource for SimulatorSource {
 /// synthesised CSI carries the physical `2π·f·Δd/c` sensitivity. It mirrors the
 /// transport seam's band/channel mapping.
 fn centre_freq_hz(band: Band, channel: u8) -> f64 {
-    let mhz = match band {
-        Band::B2G4 => 2_407.0 + f64::from(channel) * 5.0,
-        Band::B5G => 5_000.0 + f64::from(channel) * 5.0,
-        Band::Unknown => 0.0,
-    };
-    mhz * 1e6
+    f64::from(aquila_types::channel_centre_freq_mhz(band, channel)) * 1e6
 }
 
 /// The number of ticks a scene covers.
@@ -389,15 +480,15 @@ fn total_ticks(script: &SceneScript) -> usize {
     ((script.duration_s * script.tick_hz).ceil() as usize).max(1)
 }
 
-/// The rooms named by the scene's nodes, first-seen order.
-fn rooms_of(script: &SceneScript) -> Vec<RoomId> {
-    let mut rooms: Vec<RoomId> = Vec::new();
+/// The zones named by the scene's nodes, first-seen order.
+fn zones_of(script: &SceneScript) -> Vec<ZoneId> {
+    let mut zones: Vec<ZoneId> = Vec::new();
     for node in &script.nodes {
-        if !rooms.contains(&node.room) {
-            rooms.push(node.room.clone());
+        if !zones.contains(&node.zone) {
+            zones.push(node.zone.clone());
         }
     }
-    rooms
+    zones
 }
 
 /// Synthesise the per-tick ground truth for a scene (§7.3).
@@ -410,18 +501,18 @@ pub fn synthesise_ground_truth(
     config: &SimConfig,
 ) -> Vec<(u64, GroundTruthRecord)> {
     let ticks = total_ticks(script);
-    let rooms = rooms_of(script);
+    let zones = zones_of(script);
     let mut out = Vec::new();
     for tick in 0..ticks {
         let t = tick as f64 / script.tick_hz;
-        let host_us = config.start_host_us
-            + ((tick as f64) * 1_000_000.0 / script.tick_hz).round() as u64;
+        let host_us =
+            config.start_host_us + ((tick as f64) * 1_000_000.0 / script.tick_hz).round() as u64;
         let t_unix_ms = config.start_unix_ms + (t * 1_000.0).round() as i64;
-        for room in &rooms {
+        for zone in &zones {
             let present: Vec<&crate::scene::Actor> = script
                 .actors
                 .iter()
-                .filter(|actor| actor.room == *room && actor.present(t))
+                .filter(|actor| actor.zone == *zone && actor.present(t))
                 .collect();
             let count = present.len() as u8;
             let mut push = |payload: EventPayload| {
@@ -431,7 +522,7 @@ pub fn synthesise_ground_truth(
                         session: config.session.clone(),
                         t_unix_ms,
                         kind: GtKind::Synthetic,
-                        scope: EventScope::Room(room.clone()),
+                        scope: EventScope::Zone(zone.clone()),
                         payload,
                     },
                 ));
@@ -536,7 +627,7 @@ pub fn synthesise_pose_ground_truth(script: &SceneScript, config: &SimConfig) ->
             }
             out.push(Pose {
                 subject: SubjectId::new(index as u32),
-                room: actor.room.clone(),
+                zone: actor.zone.clone(),
                 t_unix_ms,
                 keys,
                 score: 1.0,
@@ -562,12 +653,12 @@ fn build_session(script: &SceneScript, config: &SimConfig) -> Session {
             git_sha: "simulated".into(),
             dirty: false,
         },
-        config_hash: [0u8; 32],
+        config_hash: None,
         seed: config.seed,
         artifacts: vec![],
         ground_truth: Some(GroundTruthRef {
             path: "ground_truth.jsonl".into(),
-            sha256: [0u8; 32],
+            sha256: None,
             kind: GtKind::Synthetic,
         }),
         notes: "Synthesised by aquila-simulator".into(),

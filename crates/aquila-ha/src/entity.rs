@@ -5,11 +5,16 @@
 //! [`EntityModel::entities`] / [`EntityModel::snapshot`] render it for the
 //! transport (`aquila-api`) to serve. The model is a plain map, so it is
 //! testable without a Home Assistant host.
+//!
+//! Detection results are attributed to **zones** (virtual detection regions
+//! such as "bed" inside the bedroom or "shower" versus "toilet" inside the
+//! bathroom), never to rooms. Rooms describe where nodes are physically
+//! installed; zones describe where a person is detected.
 
 use std::collections::BTreeMap;
 
 use aquila_geometry::Topology;
-use aquila_types::{Event, EventPayload, EventScope, HomeId, RoomId};
+use aquila_types::{Event, EventPayload, EventScope, HomeId, ZoneId};
 use serde_json::{json, Value};
 
 /// The Home Assistant platform an entity belongs to.
@@ -26,7 +31,7 @@ pub enum EntityKind {
 pub struct EntityState {
     /// The stable HA `unique_id`: `aquila:{instance}:{zone}:{metric}`.
     pub unique_id: String,
-    /// The HA object id, for example `binary_sensor.aquila_living_room_presence`.
+    /// The HA object id, for example `binary_sensor.aquila_bed_presence`.
     pub entity_id: String,
     /// The HA platform.
     pub kind: EntityKind,
@@ -40,9 +45,11 @@ pub struct EntityState {
     pub entity_category: Option<String>,
 }
 
-/// The projected state of one zone (room in v1).
+/// The projected state of one zone.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ZoneState {
+    /// Human-readable zone name, for example `"bed"` or `"shower"`.
+    pub name: String,
     /// Whether at least one person is present, when known.
     pub present: Option<bool>,
     /// The presence probability in `[0, 1]`, when known.
@@ -60,7 +67,7 @@ pub struct ZoneState {
 pub struct EntityModel {
     instance_id: String,
     home: HomeId,
-    zones: BTreeMap<RoomId, ZoneState>,
+    zones: BTreeMap<ZoneId, ZoneState>,
     home_occupancy: Option<bool>,
     home_count: Option<u8>,
 }
@@ -78,13 +85,17 @@ impl EntityModel {
         }
     }
 
-    /// Construct a model seeded with one zone per room in `topology`.
+    /// Construct a model seeded with the zones in `topology`. Zones are the
+    /// only spatial scope; rooms are backend installation metadata only.
     #[must_use]
     pub fn from_topology(topology: &Topology, instance_id: impl Into<String>) -> Self {
         let home = topology.home().id.clone();
         let mut model = Self::new(home, instance_id);
-        for room in &topology.model().rooms {
-            model.zones.entry(room.id.clone()).or_default();
+        for zone in &topology.model().zones {
+            model
+                .zones
+                .entry(zone.id.clone())
+                .or_insert_with(|| ZoneState { name: zone.name.clone(), ..Default::default() });
         }
         model
     }
@@ -95,16 +106,16 @@ impl EntityModel {
         &self.home
     }
 
-    /// The known zones, in canonical room-id order.
+    /// The known zones, in canonical zone-id order.
     #[must_use]
-    pub const fn zones(&self) -> &BTreeMap<RoomId, ZoneState> {
+    pub const fn zones(&self) -> &BTreeMap<ZoneId, ZoneState> {
         &self.zones
     }
 
     /// One zone's projected state, if the zone is known.
     #[must_use]
-    pub fn zone(&self, room: &RoomId) -> Option<&ZoneState> {
-        self.zones.get(room)
+    pub fn zone(&self, zone: &ZoneId) -> Option<&ZoneState> {
+        self.zones.get(zone)
     }
 
     /// The home occupancy state, when known.
@@ -127,31 +138,37 @@ impl EntityModel {
     pub fn apply(&mut self, event: &Event) {
         match (&event.scope, &event.payload) {
             (
-                EventScope::Room(room),
+                EventScope::Zone(zone),
                 EventPayload::Presence {
                     occupied,
                     probability,
                 },
             ) => {
-                let zone = self.zones.entry(room.clone()).or_default();
-                zone.present = Some(*occupied);
-                zone.presence_probability = Some(*probability);
+                let zone_state = self.zones.entry(zone.clone()).or_default();
+                zone_state.present = Some(*occupied);
+                zone_state.presence_probability = Some(*probability);
             }
-            (EventScope::Room(room), EventPayload::Count { people }) => {
-                self.zones.entry(room.clone()).or_default().count = Some(*people);
+            (EventScope::Zone(zone), EventPayload::Count { people }) => {
+                self.zones
+                    .entry(zone.clone())
+                    .or_default()
+                    .count = Some(*people);
             }
-            (EventScope::Room(room), EventPayload::Vitals { metric, value, .. }) => {
-                let zone = self.zones.entry(room.clone()).or_default();
+            (EventScope::Zone(zone), EventPayload::Vitals { metric, value, .. }) => {
+                let zone_state = self.zones.entry(zone.clone()).or_default();
                 match metric.as_str() {
-                    "breathing_rate" => zone.breathing_brpm = Some(*value),
-                    "heart_rate" => zone.heart_bpm = Some(*value),
+                    "breathing_rate" => zone_state.breathing_brpm = Some(*value),
+                    "heart_rate" => zone_state.heart_bpm = Some(*value),
                     _ => {}
                 }
             }
             (EventScope::Home, EventPayload::Occupancy { by_zone }) => {
                 let mut total: u16 = 0;
-                for (room, count) in by_zone {
-                    self.zones.entry(room.clone()).or_default().count = Some(*count);
+                for (zone, count) in by_zone {
+                    self.zones
+                        .entry(zone.clone())
+                        .or_default()
+                        .count = Some(*count);
                     total = total.saturating_add(u16::from(*count));
                 }
                 self.home_count = Some(total.min(u16::from(u8::MAX)) as u8);
@@ -197,9 +214,9 @@ impl EntityModel {
             });
         }
 
-        for (room, zone) in &self.zones {
-            let zone_id = ha_slug(room);
-            if let Some(present) = zone.present {
+        for (zone, zone_state) in &self.zones {
+            let zone_id = ha_slug(zone);
+            if let Some(present) = zone_state.present {
                 entities.push(EntityState {
                     unique_id: format!("aquila:{instance}:{zone_id}:presence"),
                     entity_id: format!("binary_sensor.aquila_{zone_id}_presence"),
@@ -210,7 +227,7 @@ impl EntityModel {
                     entity_category: None,
                 });
             }
-            if let Some(breathing) = zone.breathing_brpm {
+            if let Some(breathing) = zone_state.breathing_brpm {
                 entities.push(zone_measurement(
                     instance,
                     &zone_id,
@@ -219,7 +236,7 @@ impl EntityModel {
                     "brpm",
                 ));
             }
-            if let Some(heart) = zone.heart_bpm {
+            if let Some(heart) = zone_state.heart_bpm {
                 entities.push(zone_measurement(
                     instance,
                     &zone_id,
@@ -237,17 +254,17 @@ impl EntityModel {
     #[must_use]
     pub fn snapshot(&self) -> Value {
         let mut zones = serde_json::Map::new();
-        for (room, zone) in &self.zones {
+        for (zone, zone_state) in &self.zones {
             zones.insert(
-                room.as_str().to_string(),
+                zone.as_str().to_string(),
                 json!({
-                    "kind": "room",
-                    "name": room.as_str(),
-                    "presence": zone.present,
-                    "presence_confidence": zone.presence_probability,
-                    "person_count": zone.count,
-                    "breathing_rate": zone.breathing_brpm,
-                    "heart_rate": zone.heart_bpm,
+                    "kind": "zone",
+                    "name": zone_state.name,
+                    "presence": zone_state.present,
+                    "presence_confidence": zone_state.presence_probability,
+                    "person_count": zone_state.count,
+                    "breathing_rate": zone_state.breathing_brpm,
+                    "heart_rate": zone_state.heart_bpm,
                 }),
             );
         }
@@ -296,6 +313,6 @@ const fn on_off(value: bool) -> &'static str {
 /// The HA object-id fragment for a zone: HA uses underscores, slugs use
 /// hyphens.
 #[must_use]
-pub fn ha_slug(room: &RoomId) -> String {
-    room.as_str().replace('-', "_")
+pub fn ha_slug(zone: &ZoneId) -> String {
+    zone.as_str().replace('-', "_")
 }

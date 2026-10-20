@@ -15,9 +15,7 @@ use crate::error::{invariant, ValidationError};
 ///
 /// This is the single reference clock: all inference, windows and ledger
 /// entries are expressed in it.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CoreTime(pub u64);
 
@@ -40,9 +38,7 @@ impl CoreTime {
 /// Cheap, uncorrected, and drifting relative to the core. Nodes stamp every CSI
 /// frame with their own device time and never adjust it; the core owns
 /// correction.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct DeviceTime(pub u64);
 
