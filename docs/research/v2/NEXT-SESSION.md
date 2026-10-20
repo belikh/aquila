@@ -50,35 +50,30 @@ cross-node phase coherence.
 
 **Your task, in priority order.**
 
-1. **Measure whether the group delay responds to a person moving between the
-   nodes.** This is the next experiment and it is the one the project now
-   turns on. Take a baseline of the per-link phase slope over a couple of
-   minutes, then take another while a person walks the length of the link
-   between two nodes, and report the change in the slope-implied path
-   difference against the noise floor. `group_delay_hardware.py` already does
-   the measurement; it needs a before/after comparison and a sensitivity
-   number. Write the result up the way `22-m2-hardware-measurement.md` does.
-   If the person is not available, use a proxy that moves the channel
-   (a swung door, a chair, a person in the room) and say plainly in the write
-   up what the proxy was.
-2. **Extend the delay measurement to a moving-scatterer model.** The group
-   delay of a link is the weighted mean path delay of its multipath
-   components; a moving person adds a component whose delay changes. Write
-   down what the measured slope change implies about the scatterer's range,
-   and check it against the geometry. The concepts document's approach 7
-   (per-link group delay) and approach 4 (phase slope `dφ/df`) are the
-   relevant ones; neither is gated on M2.
-3. **Make the campaign runner use the hardware measurement end to end.** The
-   M2 phase already does. The FZOG and ATSI phases still run in simulation;
-   give them the same treatment — measure on the live nodes when nodes are
-   streaming, fall back to the model when they are not, and record which was
-   used in the ledger, as `record_m2_result` now does.
+1. **Run the moving-scatterer experiment.** It is built and ready:
+   `docs/research/v2/experiments/scatterer_response.py --interactive`. It
+   takes a baseline of the per-link group delay, waits for the operator, then
+   measures again, and reports the links that moved separately from the
+   links that serve as controls. The noise floor is measured at 2 to 3 cm per
+   window, so a person walking into a link (tens of centimetres) should be
+   plainly visible. **This needs a person in the room** — it is the one
+   thing the project cannot finish alone.
+2. **Run the occupancy check the same way.**
+   `docs/research/v2/experiments/atsi_live.py --interactive`. The node-local
+   power is stable to 0.03 dB, so a person entering a zone should be obvious.
+3. **The FZOG calibration protocol.** FZOG is the last simulated phase, and
+   it is simulated because its calibration needs a person standing in each of
+   the nine voxel positions *and* the nodes' physical positions, which the
+   project does not know. Get the node positions from the operator, write the
+   protocol down, and then run it: for each voxel, a person stands there
+   while the nodes record the link amplitudes, and the classifier scores the
+   occupancy. This is the one remaining claim in the campaign that is not on
+   the hardware.
 4. **Recover node 4.** Node 4 (`ac:a7:04:e2:0a:74`) is still on the firmware
    built before the provisioning fix and cannot associate. It needs one USB
    reflash with the current build and the node's NVS image; the other three
    were recovered this way and then updated over the air. With four nodes the
-   measurement has a second geometry, and the reciprocity check becomes a
-   triangle rather than a pair.
+   reciprocity check becomes a triangle rather than a pair.
 
 **Landmines — these cost hours if rediscovered.**
 
@@ -91,13 +86,22 @@ cross-node phase coherence.
   REA's supported list. Use `xtensa-esp32s3-elf-objdump` on the objects
   extracted from `components/esp_wifi/lib/esp32s3/libpp.a` instead — that is
   what produced §4 of the research note.
-* **The ±π sign flip is intrinsic to the ESP32-S3.** Two configurations the
-  node controls were tested and eliminated: the `ltf_merge_en` merge (the
-  negation rate is the same in the 64-subcarrier legacy-field-only layout,
-  which the merge cannot touch) and the manual CSI scale (the hardware's own
-  automatic scale negates just as often — and costs eight times the amplitude
-  resolution, so keep `csi_shift = 4`). The callback plumbing does not touch
-  the samples at all. Do not re-open these.
+* **The ±π sign flip is intrinsic to the ESP32-S3.** Every configuration the
+  driver exposes has been tested and eliminated: the `ltf_merge_en` merge
+  (the negation rate is the same in the 64-subcarrier legacy-field-only
+  layout, which the merge cannot touch), the manual CSI scale (the hardware's
+  own automatic scale negates just as often — and costs eight times the
+  amplitude resolution, so keep `csi_shift = 4`), the channel filter (it is
+  already off), and the training field (a rebuild with `lltf_en` disabled
+  still negates 52 % of the time). The callback plumbing does not touch the
+  samples, and the ROM has no sign-mask xor to find. The flip is not a
+  counter-driven pattern and the amplitude says nothing about it. Do not
+  re-open these.
+* **The uncertainty of a window's mean is not the per-frame spread divided
+  by the square root of the frame count.** The frames are temporally
+  correlated, so that is far too optimistic — it reported 4.5-sigma changes
+  with nothing moving. Use the scatter of the window's *block* means, which
+  is what `group_delay_hardware.py` and `atsi_live.py` now do.
 * **The 802.11 sequence number is on the wire now** (wire minor 2, body
   offset 26). The node reports it for 100 % of frames and it increments
   visibly, so the cross-node pairing is exact — pair on

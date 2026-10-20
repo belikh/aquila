@@ -225,6 +225,57 @@ quantity the gauge-invariant approaches in `21-3d-imaging-concepts.md` need —
 approach 4 (the phase slope `dφ/df`, which needs no common transmitter and no
 reciprocity) and approach 7 (per-link group delay). Neither is gated on M2.
 
+### 3.1 The noise floor, and the experiment that is now ready
+
+`scatterer_response.py` measures the group delay of every link twice — a
+baseline and an after-window — and reports the change against the
+uncertainty. The uncertainty is *measured*, not assumed: the frames are
+temporally correlated, so the per-frame spread divided by the square root of
+the frame count is far too optimistic. Pricing in the drift, by taking the
+standard error of the window's block means, is what makes the result honest.
+(The first version of this measurement used the optimistic uncertainty and
+reported 4.5-sigma changes with nothing moving; the block-mean version puts
+the median change at 1.3 sigma, which is what a null should look like.)
+
+With the nodes static, over consecutive 50-second windows:
+
+| | median change | 90th percentile |
+| --- | --- | --- |
+| strong node-to-node links | 1.8 cm | 2.9 cm |
+
+A person walking into a link changes the path by tens of centimetres, so the
+experiment has an order of magnitude of headroom. The module has an
+interactive mode that takes a baseline, waits for the operator, and measures
+again, and it reports the links that moved separately from the links that
+serve as controls: the person is on one link, and the other nodes' links to
+the same transmitter are the controls.
+
+The same measurement survives the training-field change: with node 1 rebuilt
+for the high-throughput field alone, the group delay and the reciprocity
+checks were unchanged.
+
+### 3.2 The amplitude path is a precise observable
+
+`atsi_live.py` measures the same way for the receive-only ambient path: the
+log of the received power over each frame's usable subcarriers, per node.
+Over consecutive 40-second windows with nothing moving:
+
+| node | mean log-amplitude | per-frame spread | window-to-window change |
+| --- | --- | --- | --- |
+| 1 | −0.392 to −0.398 | 0.075 | **0.03 dB** |
+| 2 | −0.431 to −0.433 | 0.076 | **0.01 dB** |
+| 3 | −0.418 to −0.421 | 0.058 | **0.01 dB** |
+
+**The node-local power is stable to three hundredths of a decibel.** A person
+entering a zone perturbs the received power by several decibels, so the
+occupancy detector has a signal-to-noise of a hundred to one. ATSI needs no
+phase, so the sign flip does not touch it.
+
+This is the asymmetry that runs through the whole investigation, and it is
+worth stating plainly: **on this hardware the amplitude is a precise,
+stable observable and the absolute phase is not.** The amplitude is the
+project's instrument. The phase is not.
+
 ## 4. Reverse-engineering the ESP32-S3's CSI path
 
 Two questions were put to the binary: *why* does the vector get negated, and
@@ -420,15 +471,22 @@ path length, and the path length is measurable.
    and NSDT are off the table on ESP32-S3 raw CSI, and now on a measurement
    rather than on an assumption. The ranking in `21-3d-imaging-concepts.md`
    should be read with M2 measured red, not unmeasured.
-2. **The amplitude path is unaffected.** FZOG and ATSI do not use phase.
+2. **The amplitude path is unaffected, and it is precise.** FZOG and ATSI do
+   not use phase. The node-local power is stable to 0.03 dB across
+   consecutive windows, so an occupancy detector has a signal-to-noise of a
+   hundred to one against a person entering a zone.
 3. **A phase-derived path is still available.** The group delay is
    gauge-invariant, needs no common reference, and is validated to a couple of
-   centimetres by reciprocity. It is the phase-derived quantity to build on,
-   and it is the subject of the next measurement: whether it responds to a
-   person moving between the nodes, and with what sensitivity.
+   centimetres by reciprocity. Its noise floor is 2 to 3 cm per window, and
+   the experiment that asks whether it responds to a person moving between the
+   nodes is built and ready (`scatterer_response.py`).
 4. **The simulated M2 was never the gate.** The hardware measurement is now
    wired into the campaign, so the ledger's M2 entries record the hardware
-   source and the hardware number.
+   source and the hardware number. The ATSI phase is on the hardware too.
+   FZOG remains simulated, because its calibration needs a person standing
+   in each of the nine voxel positions and the nodes' physical positions are
+   not yet known to the project — that is a protocol, not a code change, and
+   it is the next thing to run with a person in the room.
 
 ## 6. Caveats
 

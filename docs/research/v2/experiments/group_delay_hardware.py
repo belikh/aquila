@@ -77,10 +77,17 @@ class LinkDelay:
     slope_rad_per_subcarrier: float
     slope_sd: float
     path_difference_m: float
+    # The uncertainty of this link's path length, from the scatter of the
+    # window's block means rather than from the per-frame spread. The frames
+    # are temporally correlated — a slow drift in the channel moves them
+    # together — so the per-frame spread divided by the square root of the
+    # frame count is far too optimistic. Blocking the window and taking the
+    # standard error of the block means prices in the drift.
+    path_uncertainty_m: float = 0.0
 
     @property
     def path_spread_m(self) -> float:
-        """The path-length uncertainty implied by the slope's spread."""
+        """The path-length uncertainty implied by the slope's per-frame spread."""
         return self.slope_sd / (2.0 * math.pi * SUBCARRIER_SPACING_HZ) * SPEED_OF_LIGHT_MPS
 
 
@@ -164,6 +171,27 @@ def measure_link(
         return None
     mean = statistics.mean(slopes)
     spread = statistics.pstdev(slopes)
+    path_per_slope = (
+        1.0 / (2.0 * math.pi * SUBCARRIER_SPACING_HZ) * SPEED_OF_LIGHT_MPS
+    )
+    mean_path = mean * path_per_slope
+
+    # The uncertainty of the window's mean, from the block means. The frames
+    # are temporally correlated, so the effective number of independent
+    # samples is the number of blocks, not the number of frames.
+    block = max(8, min(30, len(slopes) // 8))
+    block_means = [
+        statistics.mean(slopes[start : start + block])
+        for start in range(0, len(slopes) - block + 1, block)
+    ]
+    if len(block_means) >= 2:
+        uncertainty = (
+            statistics.pstdev(block_means) / math.sqrt(len(block_means))
+            * path_per_slope
+        )
+    else:
+        uncertainty = spread / math.sqrt(len(slopes)) * path_per_slope
+
     return LinkDelay(
         node_id=node_id,
         transmitter=transmitter,
@@ -171,9 +199,8 @@ def measure_link(
         n_frames=len(slopes),
         slope_rad_per_subcarrier=mean,
         slope_sd=spread,
-        path_difference_m=(
-            mean / (2.0 * math.pi * SUBCARRIER_SPACING_HZ) * SPEED_OF_LIGHT_MPS
-        ),
+        path_difference_m=mean_path,
+        path_uncertainty_m=uncertainty,
     )
 
 

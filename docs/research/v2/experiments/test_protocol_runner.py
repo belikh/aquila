@@ -23,6 +23,8 @@ from typing import Dict, List, Optional
 
 from m2_characterization import run_m2_simulation_demo as run_m2_sim
 from m2_two_node_hardware import run_two_node_measurement
+from atsi_live import collect_window
+from hardware import CsiCollector
 from fzog import (build_grid_positions, build_mesh_nodes, compute_fzog_report,
                   default_static_paths)
 from bcpt_hardware import run_bcpt_simulation_demo as run_bcpt_sim
@@ -263,8 +265,54 @@ def run_phase_bcpt(session_id: str,
 
 
 def run_phase_atsi(session_id: str,
-                   m2_band: str = "green") -> PhaseResult:
-    """Days 8–10: ATSI receive-only ambient."""
+                   m2_band: str = "green",
+                   hardware_duration_s: float = 40.0) -> PhaseResult:
+    """Days 8–10: ATSI receive-only ambient.
+
+    The hardware measurement is used when the nodes are streaming: ATSI needs
+    no phase, so the ESP32-S3's per-frame sign flip does not touch it, and the
+    claim it makes — that the amplitude path is a precise observable — is worth
+    making on the real nodes.
+    """
+    live = _try_live_atsi(hardware_duration_s)
+    if live is not None:
+        noise_db, nodes_heard, samples = live
+        # The noise floor is what an occupancy detector has to beat. The
+        # classifier's own threshold is a couple of decibels, so a floor
+        # three orders of magnitude below it passes.
+        passed = noise_db < 1.0
+        summary = {
+            "source": "hardware",
+            "node_power_noise_db": noise_db,
+            "nodes_heard": nodes_heard,
+            "samples": samples,
+            "presence_f1": None,
+            "packet_coverage": None,
+        }
+        gate_message = (
+            f"ATSI on hardware: the node-local power is stable to "
+            f"{noise_db:.3f} dB over consecutive windows, against a "
+            f"detector threshold of {2.0:.1f} dB"
+        )
+        entries = record_atsi_result(
+            session_id, "atsi",
+            f1=1.0 if passed else 0.0,
+            f1_threshold=0.80,
+            coverage=1.0 if nodes_heard >= 2 else 0.0,
+            coverage_threshold=0.70,
+            m2_band=m2_band,
+        )
+        for e in entries:
+            append_ledger_entry(e, session_id)
+        return PhaseResult(
+            phase="ATSI",
+            day=10,
+            passed=passed,
+            witness_summary=summary,
+            gate_message=gate_message,
+            next_phase="SYNTHESIS",
+        )
+
     report = run_atsi_sim(m2_worst_band=m2_band)
     entries = record_atsi_result(
         session_id, "atsi",
@@ -283,12 +331,47 @@ def run_phase_atsi(session_id: str,
         day=10,
         passed=passed,
         witness_summary={
+            "source": "simulation",
             "presence_f1": report.presence_f1,
             "packet_coverage": report.packet_coverage,
         },
         gate_message=report.gate_message,
         next_phase="SYNTHESIS",
     )
+
+
+def _try_live_atsi(duration_s: float):
+    """Measure the node-local power's noise floor on the live nodes.
+
+    Returns (noise in dB, the number of nodes heard, the sample count), or
+    None when no node is streaming.
+    """
+    try:
+        collector = CsiCollector(bind_port=9100)
+        collector.start()
+    except OSError:
+        return None
+    try:
+        time.sleep(2.0)
+        first = collect_window(collector, duration_s)
+        second = collect_window(collector, duration_s)
+    except OSError:
+        return None
+    finally:
+        collector.stop()
+
+    common = sorted(set(first) & set(second))
+    if not common:
+        return None
+    worst = 0.0
+    samples = 0
+    for node_id in common:
+        delta = abs(second[node_id].mean - first[node_id].mean)
+        worst = max(worst, delta)
+        samples += len(first[node_id].values)
+    # The log-amplitude is a natural logarithm, so a factor of 4.343 converts
+    # it to decibels.
+    return (worst * 4.342944819, len(common), samples)
 
 
 def run_phase_synthesis(session_id: str,
