@@ -119,7 +119,7 @@ step2_collect_config() {
   read -rp "WiFi SSID: " WIFI_SSID
   read -rsp "WiFi password: " WIFI_PASSWORD
   printf "\n"
-  read -rp "Core host IP (this laptop, e.g. 192.168.1.42): " CORE_HOST
+  read -rp "Core host IP (your laptop's LAN IP, e.g. 192.168.1.42): " CORE_HOST
   read -rp "Core data port [9100]: " CORE_DATA_PORT
   CORE_DATA_PORT="${CORE_DATA_PORT:-9100}"
   read -rp "Core control port [9101]: " CORE_CONTROL_PORT
