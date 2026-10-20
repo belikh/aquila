@@ -230,6 +230,10 @@ static esp_err_t apply_esp_csi(const csi_node_config_t *cfg)
         .lltf_en = cfg->lltf_enable,
         .htltf_en = cfg->ht_ltf_enable,
         .stbc_htltf2_en = cfg->stbc_ht_ltf_enable,
+        /* The merge averages the two training fields' estimates. It is not
+         * the source of the per-frame sign flip — the legacy field alone
+         * flips identically — but it is left on because it is the driver's
+         * default and the merged high-throughput estimate is no noisier. */
         .ltf_merge_en = true,
         .channel_filter_en = false,
         .manu_scale = cfg->csi_shift != 255u,

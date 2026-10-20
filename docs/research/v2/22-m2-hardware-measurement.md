@@ -20,6 +20,9 @@ The measurement scripts are in `docs/research/v2/experiments/`:
 | `phase_ambiguity_probe.py` | the structure of the per-frame phase ambiguity |
 | `phase_rotation_probe.py` | the per-frame phase rotation, at one node and across two |
 | `layout_flip_probe.py` | the negation rate per CSI layout, used to test the merge and scale hypotheses |
+| `sign_predictor_probe.py` | whether any reported field predicts the sign |
+| `flip_pattern_probe.py` | whether the sign sequence is periodic or counter-driven |
+| `amplitude_predictor_probe.py` | whether the amplitude carries the sign |
 | `group_delay_hardware.py` | the per-link group delay from the phase slope |
 | `sign_resolution_probe.py` | whether the sign flip can be resolved from the data |
 
@@ -290,12 +293,27 @@ target: `xtensa-esp32s3-elf-objdump` on the extracted objects
   driver's CSI hardware-bug check is compiled out for this target.
 
 * **`ic_csi_set_config`** is a thin wrapper: it calls `phy_chan_dump_cfg` and
-  `phy_chan_filt_set` and writes two PHY registers. The ESP-IDF header
-  documents the field it writes — `ltf_merge_en`, *"enable to generate htlft
-  data by averaging lltf and ht_ltf data when receiving HT packet"* — which
-  suggested a hypothesis worth testing (§4.3).
+  `phy_chan_filt_set` and writes two PHY registers. That is the *whole* of
+  the driver's control surface over the CSI acquisition, and it is worth being
+  precise about: the eight bytes of `wifi_csi_config_t` carry four functional
+  choices — which training fields contribute, whether the high-throughput
+  estimate is merged with the legacy one, whether the channel filter is on,
+  and how the samples are scaled. Everything else is a dump or a reserved
+  bit. There is no hidden control.
 
-### 4.3 Two hypotheses, tested and eliminated
+  The ESP-IDF header documents one of those fields — `ltf_merge_en`, *"enable
+  to generate htlft data by averaging lltf and ht_ltf data when receiving HT
+  packet"* — which suggested a hypothesis worth testing (§4.3).
+
+* **There is no sign-mask negation anywhere in the ROM.** The whole 382 KB of
+  ROM text was disassembled and searched: 575 `xor` instructions, none of
+  them with 0x80, and no `movi` of a 0x80 sign mask. A whole-vector
+  negation of the int8 samples would be exactly an exclusive-or with 0x80,
+  so the flip is **not** a post-processing step applied to the CSI buffer
+  after the estimate. It is in the estimator's arithmetic, below everything
+  the driver can reach.
+
+### 4.3 Every configuration the driver exposes, tested and eliminated
 
 **The LLTF/HT-LTF merge.** If the merge averages two independently estimated
 pilot responses and they disagree in sign, the merged result is corrupted.
@@ -324,19 +342,77 @@ predict, and the negation rate did not move. The manual scale is not the
 cause either, and it is worth keeping, because it is worth eight times the
 amplitude resolution.
 
-### 4.4 What follows
+**The training field.** If the legacy field's estimate were the problem,
+the high-throughput field's alone would be clean. Node 1 was rebuilt with
+`lltf_en = false`, which makes the node report the high-throughput estimate
+alone — and the node then produces only the 64-subcarrier layout, as
+expected. The negation rate was **52 %**, unchanged.
 
-Neither hypothesis survives, and the callback plumbing does not touch the
-samples, so the negation is intrinsic to the ESP32-S3's channel estimate: a
-property of the receiver, applied per frame, independent at each receiver, and
-with no reference in the data that could resolve it. That is the same verdict
-§2 reaches from the measurement, and the reverse engineering is what rules out
+So the negation is in the high-throughput estimate as well as in the legacy
+one: it is in the estimator, not in either pilot's sign convention. The
+channel filter is not a candidate either — the node already runs with
+`channel_filter_en` off.
+
+**Every choice the driver exposes has now been tested.** The merge, the
+scale, the filter and the training field: none of them changes the negation.
+
+### 4.4 Is the flip a pattern?
+
+If the estimator's sign decision were driven by a counter or a state
+machine rather than by noise, it would leave a pattern. It does not.
+
+* **No periodicity.** The autocorrelation of the sign sequence was measured
+  at lags 1 to 64: the largest was +0.089 to +0.111 against a null of
+  +0.20 for the largest of 64 lags at that sample size. Nothing stands out.
+* **No dependence on any counter.** The sign was tested against the low bits
+  of the node's capture sequence number, of the node's own microsecond clock
+  and of the 802.11 sequence number, at widths from one bit to four: no
+  dependence exceeded the null, where the null accounts for the number of
+  groups and their sizes. (A bare threshold would have reported a
+  dependence: with sixteen groups of fifty samples, the *expected* largest
+  group's share under a fair coin is already 0.63.)
+* **The amplitude says nothing.** The sign does not correlate with the
+  frame's mean amplitude, with the amplitude's change since the previous
+  frame, with the amplitude profile's slope, or with the received power —
+  every correlation is at or below 0.065. The frames that were negated and
+  the frames that were not have the same mean amplitude to three decimal
+  places (0.8031 against 0.8038, 0.8135 against 0.8123, 0.7842 against
+  0.7887).
+
+**The sign is noise in the estimator.** Nothing the node can report carries
+it, so no correction is possible from the data.
+
+### 4.5 What follows
+
+Every hypothesis survives no: the merge, the scale, the filter, the training
+field, a counter-driven pattern and the amplitude. The callback plumbing does
+not touch the samples, and the ROM has no sign-mask negation to find. The
+negation is intrinsic to the ESP32-S3's channel estimate: a property of the
+receiver, applied per frame, independent at each receiver, and with no
+reference in the data that could resolve it. That is the same verdict §2
+reaches from the measurement, and the reverse engineering is what rules out
 "it is something we configured".
 
-The remaining question is where in the closed PHY the sign comes from. The
-CSI samples are produced below anything the node can reach, so answering it
-means reading the RF path rather than the MAC path — which is a larger
-undertaking than this question has earned so far.
+**What "driving the hardware manually" can and cannot buy.** The driver's
+control surface over the CSI acquisition has been enumerated in full — four
+functional choices, three PHY register writes and two PHY calls — and every
+one of them has been tested and none of them changes the negation. There is
+no further lever above the MAC. Below it, the CSI samples are produced by
+the RF path, which is closed and unnamed in the ROM; the 382 KB of ROM text
+contains no sign-mask negation, so the sign is decided inside the
+estimator's arithmetic rather than by a step that could be found and undone.
+So the absolute cross-node phase is not recoverable on this hardware by any
+route available here.
+
+**What is left is the part that does not need the sign.** A whole-vector
+negation shifts every subcarrier's phase by the same pi, so it leaves the
+phase *differences* between subcarriers untouched — and the phase slope, the
+per-link group delay, is exactly invariant to it. The measurement of §3 is
+that quantity, and it is validated. It also survives the training-field
+change: with node 1 rebuilt for the high-throughput field alone, the group
+delay and the reciprocity checks were unchanged (1.3 cm, 5.8 cm, 3.2 cm and
+1.9 cm apart). The project does not need the absolute phase; it needs the
+path length, and the path length is measurable.
 
 ## 5. What this means for the project
 
