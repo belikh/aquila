@@ -254,6 +254,35 @@ The same measurement survives the training-field change: with node 1 rebuilt
 for the high-throughput field alone, the group delay and the reciprocity
 checks were unchanged.
 
+### 3.3 The experiment is predicted to work, before anyone walks
+
+`scatterer_sensitivity.py` answers the question that decides whether the
+moving-scatterer experiment is worth running, using the project's own link
+model with the geometry the hardware actually measures — a separation of
+0.93 m, which is what the group delay says the nodes' path difference is.
+The model gives 0.939 m for that geometry against the hardware's 0.930 m, so
+the two agree.
+
+The predicted change in the group delay when a person stands beside the
+direct path, against the measured noise floor of 3 cm:
+
+| offset from the path | strength 0.1 | 0.25 | 0.5 | 1.0 |
+| --- | --- | --- | --- | --- |
+| 0.5 m | −6.3 cm (2.1×) | −15.4 cm (5.1×) | −29.1 cm (9.7×) | −51.2 cm (17.1×) |
+| 1.0 m | −8.6 cm (2.9×) | −20.6 cm (6.9×) | −38.2 cm (12.7×) | −66.2 cm (22.1×) |
+| 2.0 m | −12.5 cm (4.2×) | −30.0 cm (10.0×) | −56.2 cm (18.7×) | −99.4 cm (33.1×) |
+
+With the hardware's own phase noise added — the slope's spread of 0.0006 rad
+per subcarrier — the frame-to-frame scatter of the measurement is **0.1 cm**.
+The measurement is precise; the limit is the window-to-window drift, not the
+noise. A person within a metre of the link moves the group delay by two to
+ten times the floor, so the experiment should be unambiguous.
+
+The one case that is marginal is a person very close to the line of sight and
+weakly scattering, where the change can fall below the floor. The interactive
+mode reports the links that moved separately from the controls, so that case
+would show up as a null on the affected link rather than as a failure.
+
 ### 3.2 The amplitude path is a precise observable
 
 `atsi_live.py` measures the same way for the receive-only ambient path: the

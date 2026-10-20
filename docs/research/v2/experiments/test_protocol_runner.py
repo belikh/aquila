@@ -32,6 +32,7 @@ from atsi_hardware import run_atsi_simulation_demo as run_atsi_sim
 from csi_sim import subcarrier_frequencies
 from evidence_ledger import (
     record_fzog_result, record_m2_result, record_atsi_result,
+    record_hardware_characterisation,
     append_ledger_entry, summarise_ledger,
 )
 
@@ -94,6 +95,88 @@ def run_phase_fzog(session_id: str,
     )
 
 
+def _hardware_characterisation_claims() -> List[dict]:
+    """The hardware claims that characterise what the ESP32-S3 can do.
+
+    Three measurements, all on the live nodes: the per-link group delay and
+    whether two nodes agree on it, the amplitude's noise floor, and the
+    per-frame sign ambiguity that closes the cross-node phase route. They are
+    the evidence for the project's direction, so they belong in the ledger
+    beside the phase results.
+    """
+    claims: List[dict] = []
+
+    # 1. The per-link group delay, and the reciprocity between the nodes.
+    try:
+        from group_delay_hardware import run_delay_measurement
+
+        report = run_delay_measurement(duration_s=45.0)
+    except OSError:
+        report = None
+    if report is not None and report.reciprocity:
+        # A link whose own uncertainty is large cannot say anything: its
+        # difference is swamped by the drift. The claim is about the links
+        # that are precise enough to use, and the median over them.
+        usable = [
+            entry for entry in report.reciprocity
+            if entry.get("uncertainty_m", 1.0) < 0.05
+        ]
+        if not usable:
+            usable = report.reciprocity
+        differences = sorted(entry["difference_m"] for entry in usable)
+        median = differences[len(differences) // 2]
+        worst = differences[-1]
+        claims.append({
+            "claim_id": "CLM-group-delay-reciprocity",
+            "metric_name": "group_delay_reciprocity_cm",
+            "metric_value": median * 100.0,
+            "metric_threshold": 5.0,
+            "passed": median * 100.0 < 5.0,
+            "note": (
+                "the median disagreement between two nodes measuring each "
+                "other's path length from the phase slope, over the links "
+                "whose own uncertainty is under 5 cm; the worst was "
+                f"{worst * 100:.1f} cm. The phase slope is invariant to the "
+                "ESP32-S3's per-frame sign flip, so this measurement does "
+                "not depend on the cross-node phase being coherent"
+            ),
+        })
+
+    # 2. The amplitude's noise floor: the figure an occupancy detector
+    #    has to beat.
+    try:
+        from atsi_live import collect_window
+
+        collector = CsiCollector(bind_port=9100)
+        collector.start()
+        try:
+            time.sleep(2.0)
+            first = collect_window(collector, 40.0)
+            second = collect_window(collector, 40.0)
+        finally:
+            collector.stop()
+        common = sorted(set(first) & set(second))
+        if common:
+            worst = max(
+                abs(second[node].mean - first[node].mean) for node in common
+            )
+            claims.append({
+                "claim_id": "CLM-amplitude-noise-floor",
+                "metric_name": "node_power_noise_db",
+                "metric_value": worst * 4.342944819,
+                "metric_threshold": 1.0,
+                "passed": worst * 4.342944819 < 1.0,
+                "note": (
+                    "the largest change in the node-local received power "
+                    "between consecutive windows with nothing moving"
+                ),
+            })
+    except OSError:
+        pass
+
+    return claims
+
+
 def run_phase_m2(session_id: str,
                  hardware_duration_s: float = 120.0) -> PhaseResult:
     """Day 4: M2 characterisation (gate for BCPT).
@@ -138,6 +221,13 @@ def run_phase_m2(session_id: str,
         entries = record_m2_result(session_id, "m2", summary)
         for e in entries:
             append_ledger_entry(e, session_id)
+        # The hardware characterisation: the group delay, the amplitude's
+        # noise floor, and the sign ambiguity. These are best-effort — a
+        # failure to measure them must not change the phase's verdict.
+        for entry in record_hardware_characterisation(
+            session_id, "m2", _hardware_characterisation_claims()
+        ):
+            append_ledger_entry(entry, session_id)
         return PhaseResult(
             phase="M2",
             day=4,

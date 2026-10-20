@@ -55,9 +55,10 @@ cross-node phase coherence.
    takes a baseline of the per-link group delay, waits for the operator, then
    measures again, and reports the links that moved separately from the
    links that serve as controls. The noise floor is measured at 2 to 3 cm per
-   window, so a person walking into a link (tens of centimetres) should be
-   plainly visible. **This needs a person in the room** — it is the one
-   thing the project cannot finish alone.
+   window, and the project's own link model predicts that a person within a
+   metre of the link moves the group delay by two to ten times that floor
+   (`scatterer_sensitivity.py`). **This needs a person in the room** — it is
+   the one thing the project cannot finish alone.
 2. **Run the occupancy check the same way.**
    `docs/research/v2/experiments/atsi_live.py --interactive`. The node-local
    power is stable to 0.03 dB, so a person entering a zone should be obvious.

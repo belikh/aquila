@@ -97,6 +97,9 @@ class DelayReport:
 
     links: List[LinkDelay] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    # The reciprocity checks, structured: for each pair of nodes and each
+    # layout, the path length each node measured and how far apart they are.
+    reciprocity: List[dict] = field(default_factory=list)
 
 
 def usable_subcarriers(frames: Sequence[CsiFrame]) -> List[int]:
@@ -169,24 +172,32 @@ def measure_link(
         slopes.append(slope)
     if len(slopes) < 20:
         return None
-    mean = statistics.mean(slopes)
-    spread = statistics.pstdev(slopes)
     path_per_slope = (
         1.0 / (2.0 * math.pi * SUBCARRIER_SPACING_HZ) * SPEED_OF_LIGHT_MPS
     )
+
+    # The median and the median absolute deviation, not the mean and the
+    # standard deviation. A minority of frames carry a corrupted phase
+    # profile — a sign flip that crosses the unwrap, or a null subcarrier
+    # inside the fit — and those frames are worth tens of times the ordinary
+    # spread. A mean lets them move the answer; the median does not.
+    mean = statistics.median(slopes)
+    spread = 1.4826 * statistics.median(
+        [abs(slope - mean) for slope in slopes]
+    )
     mean_path = mean * path_per_slope
 
-    # The uncertainty of the window's mean, from the block means. The frames
-    # are temporally correlated, so the effective number of independent
+    # The uncertainty of the window's mean, from the block medians. The
+    # frames are temporally correlated, so the effective number of independent
     # samples is the number of blocks, not the number of frames.
     block = max(8, min(30, len(slopes) // 8))
-    block_means = [
-        statistics.mean(slopes[start : start + block])
+    block_medians = [
+        statistics.median(slopes[start : start + block])
         for start in range(0, len(slopes) - block + 1, block)
     ]
-    if len(block_means) >= 2:
+    if len(block_medians) >= 2:
         uncertainty = (
-            statistics.pstdev(block_means) / math.sqrt(len(block_means))
+            statistics.pstdev(block_medians) / math.sqrt(len(block_medians))
             * path_per_slope
         )
     else:
@@ -279,6 +290,18 @@ def run_delay_measurement(
                             abs(link_a.path_difference_m)
                             - abs(link_b.path_difference_m)
                         )
+                        report.reciprocity.append({
+                            "node_a": node_a,
+                            "node_b": node_b,
+                            "layout": layout,
+                            "path_a_m": link_a.path_difference_m,
+                            "path_b_m": link_b.path_difference_m,
+                            "difference_m": difference,
+                            "uncertainty_m": max(
+                                link_a.path_uncertainty_m,
+                                link_b.path_uncertainty_m,
+                            ),
+                        })
                         report.notes.append(
                             f"reciprocity {node_a}<->{node_b} layout {layout}: "
                             f"{link_a.path_difference_m:+.3f} m and "
@@ -297,7 +320,9 @@ def format_report(report: DelayReport) -> str:
             f"slope={link.slope_rad_per_subcarrier:+.6f} "
             f"+/-{link.slope_sd:.6f} rad/subcarrier, "
             f"path={link.path_difference_m:+.3f} m "
-            f"+/-{link.path_spread_m * 100:.1f} cm, n={link.n_frames}"
+            f"+/-{link.path_spread_m * 100:.1f} cm per frame "
+            f"(+/-{link.path_uncertainty_m * 100:.1f} cm over the window), "
+            f"n={link.n_frames}"
         )
     if report.notes:
         lines.append("")

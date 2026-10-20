@@ -331,6 +331,40 @@ def record_atsi_result(session_id: str,
     return entries
 
 
+def record_hardware_characterisation(
+    session_id: str,
+    experiment_phase: str,
+    claims: List[dict],
+) -> List[LedgerEntry]:
+    """Record the hardware characterisation claims as ledger entries.
+
+    These are the measurements that characterise what the ESP32-S3 can and
+    cannot do, rather than the outcome of a protocol phase: the per-link
+    group delay and its reciprocity, the amplitude's noise floor, and the
+    per-frame sign ambiguity that closes the cross-node phase route.
+
+    Each claim is a dictionary with a `claim_id`, a `metric_name`, a
+    `metric_value`, a `metric_threshold`, a `passed` flag and a `note`.
+    """
+    entries: List[LedgerEntry] = []
+    for claim in claims:
+        entries.append(LedgerEntry(
+            session_id=session_id,
+            created_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            experiment_phase=experiment_phase,
+            claim_id=claim["claim_id"],
+            metric_name=claim["metric_name"],
+            metric_value=float(claim["metric_value"]),
+            metric_threshold=float(claim["metric_threshold"]),
+            witness=claim.get("witness", "Measured"),
+            passed=bool(claim.get("passed", True)),
+            hardware_gated=bool(claim.get("hardware_gated", False)),
+            data_gated=bool(claim.get("data_gated", False)),
+            notes=claim.get("note", ""),
+        ))
+    return entries
+
+
 if __name__ == "__main__":
     # Demo: record a sample FZOG + M2 + ATSI ledger.
     session_id = "demo_session_20261017"
