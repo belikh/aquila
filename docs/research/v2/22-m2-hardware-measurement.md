@@ -512,10 +512,10 @@ path length, and the path length is measurable.
 4. **The simulated M2 was never the gate.** The hardware measurement is now
    wired into the campaign, so the ledger's M2 entries record the hardware
    source and the hardware number. The ATSI phase is on the hardware too.
-   FZOG remains simulated, because its calibration needs a person standing
-   in each of the nine voxel positions and the nodes' physical positions are
-   not yet known to the project — that is a protocol, not a code change, and
-   it is the next thing to run with a person in the room.
+   FZOG's hardware path is implemented too — `fzog_live.py`, with the
+   protocol in `FZOG_PROTOCOL.md` — but it stays simulated because its
+   calibration needs a person standing in each of the nine voxel positions,
+   which is a protocol to run rather than a change to make.
 
 ## 6. Caveats
 

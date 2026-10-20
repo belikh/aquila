@@ -1,0 +1,11 @@
+[
+  { "label": "grid-01-01", "position": [0.0, 0.0, 0.0] },
+  { "label": "grid-01-02", "position": [0.5, 0.0, 0.0] },
+  { "label": "grid-01-03", "position": [1.0, 0.0, 0.0] },
+  { "label": "grid-02-01", "position": [0.0, 0.5, 0.0] },
+  { "label": "grid-02-02", "position": [0.5, 0.5, 0.0] },
+  { "label": "grid-02-03", "position": [1.0, 0.5, 0.0] },
+  { "label": "grid-03-01", "position": [0.0, 1.0, 0.0] },
+  { "label": "grid-03-02", "position": [0.5, 1.0, 0.0] },
+  { "label": "grid-03-03", "position": [1.0, 1.0, 0.0] }
+]

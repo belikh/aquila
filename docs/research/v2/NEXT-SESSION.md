@@ -64,12 +64,13 @@ cross-node phase coherence.
    power is stable to 0.03 dB, so a person entering a zone should be obvious.
 3. **The FZOG calibration protocol.** FZOG is the last simulated phase, and
    it is simulated because its calibration needs a person standing in each of
-   the nine voxel positions *and* the nodes' physical positions, which the
-   project does not know. Get the node positions from the operator, write the
-   protocol down, and then run it: for each voxel, a person stands there
-   while the nodes record the link amplitudes, and the classifier scores the
-   occupancy. This is the one remaining claim in the campaign that is not on
-   the hardware.
+   the nine voxel positions. The hardware path is implemented
+   (`fzog_live.py`) and the protocol is written down
+   (`FZOG_PROTOCOL.md`); what it needs from the operator is a voxel grid and
+   a person. Run the calibration walk twice — the per-link amplitude floor is
+   about 0.036, so two placements halve the calibration's uncertainty — then
+   score. This is the one remaining claim in the campaign that is not on the
+   hardware.
 4. **Recover node 4.** Node 4 (`ac:a7:04:e2:0a:74`) is still on the firmware
    built before the provisioning fix and cannot associate. It needs one USB
    reflash with the current build and the node's NVS image; the other three
