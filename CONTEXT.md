@@ -36,6 +36,20 @@ nodes, with metadata and provenance. Sessions drive development and scoring
 ahead of live deployment.
 _Avoid_: recording, capture, trace, log, dataset, run.
 
+**Group delay**:
+The power-weighted mean path delay of a link, measured from the slope of the
+phase across a CSI frame's subcarriers. An absolute path length rather than a
+relative one, and invariant to the sign ambiguity below, so it is measurable
+across nodes without a common phase reference.
+_Avoid_: latency, time of flight, group velocity.
+
+**Sign ambiguity**:
+The ESP32-S3's per-frame, whole-vector negation of the reported channel: each
+CSI frame's absolute phase is known only modulo pi, and the sign is an
+independent coin flip at each receiver. It is a property of the node's
+reporting, not of the channel, and it cannot be resolved from the data.
+_Avoid_: phase noise, jitter, drift, error, instability.
+
 ### Physical topology
 
 **Home**:

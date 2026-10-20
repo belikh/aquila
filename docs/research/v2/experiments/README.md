@@ -8,8 +8,9 @@ This library tests and proves the Jennison closure-phase invention (patent
 application at `docs/patent/`) and the related reciprocal-gauge and
 ambient-ledger inventions from the `/tmp/opencode/inv/` round-1 synthesis.
 
-It runs **now in pure-Python simulation** (no hardware) and is **ready to run
-on real ESP32-S3 nodes** when they arrive.
+It runs **now in pure-Python simulation** (no hardware) and on **real ESP32-S3
+nodes**: three of them stream real CSI to the core today, and the hardware
+measurements below run against them.
 
 ---
 
@@ -26,6 +27,30 @@ on real ESP32-S3 nodes** when they arrive.
 | `hardware_automation.py` | Flash/provision/test automation for 10 nodes |
 | `EXPERIMENT_PLAN.md` | Full experiment plan with pass/fail criteria |
 | `README.md` | This file |
+
+### The hardware measurements
+
+These run against the live nodes and need no person, except where noted.
+`22-m2-hardware-measurement.md` in the parent directory is the write-up.
+
+| File | Purpose |
+|------|---------|
+| `m2_two_node_hardware.py` | The cross-node phase residual, paired exactly by transmitter address and 802.11 sequence number. **Red on ESP32-S3**: the phase is ambiguous modulo pi. |
+| `m2_metric_audit.py` | Whether the simulated red band survives a corrected residual. It does not: the old metric measured the arbitrary static path phase. |
+| `m2_sign_resolved.py` | Whether the sign flip can be resolved from the data. It cannot. |
+| `phase_ambiguity_probe.py` | The structure of the per-frame sign ambiguity. |
+| `phase_rotation_probe.py` | The per-frame phase rotation, at one node and across two. |
+| `layout_flip_probe.py` | The negation rate per CSI layout; used to test the driver's configuration. |
+| `sign_predictor_probe.py` | Whether any reported field predicts the sign. No. |
+| `flip_pattern_probe.py` | Whether the sign sequence is periodic or counter-driven. No. |
+| `amplitude_predictor_probe.py` | Whether the amplitude carries the sign. No. |
+| `group_delay_hardware.py` | The per-link group delay from the phase slope. Invariant to the sign flip, and an *absolute* path length. |
+| `node_geometry.py` | The nodes' pairwise distances, measured by radio, with reciprocity and triangle-closure checks. |
+| `scatterer_response.py` | The moving-scatterer experiment: the group delay before and after, with the links that moved separated from the controls. **Needs a person.** |
+| `scatterer_sensitivity.py` | How much a person should move the group delay, from the link model, against the measured noise floor. |
+| `atsi_live.py` | The live occupancy check: the node-local power's noise floor, and the occupancy classifier. **Needs a person** for the detection half. |
+| `fzog_live.py` | The hardware FZOG calibration and voxel scoring. **Needs a person** in each voxel; see `FZOG_PROTOCOL.md`. |
+| `test_protocol_runner.py` | The 14-day campaign, running the hardware phases when the nodes are streaming. |
 
 ---
 
