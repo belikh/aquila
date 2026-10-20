@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from m2_characterization import run_m2_simulation_demo as run_m2_sim
+from m2_two_node_hardware import run_two_node_measurement
 from fzog import (build_grid_positions, build_mesh_nodes, compute_fzog_report,
                   default_static_paths)
 from bcpt_hardware import run_bcpt_simulation_demo as run_bcpt_sim
@@ -91,10 +92,62 @@ def run_phase_fzog(session_id: str,
     )
 
 
-def run_phase_m2(session_id: str) -> PhaseResult:
-    """Day 4: M2 characterisation (gate for BCPT)."""
+def run_phase_m2(session_id: str,
+                 hardware_duration_s: float = 120.0) -> PhaseResult:
+    """Day 4: M2 characterisation (gate for BCPT).
+
+    The campaign measures the *hardware* when live nodes are streaming, and
+    falls back to the simulation only when they are not. The hardware measure
+    is the one that decides the gate: the simulation's verdict depends on the
+    modelled channel, and a simulated green says nothing about whether the
+    ESP32-S3's phase is coherent across two nodes.
+    """
+    hardware = _try_hardware_m2(hardware_duration_s)
+    if hardware is not None:
+        worst_band = hardware.worst_band
+        bcpt_cleared = hardware.bcpt_cleared
+        source = "hardware"
+        summary: dict = {
+            "source": source,
+            "worst_band": worst_band,
+            "bcpt_cleared": bcpt_cleared,
+            "node_ids": list(hardware.node_ids),
+            "frames_per_node": hardware.frames_per_node,
+            "results": [
+                {
+                    "pair": [r.node_a, r.node_b],
+                    "p95_rad": r.p95_rad,
+                    "band": r.band,
+                    "control_p95_rad": r.control_p95_rad,
+                    "n_pairs": r.n_pairs,
+                }
+                for r in hardware.results
+            ],
+        }
+        gate_message = (
+            f"M2 {worst_band} on hardware (nodes "
+            f"{list(hardware.node_ids)}): "
+            + (
+                "BCPT cleared over the air"
+                if bcpt_cleared
+                else "cross-node coherent BCPT hardware-gated"
+            )
+        )
+        entries = record_m2_result(session_id, "m2", summary)
+        for e in entries:
+            append_ledger_entry(e, session_id)
+        return PhaseResult(
+            phase="M2",
+            day=4,
+            passed=bcpt_cleared,
+            witness_summary=summary,
+            gate_message=gate_message,
+            next_phase="BCPT" if bcpt_cleared else "BCPT_GATED",
+        )
+
     report = run_m2_sim()
     entries = record_m2_result(session_id, "m2", {
+        "source": "simulation",
         "worst_band": report.worst_band,
         "bcpt_cleared": report.bcpt_cleared,
         "results": [
@@ -115,12 +168,36 @@ def run_phase_m2(session_id: str) -> PhaseResult:
         day=4,
         passed=passed,
         witness_summary={
+            "source": "simulation",
             "worst_band": report.worst_band,
             "bcpt_cleared": report.bcpt_cleared,
         },
         gate_message=report.gate_message,
         next_phase="BCPT" if passed else "BCPT_GATED",
     )
+
+
+def _try_hardware_m2(duration_s: float):
+    """Measure M2 on the live nodes, or return None when none are streaming.
+
+    A node that has not been updated to report its transmitter's address
+    cannot be paired, so the measurement is only attempted when at least two
+    nodes report one.
+    """
+    try:
+        report = run_two_node_measurement(duration_s=duration_s)
+    except OSError:
+        return None
+    if len(report.node_ids) < 2:
+        return None
+    reporting = [
+        node_id
+        for node_id in report.node_ids
+        if report.transmitters.get(node_id)
+    ]
+    if len(reporting) < 2:
+        return None
+    return report
 
 
 def run_phase_bcpt(session_id: str,

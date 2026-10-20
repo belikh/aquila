@@ -71,8 +71,8 @@ size_t aq_frame_csi(uint16_t node_id, uint8_t band, uint8_t channel,
                     uint64_t device_time_us, uint16_t boot_epoch,
                     int16_t subcarrier_offset, uint16_t n_subcarriers,
                     int8_t rssi_dbm, int8_t noise_floor_dbm, uint16_t phy_flags,
-                    bool first_word_invalid, const int8_t *i_q, uint8_t *out,
-                    size_t out_cap)
+                    bool first_word_invalid, const uint8_t *source_mac,
+                    const int8_t *i_q, uint8_t *out, size_t out_cap)
 {
     const size_t payload_len = (size_t)AQ_CSI_BODY_FIXED_LEN + (size_t)2u * (size_t)n_subcarriers;
     const size_t total = (size_t)AQ_CSI_HEADER_LEN + payload_len;
@@ -112,6 +112,17 @@ size_t aq_frame_csi(uint16_t node_id, uint8_t band, uint8_t channel,
     body[AQ_CSI_BODY_OFF_NOISE_FLOOR_DBM] = (uint8_t)noise_floor_dbm;
     aq_put_u16_le(&body[AQ_CSI_BODY_OFF_PHY_FLAGS], phy_flags);
     aq_put_u16_le(&body[AQ_CSI_BODY_OFF_RESERVED], 0u);
+
+    /*
+     * The six-byte MAC address of the station that transmitted the frame
+     * (wire minor 1). The core needs it to tell two nodes' captures of the
+     * same ambient packet apart from two different packets.
+     */
+    if (source_mac != NULL) {
+        memcpy(&body[AQ_CSI_BODY_OFF_SOURCE_MAC], source_mac, 6u);
+    } else {
+        memset(&body[AQ_CSI_BODY_OFF_SOURCE_MAC], 0, 6u);
+    }
 
     /*
      * Raw signed int8 I/Q, interleaved Q then I (imaginary first) per

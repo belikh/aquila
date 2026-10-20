@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use aquila_types::MacAddr;
 use aquila_wire::{
-    ControlBody, ControlMessage, JoinAck, OtaBegin, OtaChunk, OtaEnd, SyncPing, CONTROL_AUTH_LEN,
-    OTA_DEFAULT_CHUNK_SIZE,
+    ControlBody, ControlMessage, JoinAck, OtaBegin, OtaChunk, OtaEnd, OtaOutcome, SyncPing,
+    CONTROL_AUTH_LEN, OTA_DEFAULT_CHUNK_SIZE,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha256};
@@ -152,12 +152,22 @@ pub(crate) fn run(options: &Options) -> Result<(), CaptureError> {
 
     // A node that has already paired keeps its token in NVS and ignores a
     // fresh JOIN_ACK, so an already-paired node needs the stored token.
-    let (node_addr, token) = match options.get("token").map(|v| v.to_string()).or_else(|| {
+    //
+    // An explicit `--token` always wins. Otherwise `--token-file` is a *read*
+    // source only when the caller did not ask to pair: asking to pair means
+    // "issue me a fresh token", and the file is then where the new token is
+    // written. Without that split the two uses of the flag collide and the
+    // pairing path becomes unreachable.
+    let stored_token = options.get("token").map(|v| v.to_string()).or_else(|| {
+        if pairing_code.is_some() {
+            return None;
+        }
         options
             .get("token-file")
             .and_then(|path| fs::read_to_string(path).ok())
             .map(|text| text.trim().to_string())
-    }) {
+    });
+    let (node_addr, token) = match stored_token {
         Some(value) => {
             let token = parse_token(&value)?;
             println!("  using the supplied pairing token");
@@ -606,7 +616,16 @@ fn hold_open(
                 match &message.body {
                     ControlBody::OtaResult(result) => {
                         println!("  node outcome: {result:?}");
-                        return Ok(());
+                        // `Verified` is the *pre-reboot* outcome: the node has
+                        // verified the image but has not activated it yet, and
+                        // the health window has not run. Returning here would
+                        // stop the core from keeping the control channel
+                        // responsive, and the node would then fail its own
+                        // health check and roll the image back. Only a
+                        // terminal outcome ends the wait.
+                        if !matches!(result.outcome, OtaOutcome::Verified) {
+                            return Ok(());
+                        }
                     }
                     ControlBody::SyncEcho(_) => {
                         println!("  node is control-responsive");

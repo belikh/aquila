@@ -33,16 +33,19 @@ size_t aq_csi_datagram_len(uint16_t n_subcarriers);
  * (imaginary first) per subcarrier in ascending order, as AQCI requires
  * (ADR-0005). The buffer is copied verbatim; no floating-point conversion
  * happens on the node. `first_word_invalid` sets bit 0 of the header flags
- * byte. Returns the datagram length in bytes, or 0 when the buffer is too small
- * or the subcarrier count is out of range.
+ * byte. `source_mac` is the six-byte MAC address of the station that
+ * transmitted the frame; it may be NULL, in which case the address is written
+ * as all zeroes, meaning "transmitter unknown". Returns the datagram length in
+ * bytes, or 0 when the buffer is too small or the subcarrier count is out of
+ * range.
  */
 size_t aq_frame_csi(uint16_t node_id, uint8_t band, uint8_t channel,
                     uint8_t bandwidth_mhz, uint64_t sequence,
                     uint64_t device_time_us, uint16_t boot_epoch,
                     int16_t subcarrier_offset, uint16_t n_subcarriers,
                     int8_t rssi_dbm, int8_t noise_floor_dbm, uint16_t phy_flags,
-                    bool first_word_invalid, const int8_t *i_q, uint8_t *out,
-                    size_t out_cap);
+                    bool first_word_invalid, const uint8_t *source_mac,
+                    const int8_t *i_q, uint8_t *out, size_t out_cap);
 
 /* The total AQCC message length for a body of `body_len` bytes. */
 size_t aq_control_msg_len(uint16_t body_len);

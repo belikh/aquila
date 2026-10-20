@@ -32,6 +32,7 @@ fn golden_frame() -> CsiFrame {
         noise_floor_dbm: -95,
         phy: PhyFlags(PhyFlags::HT),
         first_word_invalid: false,
+        source_mac: None,
     }
 }
 
@@ -83,6 +84,7 @@ fn representative_frame() -> CsiFrame {
         noise_floor_dbm: -92,
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
         first_word_invalid: false,
+        source_mac: None,
     }
 }
 
@@ -878,7 +880,8 @@ prop_compose! {
          rssi_dbm: i8,
          noise_floor_dbm: i8,
          phy: u16,
-         first_word_invalid: bool)
+         first_word_invalid: bool,
+         source_mac in prop::option::of(prop::array::uniform6(any::<u8>())))
         -> CsiFrame {
         CsiFrame {
             node_id: NodeId(node_id),
@@ -894,6 +897,11 @@ prop_compose! {
             noise_floor_dbm,
             phy: PhyFlags(phy),
             first_word_invalid,
+            // The all-zero address means "transmitter unknown" on the wire, so
+            // it must not be generated as a known address.
+            source_mac: source_mac
+                .map(MacAddr)
+                .filter(|mac| mac.0 != [0u8; 6]),
         }
     }
 }

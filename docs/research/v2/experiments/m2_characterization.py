@@ -155,14 +155,22 @@ def compute_m2_residuals(nodes: Dict[str, Node],
                          static_paths: Dict[Tuple[str, str], List[Tuple[float, float]]],
                          scatterers: List[Scatterer],
                          include_lo: bool = True) -> List[float]:
-    """Measure link phase at each time, fit CFO trend, return wrapped residuals."""
+    """Measure link phase at each time, fit CFO trend, return wrapped residuals.
+
+    The residual removes the drift *and* the constant offset. The constant is
+    the static path phase: its value depends on the path length modulo a
+    wavelength, so it is arbitrary and differs from link to link. Leaving it in
+    would make the metric measure where the path length happens to fall rather
+    than how well the phase is held, and it turns a green link red.
+    `m2_metric_audit.py` demonstrates the difference.
+    """
     phases = [measure_link_phase(nodes, tx_id, rx_id, f_k, t,
                                  static_paths, scatterers, include_lo)
               for t in times_s]
-    _intercept, cfo_rad_per_s = fit_cfo_trend(times_s, phases)
+    intercept, cfo_rad_per_s = fit_cfo_trend(times_s, phases)
     residuals = []
     for t, phi in zip(times_s, phases):
-        predicted = cfo_rad_per_s * t  # intercept absorbed into baseline
+        predicted = intercept + cfo_rad_per_s * t
         residuals.append(wrap_to_pm_pi(phi - predicted))
     return residuals, cfo_rad_per_s
 

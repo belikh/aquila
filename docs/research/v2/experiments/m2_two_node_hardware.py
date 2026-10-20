@@ -1,19 +1,49 @@
-"""Two-node hardware M2: cross-node phase residual on real ESP32-S3 CSI.
+"""Two-node hardware M2: per-packet cross-node phase residual, on real hardware.
 
-INTEGRATION.md §5, measured on hardware rather than simulated. Two nodes sit
-on the same WiFi channel in promiscuous mode, so both hear the same ambient
-802.11 packets. This module matches the packets the two nodes saw and
-measures the per-packet cross-node phase residual after CFO removal — the
-decisive quantity for whether coherent BCPT is available (`m2_characterization.py`
-defines the bands: green < 0.25 rad, amber < 1.0 rad, red above).
+INTEGRATION.md §5, measured on the ESP32-S3 rather than simulated. Two nodes
+sit on the same WiFi channel in promiscuous mode, so both hear the same ambient
+802.11 frames. This module pairs the frames the two nodes captured of the *same
+transmitted packet*, then measures how far the two nodes' phases for that
+packet drift apart once the carrier-frequency offset and its drift are removed.
 
-The hardware path differs from the simulation in one essential way: the
-simulation knows which link produced which sample, whereas on hardware the
-same ambient packet must be identified in each node's own stream. The
-identification used here is the received-power signature: a packet's RSSI is
-a property of the transmitter-receiver path, so the two nodes see nearly the
-same value for the same packet, and the pairing is unambiguous when the
-values are distinct.
+The residual is the decisive quantity: below a quarter of a radian the two
+nodes' phases are coherent enough for closure-phase tomography, above one
+radian they are not (`m2_characterization.py` defines the bands).
+
+HOW THE PACKETS ARE PAIRED
+--------------------------
+Pairing is exact, not inferred. The node reports the MAC address of the
+station that transmitted each captured frame, so the frames two nodes captured
+of one transmission share a transmitter address. The remaining question is
+*which* frame of that transmitter corresponds to which, and the answer is the
+arrival time: both nodes capture one transmission within microseconds of each
+other, and each forwards it to the core immediately, so the two frames reach
+the core within a millisecond of each other. A pair is accepted only when
+exactly one candidate on each side falls in that window, so an ambiguous pair
+is dropped rather than guessed.
+
+Earlier attempts to pair on arrival time and received power alone did not
+discriminate: the access point's beacons from two access points interleave at
+about half the beacon interval, and every beacon of one access point arrives
+at nearly the same power, so both heuristics paired the wrong frames and the
+residual came out uniformly random. The transmitter address is what makes the
+pairing exact.
+
+WHAT THE RESIDUAL IS
+---------------------
+For one link (one transmitter, one receiving node) and one subcarrier, the
+measured phase is the static path phase plus the carrier-frequency drift plus
+the phase noise. The residual is what is left after the drift *and* the
+constant are removed: the constant is the static path phase, whose value
+depends on the path length modulo a wavelength and is therefore arbitrary and
+different for every link. Leaving it in would measure where the path length
+happens to fall rather than how well the phase is held. `m2_metric_audit.py`
+shows that mistake flipping the simulated verdict from green to red.
+
+Frames are compared only within one CSI layout. The ESP32-S3 reports either
+64 subcarriers (the legacy long training field alone) or 128 (that field
+followed by the high-throughput one), and index *k* is a different physical
+subcarrier in the two, so a phase must never be compared across layouts.
 
 Australian English spelling throughout.
 """
@@ -25,79 +55,81 @@ import math
 import statistics
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
-from hardware import CsiFrame, CsiCollector, frames_by_node
+from hardware import CsiCollector, CsiFrame, frames_by_node
 
 # The M2 operational bands (the same thresholds the simulation uses).
 GREEN_MAX_RAD = 0.25
 AMBER_MAX_RAD = 1.00
 
-# The RSSI tolerance for calling two observations the same packet, in dB.
-# The two nodes differ in position, so the same packet is not received at
-# exactly the same power; a couple of dB covers that.
-RSSI_MATCH_TOL_DB = 3.0
+# The window, in microseconds, within which the two nodes' captures of one
+# transmission may lie. The nodes capture within microseconds of each other
+# and forward immediately, so a millisecond is generous; the transmitters
+# involved send tens of times a second, so the window stays unambiguous.
+MATCH_WINDOW_US = 4000
 
-# The smallest amplitude-signature correlation for two observations to be
-# accepted as the same packet. The same packet seen by two nodes shares its
-# multipath amplitude pattern, so the normalised signature correlates even
-# though the absolute power and the phase differ.
-MIN_SIGNATURE_CORRELATION = 0.80
-
-# The smallest complex-CSI correlation for two observations to be accepted as
-# the same packet. The same packet seen by two nodes gives the same channel
-# response up to a complex scalar (the power and the phase differ), so the
-# normalised complex vectors correlate strongly even where the amplitude
-# alone does not distinguish one packet from another.
-MIN_COMPLEX_CORRELATION = 0.90
-
-# The window, in microseconds, within which the host must have received the
-# two nodes' observations of one packet. The host arrival time is the only
-# clock the nodes share: each node stamps its own boot-relative
-# `device_time_us`, but the collector stamps `host_arrival_us` on arrival,
-# so the same ambient packet reaches the host from the two nodes within a
-# few hundred microseconds of each other.
-HOST_MATCH_WINDOW_US = 2000
-
-# The subcarrier the residual is measured on. The ESP32-S3's long training
-# field leaves a block of null subcarriers in the middle of the payload, and
-# the first four bytes are nulled when the driver reports the first word
-# invalid, so a subcarrier inside either region measures nothing at all.
-# Subcarrier 10 sits in the middle of the first populated block, where the
-# CSI is strong and varies from packet to packet.
-DEFAULT_SUBCARRIER = 10
-
-# The smallest number of matched packets that makes a residual meaningful.
+# The smallest number of paired packets that makes a residual meaningful.
 MIN_MATCHED_PAIRS = 20
 
+# The amplitude below which a subcarrier carries no phase. The ESP32-S3 leaves
+# null subcarriers in the payload, and a null subcarrier's phase is a constant
+# zero, which would flatter the residual.
+MIN_SIGNAL = 0.05
 
-@dataclass
-class PacketPair:
-    """One ambient packet seen by both nodes."""
-
-    rssi_a: int
-    rssi_b: int
-    index_a: int
-    index_b: int
-    device_time_a_us: int
-    device_time_b_us: int
+# The share of pairs a subcarrier must carry signal on for it to be measured.
+MIN_SIGNAL_SHARE = 0.9
 
 
 @dataclass
-class ResidualResult:
-    """The cross-node phase residual for one node pair."""
+class Pairing:
+    """The frames two nodes captured of the same transmitted packets."""
+
+    transmitter: str
+    layout: int
+    pairs: List[Tuple[CsiFrame, CsiFrame]] = field(default_factory=list)
+    candidates: int = 0
+    ambiguous: int = 0
+
+
+@dataclass
+class LinkResult:
+    """The cross-node phase residual for one link and one subcarrier."""
+
+    transmitter: str
+    layout: int
+    subcarrier: int
+    n_pairs: int
+    p95_rad: float
+    median_rad: float
+    offset_rad: float
+    drift_rad_per_s: float
+    concentration: float
+    # The share of pairs whose phase difference sits near zero rather than
+    # near pi, and the spread within each of the two groups.
+    sign_agreement: float = 0.0
+    conditioned_p95_rad: float = 0.0
+    agree_centre_rad: float = 0.0
+    disagree_centre_rad: float = 0.0
+    ambiguity: bool = False
+
+
+@dataclass
+class PairResult:
+    """The cross-node phase residual for one pair of nodes."""
 
     node_a: int
     node_b: int
-    n_matched: int
-    n_candidates: int
-    residuals_rad: List[float] = field(default_factory=list)
-    median_rad: float = 0.0
+    n_pairs: int
+    links: List[LinkResult] = field(default_factory=list)
     p95_rad: float = 0.0
     band: str = "red"
-    cfo_rad_per_s: float = 0.0
-    offset_rad: float = 0.0
-    conjugate: bool = False
+    control_p95_rad: float = 0.0
+    ambiguity: bool = False
+    sign_agreement: float = 0.0
+    conditioned_p95_rad: float = 0.0
+    agree_centre_rad: float = 0.0
+    disagree_centre_rad: float = 0.0
     notes: List[str] = field(default_factory=list)
 
     @property
@@ -112,9 +144,9 @@ class TwoNodeReport:
 
     node_ids: Tuple[int, ...]
     duration_s: float
-    frames_a: int
-    frames_b: int
-    results: List[ResidualResult] = field(default_factory=list)
+    frames_per_node: Dict[int, int] = field(default_factory=dict)
+    transmitters: Dict[int, List[str]] = field(default_factory=dict)
+    results: List[PairResult] = field(default_factory=list)
     worst_band: str = "red"
     notes: List[str] = field(default_factory=list)
 
@@ -124,319 +156,352 @@ class TwoNodeReport:
         return self.worst_band != "red"
 
 
-def _rssi_signature(frame: CsiFrame) -> int:
-    """The received power of one frame, in dBm."""
-    return frame.rssi_dbm
+# ---------------------------------------------------------------------------
+# Pairing
+# ---------------------------------------------------------------------------
 
 
-def _amplitude_signature(frame: CsiFrame) -> List[float]:
-    """The frame's per-subcarrier amplitude, normalised to unit norm.
+def match_same_packet(
+    frames_a: Sequence[CsiFrame], frames_b: Sequence[CsiFrame]
+) -> Tuple[List[Tuple[CsiFrame, CsiFrame]], int, int]:
+    """Pair the frames two nodes captured of the same transmission.
 
-    The same ambient packet produces the same multipath pattern for every
-    receiver, so the normalised pattern is a fingerprint of the packet that
-    survives the difference in the receivers' positions. The absolute
-    amplitude is discarded, because that is exactly what differs.
+    Returns the pairs, the number of candidates and the number of ambiguous
+    frames. A frame is used at most once, and a pair is accepted only when
+    exactly one candidate on each side falls inside the window: an ambiguous
+    frame is dropped rather than paired with a guess.
     """
-    magnitudes = [abs(value) for value in frame.csi]
-    norm = math.sqrt(sum(value * value for value in magnitudes))
-    if norm == 0.0:
-        return magnitudes
-    return [value / norm for value in magnitudes]
-
-
-def _signature_correlation(
-    signature_a: List[float], signature_b: List[float]
-) -> float:
-    """The Pearson correlation of two amplitude signatures.
-
-    Both signatures are already unit-norm, so this is their dot product.
-    """
-    length = min(len(signature_a), len(signature_b))
-    if length == 0:
-        return 0.0
-    return sum(signature_a[index] * signature_b[index] for index in range(length))
-
-
-def _complex_signature(frame: CsiFrame) -> List[complex]:
-    """The frame's per-subcarrier complex CSI, normalised to unit norm.
-
-    The same ambient packet produces the same channel response for every
-    receiver, so the normalised complex vector correlates between the nodes
-    even though the absolute amplitude and the phase differ. The amplitude
-    alone is not enough: a long training field's spectrum is nearly flat, so
-    its normalised magnitude is nearly the same for every packet.
-    """
-    values = [complex(value) for value in frame.csi]
-    norm = math.sqrt(sum(abs(value) ** 2 for value in values))
-    if norm == 0.0:
-        return values
-    return [value / norm for value in values]
-
-
-def _complex_correlation(
-    signature_a: List[complex], signature_b: List[complex]
-) -> float:
-    """The magnitude of the complex inner product of two signatures.
-
-    Both signatures are unit-norm, so this is the correlation coefficient's
-    magnitude: 1.0 means the two observations differ by a complex scalar
-    alone, which is what the same packet looks like at two receivers.
-    """
-    length = min(len(signature_a), len(signature_b))
-    if length == 0:
-        return 0.0
-    total = sum(
-        signature_a[index].conjugate() * signature_b[index] for index in range(length)
-    )
-    return abs(total)
-
-
-def match_packets(
-    frames_a: List[CsiFrame], frames_b: List[CsiFrame]
-) -> Tuple[List[PacketPair], int]:
-    """Pair the frames the two nodes saw by their complex CSI response.
-
-    Returns the matched pairs and the number of candidate pairs considered.
-    Each frame is used at most once, and a frame is only paired when the
-    other node's stream holds exactly one frame that correlates strongly: an
-    ambiguous match is dropped rather than guessed, because a wrong pairing
-    would corrupt the phase residual.
-    """
-    pairs: List[PacketPair] = []
-    used_a: set[int] = set()
+    pairs: List[Tuple[CsiFrame, CsiFrame]] = []
     used_b: set[int] = set()
     candidates = 0
+    ambiguous = 0
 
-    signatures_a = [_complex_signature(frame) for frame in frames_a]
-    signatures_b = [_complex_signature(frame) for frame in frames_b]
-
-    for index_a, frame_a in enumerate(frames_a):
-        if index_a in used_a:
-            continue
-        rssi_a = _rssi_signature(frame_a)
-        arrival_a = frame_a.host_arrival_us
-
-        # Candidates: the frames the other node received at about the same
-        # moment, whose CSI response agrees, and whose long training field
-        # layout matches. A frame carrying only the legacy field has 64
-        # subcarriers and a different offset from one carrying the legacy
-        # and high-throughput fields merged, so their subcarrier indices do
-        # not name the same physical subcarriers: pairing across the two
-        # layouts compares different points of the channel.
-        matches: List[Tuple[int, float]] = []
-        for index_b, frame_b in enumerate(frames_b):
-            if index_b in used_b:
+    times_b = [frame.host_arrival_us for frame in frames_b]
+    for frame_a in frames_a:
+        matches: List[int] = []
+        low = frame_a.host_arrival_us - MATCH_WINDOW_US
+        high = frame_a.host_arrival_us + MATCH_WINDOW_US
+        for index, moment in enumerate(times_b):
+            if index in used_b:
                 continue
-            if frame_b.subcarrier_offset != frame_a.subcarrier_offset:
-                continue
-            if frame_b.n_subcarriers != frame_a.n_subcarriers:
-                continue
-            if abs(frame_b.host_arrival_us - arrival_a) > HOST_MATCH_WINDOW_US:
-                continue
-            correlation = _complex_correlation(
-                signatures_a[index_a], signatures_b[index_b]
-            )
-            if correlation >= MIN_COMPLEX_CORRELATION:
-                matches.append((index_b, correlation))
+            if low <= moment <= high:
+                matches.append(index)
         if len(matches) != 1:
-            # No match, or an ambiguous one: skip it rather than guess.
+            if len(matches) > 1:
+                ambiguous += 1
             continue
-        index_b, correlation = matches[0]
+        index_b = matches[0]
         candidates += 1
-        used_a.add(index_a)
         used_b.add(index_b)
-        pairs.append(
-            PacketPair(
-                rssi_a=rssi_a,
-                rssi_b=frames_b[index_b].rssi_dbm,
-                index_a=index_a,
-                index_b=index_b,
-                device_time_a_us=frame_a.device_time_us,
-                device_time_b_us=frames_b[index_b].device_time_us,
-            )
-        )
+        pairs.append((frame_a, frames_b[index_b]))
 
-    return pairs, candidates
+    return pairs, candidates, ambiguous
 
 
-def _fit_cfo_trend(
-    times_s: List[float], phases_rad: List[float]
-) -> Tuple[float, float]:
-    """Fit phase = intercept + cfo * t, unwrapping the phases first.
+def group_by_transmitter(
+    frames: Sequence[CsiFrame],
+) -> Dict[str, List[CsiFrame]]:
+    """Group one node's frames by the station that transmitted them."""
+    grouped: Dict[str, List[CsiFrame]] = {}
+    for frame in frames:
+        if frame.source_mac is None:
+            continue
+        grouped.setdefault(frame.source_mac, []).append(frame)
+    return grouped
 
-    Returns (intercept_rad, cfo_rad_per_s).
+
+def group_by_layout(frames: Sequence[CsiFrame]) -> Dict[int, List[CsiFrame]]:
+    """Group one node's frames by their CSI layout (the subcarrier count).
+
+    The ESP32-S3 reports either 64 subcarriers or 128, and index *k* is a
+    different physical subcarrier in the two, so a phase is never compared
+    across layouts.
     """
-    if len(times_s) < 2:
-        return (phases_rad[0] if phases_rad else 0.0, 0.0)
-    two_pi = 2.0 * math.pi
-    unwrapped = [phases_rad[0]]
-    for index in range(1, len(phases_rad)):
-        current = phases_rad[index]
-        previous = unwrapped[-1]
-        rotations = round((previous - current) / two_pi)
-        unwrapped.append(current + rotations * two_pi)
+    grouped: Dict[int, List[CsiFrame]] = {}
+    for frame in frames:
+        grouped.setdefault(frame.n_subcarriers, []).append(frame)
+    return grouped
 
-    mean_t = sum(times_s) / len(times_s)
-    mean_y = sum(unwrapped) / len(unwrapped)
-    numerator = sum(
-        (t - mean_t) * (y - mean_y) for t, y in zip(times_s, unwrapped)
-    )
+
+# ---------------------------------------------------------------------------
+# Residual
+# ---------------------------------------------------------------------------
+
+
+def _unwrap(values: Sequence[float]) -> List[float]:
+    """Unwrap a phase series so it can be fitted as a straight line."""
+    if not values:
+        return []
+    two_pi = 2.0 * math.pi
+    unwrapped = [values[0]]
+    for index in range(1, len(values)):
+        current = values[index]
+        rotations = round((unwrapped[-1] - current) / two_pi)
+        unwrapped.append(current + rotations * two_pi)
+    return unwrapped
+
+
+def _fit_linear(
+    times_s: Sequence[float], values: Sequence[float]
+) -> Tuple[float, float]:
+    """Fit value = intercept + slope * time."""
+    count = len(times_s)
+    if count < 2:
+        return (values[0] if values else 0.0, 0.0)
+    mean_t = sum(times_s) / count
+    mean_y = sum(values) / count
     denominator = sum((t - mean_t) ** 2 for t in times_s)
     if denominator == 0.0:
         return mean_y, 0.0
-    slope = numerator / denominator
+    slope = (
+        sum((t - mean_t) * (y - mean_y) for t, y in zip(times_s, values))
+        / denominator
+    )
     return mean_y - slope * mean_t, slope
 
 
-def _is_conjugate(
-    frames_a: List[CsiFrame],
-    frames_b: List[CsiFrame],
-    pairs: List[PacketPair],
+def measure_link(
+    transmitter: str,
+    layout: int,
+    pairs: Sequence[Tuple[CsiFrame, CsiFrame]],
     subcarrier: int,
-) -> bool:
-    """Whether the two nodes report the channel response conjugated.
+) -> Optional[LinkResult]:
+    """Measure the cross-node phase residual for one link and subcarrier.
 
-    The two readings are compared as they are and conjugated; the reading
-    with the tighter spread is the one the nodes agree on. The conjugation is
-    detected rather than assumed, so a pair that genuinely agrees directly
-    is not reported as conjugated.
+    The residual is the difference of the two nodes' measured phases for the
+    same packet, with the carrier-frequency drift and the constant offset
+    removed.
     """
-    direct: List[float] = []
-    conjugated: List[float] = []
-    for pair in pairs:
-        frame_a = frames_a[pair.index_a]
-        frame_b = frames_b[pair.index_b]
+    differences: List[float] = []
+    times_s: List[float] = []
+    for frame_a, frame_b in pairs:
         if subcarrier >= len(frame_a.csi) or subcarrier >= len(frame_b.csi):
             continue
         value_a = frame_a.csi[subcarrier]
         value_b = frame_b.csi[subcarrier]
-        if abs(value_a) < 0.05 or abs(value_b) < 0.05:
+        if abs(value_a) < MIN_SIGNAL or abs(value_b) < MIN_SIGNAL:
             continue
-        direct.append(cmath.phase(value_a) - cmath.phase(value_b))
-        conjugated.append(cmath.phase(value_a) - cmath.phase(value_b.conjugate()))
-    if len(direct) < 2:
-        return False
-    spread_direct = statistics.pstdev(direct)
-    spread_conjugated = statistics.pstdev(conjugated)
-    return spread_conjugated < spread_direct
+        differences.append(cmath.phase(value_a) - cmath.phase(value_b))
+        times_s.append(frame_a.host_arrival_us / 1_000_000.0)
+
+    if len(differences) < MIN_MATCHED_PAIRS:
+        return None
+
+    unwrapped = _unwrap(differences)
+    intercept, slope = _fit_linear(times_s, unwrapped)
+    residuals = [
+        cmath.phase(value - (intercept + slope * moment))
+        for moment, value in zip(times_s, unwrapped)
+    ]
+
+    magnitudes = sorted(abs(value) for value in residuals)
+    index = int(math.ceil(0.95 * len(magnitudes))) - 1
+    index = max(0, min(index, len(magnitudes) - 1))
+    vector = sum(cmath.exp(1j * value) for value in residuals)
+
+    # The ESP32-S3 negates the whole channel vector from frame to frame, so
+    # the absolute phase of a frame is only known modulo pi. When that is what
+    # is happening, the residual is not a spread but two groups: pairs whose
+    # signs agree and pairs whose signs do not. The group centres say how far
+    # the two nodes agree once the sign is known, and the spread within each
+    # group says how tight that agreement is.
+    near_zero = [r for r in residuals if abs(r) < 0.5]
+    near_pi = [r for r in residuals if abs(abs(r) - math.pi) < 0.5]
+    sign_agreement = len(near_zero) / len(residuals) if residuals else 0.0
+    ambiguity = len(near_zero) + len(near_pi) >= 0.9 * len(residuals)
+
+    def _centre(group: Sequence[float]) -> float:
+        if not group:
+            return 0.0
+        return cmath.phase(
+            sum(cmath.exp(1j * value) for value in group) / len(group)
+        )
+
+    def _spread(group: Sequence[float]) -> float:
+        if not group:
+            return 0.0
+        centre = _centre(group)
+        magnitudes = sorted(abs(cmath.phase(value - centre)) for value in group)
+        index = int(math.ceil(0.95 * len(magnitudes))) - 1
+        return magnitudes[max(0, min(index, len(magnitudes) - 1))]
+
+    agree_centre = _centre(near_zero)
+    disagree_centre = _centre(near_pi)
+    conditioned = max(_spread(near_zero), _spread(near_pi))
+
+    return LinkResult(
+        transmitter=transmitter,
+        layout=layout,
+        subcarrier=subcarrier,
+        n_pairs=len(differences),
+        p95_rad=magnitudes[index],
+        median_rad=statistics.median(magnitudes),
+        offset_rad=cmath.phase(intercept),
+        drift_rad_per_s=slope,
+        concentration=abs(vector) / len(residuals),
+        sign_agreement=sign_agreement,
+        conditioned_p95_rad=conditioned,
+        agree_centre_rad=agree_centre,
+        disagree_centre_rad=disagree_centre,
+        ambiguity=ambiguity,
+    )
+
+
+def usable_subcarriers(
+    pairs: Sequence[Tuple[CsiFrame, CsiFrame]],
+) -> List[int]:
+    """The subcarriers that carried signal on almost every paired frame.
+
+    A null subcarrier's phase is a constant, which would make the residual
+    look perfect without measuring anything.
+    """
+    if not pairs:
+        return []
+    first_a, first_b = pairs[0]
+    count = min(len(first_a.csi), len(first_b.csi))
+    usable: List[int] = []
+    for subcarrier in range(count):
+        signalled = 0
+        for frame_a, frame_b in pairs:
+            value_a = frame_a.csi[subcarrier]
+            value_b = frame_b.csi[subcarrier]
+            if abs(value_a) >= MIN_SIGNAL and abs(value_b) >= MIN_SIGNAL:
+                signalled += 1
+        if signalled >= MIN_SIGNAL_SHARE * len(pairs):
+            usable.append(subcarrier)
+    return usable
 
 
 def measure_pair(
     node_a: int,
     node_b: int,
-    frames_a: List[CsiFrame],
-    frames_b: List[CsiFrame],
-    subcarrier: int = DEFAULT_SUBCARRIER,
-) -> ResidualResult:
-    """Measure the cross-node phase residual for one node pair.
+    frames_a: Sequence[CsiFrame],
+    frames_b: Sequence[CsiFrame],
+) -> PairResult:
+    """Measure the cross-node phase residual between two nodes."""
+    result = PairResult(node_a=node_a, node_b=node_b, n_pairs=0)
 
-    The residual is the phase difference between the two nodes for the same
-    ambient packet, after the linear phase trend (the carrier-frequency
-    offset between the nodes and their clock drift) is removed.
-    """
-    pairs, candidates = match_packets(frames_a, frames_b)
-    result = ResidualResult(
-        node_a=node_a,
-        node_b=node_b,
-        n_matched=len(pairs),
-        n_candidates=candidates,
-    )
+    transmitters_a = group_by_transmitter(frames_a)
+    transmitters_b = group_by_transmitter(frames_b)
+    common = sorted(set(transmitters_a) & set(transmitters_b))
 
-    if len(pairs) < MIN_MATCHED_PAIRS:
-        result.band = "red"
+    if not common:
         result.notes.append(
-            f"only {len(pairs)} matched packets; at least "
-            f"{MIN_MATCHED_PAIRS} are needed for a residual"
+            "the two nodes share no transmitter: the node reports no source "
+            "address, so the frames cannot be paired"
         )
         return result
 
-    phases: List[float] = []
-    times_s: List[float] = []
-    for pair in pairs:
-        frame_a = frames_a[pair.index_a]
-        frame_b = frames_b[pair.index_b]
-        # The subcarrier is named relative to the frame's own long training
-        # field layout: the frame's `subcarrier_offset` says which physical
-        # subcarrier its first entry is, so the same index in two frames with
-        # the same layout is the same physical subcarrier. The matcher only
-        # pairs frames with equal layouts, so the index is comparable.
-        if subcarrier >= len(frame_a.csi) or subcarrier >= len(frame_b.csi):
-            continue
-        phase_a = cmath.phase(frame_a.csi[subcarrier])
-        phase_b = cmath.phase(frame_b.csi[subcarrier])
-        # The residual is the difference of the two measured phases.
-        phases.append(cmath.phase(phase_a - phase_b))
-        # The pair's time is the host arrival: the only clock both nodes
-        # share, so the trend fitted to it is a real drift of the pair
-        # rather than the difference of two unrelated clocks.
-        times_s.append(frame_a.host_arrival_us / 1e6)
+    best_p95 = 0.0
+    total_pairs = 0
+    for transmitter in common:
+        layouts_a = group_by_layout(transmitters_a[transmitter])
+        layouts_b = group_by_layout(transmitters_b[transmitter])
+        for layout in sorted(set(layouts_a) & set(layouts_b)):
+            pairs, candidates, ambiguous = match_same_packet(
+                layouts_a[layout], layouts_b[layout]
+            )
+            total_pairs += len(pairs)
+            if len(pairs) < MIN_MATCHED_PAIRS:
+                continue
+            for subcarrier in usable_subcarriers(pairs):
+                link = measure_link(transmitter, layout, pairs, subcarrier)
+                if link is not None:
+                    result.links.append(link)
+                    best_p95 = max(best_p95, link.p95_rad)
+            result.notes.append(
+                f"transmitter {transmitter}, {layout} subcarriers: "
+                f"{len(pairs)} packets paired ({candidates} candidates, "
+                f"{ambiguous} ambiguous dropped)"
+            )
 
-    if len(phases) < MIN_MATCHED_PAIRS:
-        result.band = "red"
-        result.notes.append("too few usable subcarrier samples")
+    result.n_pairs = total_pairs
+    result.p95_rad = best_p95
+    if not result.links:
+        result.notes.append("no subcarrier carried enough signal to measure")
         return result
 
-    # The two nodes may report the same channel response conjugated — the
-    # imaginary and the real parts exchanged — which is a fixed half-turn of
-    # the phase plus a reversal of the subcarrier order. The conjugation is
-    # detected, not assumed: the pair whose residual is the tighter of the
-    # two readings is the one reported.
-    result.conjugate = _is_conjugate(
-        frames_a, frames_b, pairs, subcarrier
-    )
-    if result.conjugate:
-        phases = [cmath.phase(-value) for value in phases]
-        result.notes.append(
-            "the two nodes report the channel response conjugated; the "
-            "residual is reported against the conjugated reading"
-        )
-
-    _intercept, cfo = _fit_cfo_trend(times_s, phases)
-    residuals = []
-    for time_s, phase in zip(times_s, phases):
-        # The constant term is the pair's fixed phase offset (the two nodes'
-        # independent carrier-frequency offsets and the fixed path delay), and
-        # the slope is the drift of that offset over the window. Both are
-        # removed, so what remains is the per-packet residual: the part of
-        # the cross-node phase that the linear model cannot explain.
-        predicted = _intercept + cfo * time_s
-        residuals.append(cmath.phase(phase - predicted))
-
-    absolute = [abs(value) for value in residuals]
-    result.residuals_rad = residuals
-    result.median_rad = statistics.median(absolute)
-    ordered = sorted(absolute)
-    index = int(math.ceil(0.95 * len(ordered))) - 1
-    index = max(0, min(index, len(ordered) - 1))
-    result.p95_rad = ordered[index]
-    result.cfo_rad_per_s = cfo
-    result.offset_rad = cmath.phase(_intercept)
     if result.p95_rad < GREEN_MAX_RAD:
         result.band = "green"
     elif result.p95_rad < AMBER_MAX_RAD:
         result.band = "amber"
     else:
         result.band = "red"
-    result.notes.append(
-        f"{len(pairs)} packets matched by host arrival (within "
-        f"{HOST_MATCH_WINDOW_US} us) and complex CSI correlation "
-        f"(>= {MIN_COMPLEX_CORRELATION}), subcarrier {subcarrier}"
-    )
+
+    # Is the residual a sign ambiguity rather than a spread? If it is, the
+    # measurement is limited by the ESP32-S3's per-frame sign flip, and the
+    # residual conditioned on the sign is the real noise.
+    ambiguous_links = [link for link in result.links if link.ambiguity]
+    if ambiguous_links:
+        result.ambiguity = True
+        result.sign_agreement = statistics.mean(
+            link.sign_agreement for link in ambiguous_links
+        )
+        result.conditioned_p95_rad = max(
+            link.conditioned_p95_rad for link in ambiguous_links
+        )
+        result.agree_centre_rad = statistics.mean(
+            link.agree_centre_rad for link in ambiguous_links
+        )
+        result.disagree_centre_rad = statistics.mean(
+            link.disagree_centre_rad for link in ambiguous_links
+        )
+        result.notes.append(
+            f"the residual is a sign ambiguity, not a spread: "
+            f"{len(ambiguous_links)} of {len(result.links)} subcarriers sit "
+            f"at zero or pi, with the signs agreeing on "
+            f"{result.sign_agreement:.0%} of pairs; the agreeing group is "
+            f"centred at {result.agree_centre_rad:+.4f} rad and the "
+            f"disagreeing group at {result.disagree_centre_rad:+.4f} rad, "
+            f"each with a p95 spread of {result.conditioned_p95_rad:.4f} rad"
+        )
+
+    # The control: pair the two nodes' frames across *different* transmitters.
+    # The residual must be much larger, or the pairing is not what the result
+    # depends on.
+    control = _cross_transmitter_control(transmitters_a, transmitters_b, common)
+    if control is not None:
+        result.control_p95_rad = control
     return result
 
 
-def classify_band(p95_rad: float) -> str:
-    """Green / amber / red per the campaign gates."""
-    if p95_rad < GREEN_MAX_RAD:
-        return "green"
-    if p95_rad < AMBER_MAX_RAD:
-        return "amber"
-    return "red"
+def _cross_transmitter_control(
+    transmitters_a: Dict[str, List[CsiFrame]],
+    transmitters_b: Dict[str, List[CsiFrame]],
+    common: Sequence[str],
+) -> Optional[float]:
+    """The residual when the two nodes' frames come from different senders.
+
+    This is the check that the result depends on pairing the same packet:
+    mixing transmitters must destroy the residual.
+    """
+    if len(common) < 2:
+        return None
+    mac_a, mac_b = common[0], common[1]
+    layout_a = group_by_layout(transmitters_a[mac_a])
+    layout_b = group_by_layout(transmitters_b[mac_b])
+    for layout in sorted(set(layout_a) & set(layout_b)):
+        pairs, _candidates, _ambiguous = match_same_packet(
+            layout_a[layout], layout_b[layout]
+        )
+        if len(pairs) < MIN_MATCHED_PAIRS:
+            continue
+        worst = 0.0
+        for subcarrier in usable_subcarriers(pairs):
+            link = measure_link("control", layout, pairs, subcarrier)
+            if link is not None:
+                worst = max(worst, link.p95_rad)
+        return worst
+    return None
+
+
+# ---------------------------------------------------------------------------
+# The run
+# ---------------------------------------------------------------------------
 
 
 def run_two_node_measurement(
     duration_s: float = 120.0,
-    subcarrier: int = DEFAULT_SUBCARRIER,
     collector: Optional[CsiCollector] = None,
 ) -> TwoNodeReport:
     """Collect from the live nodes and measure the cross-node residual.
@@ -460,9 +525,14 @@ def run_two_node_measurement(
     report = TwoNodeReport(
         node_ids=node_ids,
         duration_s=duration_s,
-        frames_a=len(grouped.get(node_ids[0], [])) if node_ids else 0,
-        frames_b=len(grouped.get(node_ids[1], [])) if len(node_ids) > 1 else 0,
+        frames_per_node={nid: len(grouped[nid]) for nid in node_ids},
     )
+
+    for node_id in node_ids:
+        transmitters = group_by_transmitter(grouped[node_id])
+        report.transmitters[node_id] = sorted(
+            transmitters, key=lambda mac: -len(transmitters[mac])
+        )[:6]
 
     if len(node_ids) < 2:
         report.notes.append(
@@ -472,18 +542,23 @@ def run_two_node_measurement(
         report.worst_band = "red"
         return report
 
-    # Measure every pair and keep the worst band.
+    for node_id in node_ids:
+        without = sum(
+            1 for frame in grouped[node_id] if frame.source_mac is None
+        )
+        if without:
+            report.notes.append(
+                f"node {node_id}: {without} frames report no transmitter "
+                "address; the node is running firmware older than wire minor 1"
+            )
+
     bands: List[str] = []
     for first in range(len(node_ids)):
         for second in range(first + 1, len(node_ids)):
             node_a = node_ids[first]
             node_b = node_ids[second]
             result = measure_pair(
-                node_a,
-                node_b,
-                grouped[node_a],
-                grouped[node_b],
-                subcarrier=subcarrier,
+                node_a, node_b, grouped[node_a], grouped[node_b]
             )
             report.results.append(result)
             bands.append(result.band)
@@ -502,26 +577,47 @@ def format_report(report: TwoNodeReport) -> str:
     lines = [
         "=== Aquila two-node hardware M2 ===",
         f"nodes {report.node_ids} over {report.duration_s:.0f}s",
-        f"frames: {report.frames_a} / {report.frames_b}",
+        f"frames: {report.frames_per_node}",
         "",
     ]
+    for node_id, transmitters in report.transmitters.items():
+        lines.append(f"  node {node_id} hears: {', '.join(transmitters)}")
+    lines.append("")
     for result in report.results:
         lines.append(
             f"  node {result.node_a} <-> node {result.node_b}: "
             f"band={result.band} p95={result.p95_rad:.4f} rad "
-            f"median={result.median_rad:.4f} rad "
-            f"matched={result.n_matched} "
-            f"offset={result.offset_rad:.4f} rad "
-            f"cfo={result.cfo_rad_per_s:.4f} rad/s"
-            + (" [conjugated]" if result.conjugate else "")
+            f"(cross-transmitter control {result.control_p95_rad:.4f} rad) "
+            f"pairs={result.n_pairs} links={len(result.links)}"
         )
+        if result.ambiguity:
+            lines.append(
+                f"      SIGN AMBIGUITY: signs agree on "
+                f"{result.sign_agreement:.0%} of pairs; conditioned on the "
+                f"sign the p95 is {result.conditioned_p95_rad:.4f} rad"
+            )
         for note in result.notes:
             lines.append(f"      {note}")
+        if result.links:
+            worst = max(result.links, key=lambda link: link.p95_rad)
+            best = min(result.links, key=lambda link: link.p95_rad)
+            lines.append(
+                f"      worst subcarrier sc{worst.subcarrier} "
+                f"(layout {worst.layout}): p95={worst.p95_rad:.4f} rad, "
+                f"offset={worst.offset_rad:+.4f} rad, "
+                f"drift={worst.drift_rad_per_s:+.4f} rad/s, "
+                f"concentration={worst.concentration:.4f}"
+            )
+            lines.append(
+                f"      best subcarrier sc{best.subcarrier}: "
+                f"p95={best.p95_rad:.4f} rad"
+            )
     lines.append("")
     lines.append(f"worst band: {report.worst_band}")
     lines.append(
-        "BCPT cleared over the air" if report.bcpt_cleared else
-        "BCPT hardware-gated: the cross-node phase residual is in the red band"
+        "BCPT cleared over the air"
+        if report.bcpt_cleared
+        else "BCPT hardware-gated: the cross-node phase residual is in the red band"
     )
     for note in report.notes:
         lines.append(note)

@@ -2224,6 +2224,7 @@ fn phase_sign_is_imaginary_first_end_to_end() {
         noise_floor_dbm: -90,
         phy: PhyFlags(PhyFlags::HT),
         first_word_invalid: false,
+        source_mac: None,
     };
     frame.validate().expect("valid frame");
 

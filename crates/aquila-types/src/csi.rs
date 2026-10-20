@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ValidationError;
-use crate::ids::NodeId;
+use crate::ids::{MacAddr, NodeId};
 use crate::primitives::{Band, PhyFlags};
 use crate::time::TimeSpan;
 
@@ -106,6 +106,20 @@ pub struct CsiFrame {
     /// the pure node frame, so the flag travels on the wire header's flags
     /// byte, bit 0).
     pub first_word_invalid: bool,
+    /// The MAC address of the station that **transmitted** the frame.
+    ///
+    /// `None` for a wire minor 0 datagram, which did not carry it; `Some` for
+    /// minor 1 and later, where the node copies the driver's source address
+    /// verbatim.
+    ///
+    /// This is the node's only view of *who* sent the packet, and it is what
+    /// makes two nodes' captures of the same ambient packet comparable: both
+    /// nodes see the same access point's beacons, and the transmitter's address
+    /// is the only exact key that says which captured frames are the same
+    /// transmission. Without it the core can only guess, and a guess that
+    /// mixes transmitters produces a phase residual that is an artefact of the
+    /// guess rather than of the channel.
+    pub source_mac: Option<MacAddr>,
 }
 
 impl CsiFrame {

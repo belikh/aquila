@@ -21,7 +21,12 @@ pub const WIRE_MAJOR: u8 = 1;
 
 /// The wire minor version. A datagram with a different minor is accepted
 /// (additive change within a major version).
-pub const WIRE_MINOR: u8 = 0;
+///
+/// Minor 1 adds the transmitting station's source MAC address to the fixed
+/// body (`data-contracts.md` §9.1). The codec knows each minor's body layout:
+/// minor 0 carries no source MAC, minor 1 and later carry it at
+/// [`csi_body_offset::SOURCE_MAC`].
+pub const WIRE_MINOR: u8 = 1;
 
 /// The control-framing version byte (`capture-and-firmware.md` §6.1).
 pub const CONTROL_VERSION: u8 = WIRE_MAJOR;
@@ -46,7 +51,17 @@ pub const CSI_FLAG_FIRST_WORD_INVALID: u8 = 0x01;
 pub const CSI_HEADER_LEN: usize = 16;
 
 /// The fixed part of the CSI body, before the `int8` I/Q payload, in bytes.
-pub const CSI_BODY_FIXED_LEN: usize = 28;
+///
+/// Wire minor 1 adds the six-byte source MAC address of the transmitting
+/// station, so the fixed body is 28 + 6 = 34 bytes.
+pub const CSI_BODY_FIXED_LEN: usize = 34;
+
+/// The fixed part of the CSI body for wire minor 0, before the `int8` I/Q
+/// payload, in bytes.
+///
+/// Minor 0 has no source MAC field. It is kept so the codec can still read a
+/// minor 0 datagram from a node that has not been updated.
+pub const CSI_BODY_FIXED_LEN_V0: usize = 28;
 
 /// The default CSI data-plane UDP port (node → core).
 pub const CSI_DATA_PORT: u16 = 9100;
@@ -62,7 +77,7 @@ pub const MAX_DATAGRAM_LEN: usize = 1472;
 ///
 /// Derived from [`MAX_DATAGRAM_LEN`]: with interleaved signed int8 `Q, I`
 /// (imaginary first, 2 bytes per subcarrier) the body budget is
-/// `(1472 - 16 - 28) / 2 = 714`.
+/// `(1472 - 16 - 34) / 2 = 711`.
 pub const MAX_SUBCARRIERS: u16 =
     ((MAX_DATAGRAM_LEN - CSI_HEADER_LEN - CSI_BODY_FIXED_LEN) / 2) as u16;
 
@@ -231,8 +246,11 @@ pub(crate) mod csi_body_offset {
     pub(crate) const PHY_FLAGS: usize = 24;
     /// Reserved, zero (`u16`).
     pub(crate) const RESERVED: usize = 26;
+    /// The six-byte MAC address of the transmitting station (wire minor 1 and
+    /// later).
+    pub(crate) const SOURCE_MAC: usize = 28;
     /// The first interleaved signed int8 byte: `Q` (imaginary first), then `I`.
-    pub(crate) const IQ: usize = 28;
+    pub(crate) const IQ: usize = 34;
 }
 
 /// Byte offsets within the fixed 12-byte control header

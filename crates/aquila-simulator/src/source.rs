@@ -24,7 +24,7 @@ use aquila_session::{Manifest, SessionWriter};
 use aquila_sources::{CsiSource, FrameOrEnd, SourceError};
 use aquila_types::{
     Band, BuildId, CsiEnvelope, CsiFrame, EventPayload, EventScope, GroundTruthRecord,
-    GroundTruthRef, GtKind, Keypoint, KeypointId, PhyFlags, Pose, Session, SessionId,
+    GroundTruthRef, GtKind, Keypoint, KeypointId, MacAddr, PhyFlags, Pose, Session, SessionId,
     SubjectId, Witness, ZoneId, CONTRACT_VERSION, KEYPOINT_COUNT,
 };
 use aquila_wire::{decode_datagram, encode_datagram};
@@ -422,7 +422,33 @@ impl SimulatorSource {
             noise_floor_dbm: noise_floor,
             phy: PhyFlags(phy),
             first_word_invalid,
+            source_mac: Some(self.transmitter_mac()),
         }
+    }
+
+    /// The MAC address of the access point the modelled traffic comes from.
+    ///
+    /// The simulator has one transmitter, so every frame it synthesises names
+    /// the same station. Two nodes' captures of the same modelled beacon are
+    /// then identifiable by the address alone, exactly as they are on real
+    /// hardware.
+    fn transmitter_mac(&self) -> MacAddr {
+        // A locally administered address (the second-least-significant bit of
+        // the first octet is set), derived from the home so the value is stable
+        // across runs.
+        let mut hash: u32 = 0x811c_9dc5;
+        for byte in self.script.home.as_str().as_bytes() {
+            hash ^= u32::from(*byte);
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+        MacAddr([
+            0x02,
+            ((hash >> 24) & 0xFF) as u8,
+            ((hash >> 16) & 0xFF) as u8,
+            ((hash >> 8) & 0xFF) as u8,
+            (hash & 0xFF) as u8,
+            0x01,
+        ])
     }
 }
 

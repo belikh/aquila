@@ -7,7 +7,7 @@
 
 /* Versions and magics. */
 #define AQ_WIRE_MAJOR 1u
-#define AQ_WIRE_MINOR 0u
+#define AQ_WIRE_MINOR 1u
 #define AQ_CSI_MAGIC_0 0x41u /* 'A' */
 #define AQ_CSI_MAGIC_1 0x51u /* 'Q' */
 #define AQ_CSI_MAGIC_2 0x43u /* 'C' */
@@ -24,8 +24,8 @@
 #define AQ_CSI_DATA_PORT 9100u
 #define AQ_CONTROL_PORT 9101u
 #define AQ_CSI_HEADER_LEN 16u
-#define AQ_CSI_BODY_FIXED_LEN 28u
-#define AQ_CSI_MAX_SUBCARRIERS 714u
+#define AQ_CSI_BODY_FIXED_LEN 34u
+#define AQ_CSI_MAX_SUBCARRIERS 711u
 #define AQ_CSI_MAX_DATAGRAM_LEN 1472u
 #define AQ_CONTROL_HEADER_LEN 12
 #define AQ_CONTROL_AUTH_LEN 32u
@@ -85,7 +85,8 @@
 #define AQ_CSI_BODY_OFF_NOISE_FLOOR_DBM 23u
 #define AQ_CSI_BODY_OFF_PHY_FLAGS 24u
 #define AQ_CSI_BODY_OFF_RESERVED 26u
-#define AQ_CSI_BODY_OFF_IQ 28u
+#define AQ_CSI_BODY_OFF_SOURCE_MAC 28u
+#define AQ_CSI_BODY_OFF_IQ 34u
 
 /* Control header field offsets. */
 #define AQ_CONTROL_OFF_MAGIC 0u
@@ -121,6 +122,7 @@ typedef struct {
     int8_t   noise_floor_dbm;
     uint16_t phy_flags;
     uint16_t reserved;
+    uint8_t  source_mac[6]; /* the transmitting station's MAC address */
 } aq_csi_body_fixed_t;
 
 typedef struct {

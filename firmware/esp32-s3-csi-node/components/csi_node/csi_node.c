@@ -49,6 +49,10 @@ typedef struct {
     int8_t noise_floor;
     uint16_t phy_flags;
     bool first_word_invalid;
+    /* The MAC address of the station that transmitted the frame. The core
+     * needs it to tell two nodes' captures of the same ambient packet apart
+     * from two different packets. */
+    uint8_t source_mac[6];
     uint16_t csi_len;
     int8_t csi[CSI_RAW_MAX];
 } csi_slot_t;
@@ -191,6 +195,10 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     slot->noise_floor = info->rx_ctrl.noise_floor;
     slot->phy_flags = phy_flags_from_rx(&info->rx_ctrl);
     slot->first_word_invalid = info->first_word_invalid;
+    /* The driver's source address: who transmitted this frame. It is the only
+     * exact key that lets the core pair two nodes' captures of the same
+     * ambient packet, so it is copied verbatim. */
+    memcpy(slot->source_mac, info->mac, sizeof(slot->source_mac));
     slot->csi_len = (uint16_t)len;
     memcpy(slot->csi, info->buf, (size_t)len);
 
@@ -289,8 +297,8 @@ static void csi_sender_task(void *arg)
         size_t length = aq_frame_csi(
             cfg.node_id, slot.band, slot.channel, cfg.bandwidth_mhz, slot.sequence,
             slot.device_ts_us, s_boot_epoch, subcarrier_offset, n, slot.rssi,
-            slot.noise_floor, slot.phy_flags, slot.first_word_invalid, slot.csi,
-            datagram, sizeof(datagram));
+            slot.noise_floor, slot.phy_flags, slot.first_word_invalid,
+            slot.source_mac, slot.csi, datagram, sizeof(datagram));
         if (length > 0u && s_sock >= 0) {
             sendto(s_sock, datagram, length, 0, (struct sockaddr *)&s_core,
                    sizeof(s_core));

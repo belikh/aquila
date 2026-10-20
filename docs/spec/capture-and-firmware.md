@@ -273,7 +273,7 @@ the application layer.
 | 14 | 1 | `bandwidth_mhz` | `u8` |
 | 15 | 1 | `flags` | `u8`; bit 0 = `first_word_invalid` (leading complex sample unreliable); other bits reserved = 0 |
 
-**Body (`msg_type` 1) — 28-byte fixed part, then `2 × n` bytes**
+**Body (`msg_type` 1) — 34-byte fixed part (wire minor 1), then `2 × n` bytes**
 
 | Offset | Size | Field |
 | --- | --- | --- |
@@ -286,12 +286,17 @@ the application layer.
 | 23 | 1 | `noise_floor_dbm` (`i8`) |
 | 24 | 2 | `phy_flags` (`u16`) |
 | 26 | 2 | reserved = 0 |
-| 28 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
+| 28 | 6 | `source_mac` — the MAC address of the station that transmitted the frame (wire minor 1 and later; all zeroes means "transmitter unknown") |
+| 34 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
 
 A receiver validates `magic`, `wire_major`, `payload_len` and
-`payload_len == 28 + 2 * n_subcarriers` before trusting any field. A `wire_minor`
+`payload_len == 34 + 2 * n_subcarriers` before trusting any field. A `wire_minor`
 mismatch is accepted (additive); a `wire_major` mismatch is rejected and counted
-once per `(node_id, boot_epoch)`, never guessed. The wire carries the dense
+once per `(node_id, boot_epoch)`, never guessed. The codec knows each minor's
+body layout: **wire minor 0** carries no `source_mac` and its fixed body is 28
+bytes, so `payload_len == 28 + 2 * n_subcarriers` and the payload starts at body
+offset 28; **wire minor 1** and later carry the six-byte `source_mac` and the
+fixed body is 34 bytes. The wire carries the dense
 `node_id`; the factory `MacAddr` is translated at the seam by `aquila-wire`'s
 node-identity map (ADR-0003 §3, ADR-0004 §2). The payload is copied from the
 receive buffer verbatim — interleaved `Q, I`, imaginary byte first (ADR-0006;
@@ -301,6 +306,18 @@ bit 0 (`first_word_invalid`) marks a frame whose leading complex sample (two
 bytes) the driver reported unreliable. The codec is `aquila-wire`'s
 `encode_datagram`/`decode_datagram`; `postcard` is not used on the wire
 (`data-contracts.md` §9.1).
+
+`source_mac` is the address of the station that *transmitted* the captured
+frame, copied verbatim from the driver's `wifi_csi_info_t.mac`. It is the node's
+only view of *who* sent the packet, and it is what makes two nodes' captures of
+the same ambient packet comparable: both nodes hear the same access point's
+beacons, and the transmitter's address is the only exact key that says which
+captured frames are the same transmission. A core that pairs frames on arrival
+time and received power alone cannot say so — the beacons of two access points
+interleave at about half the beacon interval and every beacon of one access
+point arrives at nearly the same power — and a pairing that mixes transmitters
+produces a phase residual that is an artefact of the guess rather than of the
+channel.
 
 ### 5.2 Sequence
 

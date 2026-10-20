@@ -28,14 +28,21 @@
 //!     39    1 noise_floor_dbm (i8)
 //!     40    2 phy_flags
 //!     42    2 reserved = 0
-//!     44   2n i_q[0..2n] (i8, interleaved Q,I per subcarrier)
+//!     44    6 source_mac (wire minor 1 and later)
+//!     50   2n i_q[0..2n] (i8, interleaved Q,I per subcarrier)
 //! ```
+//!
+//! Wire minor 0 has no `source_mac` field and its I/Q payload starts at body
+//! offset 28; wire minor 1 and later carry the six-byte MAC address of the
+//! transmitting station and start the payload at body offset 34. The codec
+//! reads both, so a node that has not been updated still reports frames.
 
-use aquila_types::{Band, CsiFrame, NodeId, PhyFlags};
+use aquila_types::{Band, CsiFrame, MacAddr, NodeId, PhyFlags};
 
 use crate::constants::{
-    CSI_BODY_FIXED_LEN, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE,
-    MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR, WIRE_MINOR,
+    CSI_BODY_FIXED_LEN, CSI_BODY_FIXED_LEN_V0, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN,
+    CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR,
+    WIRE_MINOR,
 };
 use crate::cursor::{Reader, Writer};
 use crate::error::WireError;
@@ -113,6 +120,22 @@ pub fn encode_datagram(frame: &CsiFrame) -> Vec<u8> {
     w.u16(frame.phy.0);
     w.u16(0); // reserved
 
+    // The six-byte MAC address of the transmitting station (wire minor 1).
+    // An absent address is written as all zeroes; the core reads it as
+    // "unknown transmitter" rather than as a real address.
+    match frame.source_mac {
+        Some(mac) => {
+            for byte in mac.0 {
+                w.u8(byte);
+            }
+        }
+        None => {
+            for _ in 0..6 {
+                w.u8(0);
+            }
+        }
+    }
+
     // Interleaved signed int8 I/Q, imaginary (Q) then real (I) per subcarrier (ADR-0006).
     for i in 0..2 * n {
         w.i8(frame.i_q.get(i).copied().unwrap_or(0));
@@ -140,7 +163,7 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         });
     }
     let major = r.u8()?;
-    let _minor = r.u8()?; // additive: any minor is accepted
+    let minor = r.u8()?; // additive: any minor is accepted
     if major != WIRE_MAJOR {
         return Err(WireError::UnsupportedVersion {
             major,
@@ -185,7 +208,15 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         });
     }
 
-    let expected_payload = CSI_BODY_FIXED_LEN + 2 * n as usize;
+    // The fixed body layout follows the wire minor: minor 0 has no source MAC
+    // field, minor 1 and later do.
+    let body_fixed_len = if minor == 0 {
+        CSI_BODY_FIXED_LEN_V0
+    } else {
+        CSI_BODY_FIXED_LEN
+    };
+
+    let expected_payload = body_fixed_len + 2 * n as usize;
     if payload_len != expected_payload {
         return Err(WireError::LengthMismatch {
             declared: payload_len,
@@ -197,6 +228,22 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
     let noise_floor_dbm = r.i8()?;
     let phy = PhyFlags(r.u16()?);
     let _body_reserved = r.u16()?;
+
+    // The source MAC of the transmitting station (wire minor 1 and later).
+    // An all-zero address means the node did not know the transmitter.
+    let source_mac = if minor >= 1 {
+        let mut bytes = [0u8; 6];
+        for byte in bytes.iter_mut() {
+            *byte = r.u8()?;
+        }
+        if bytes == [0u8; 6] {
+            None
+        } else {
+            Some(MacAddr(bytes))
+        }
+    } else {
+        None
+    };
 
     let count = n as usize;
     let mut i_q = Vec::with_capacity(2 * count);
@@ -219,5 +266,6 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         noise_floor_dbm,
         phy,
         first_word_invalid: flags & CSI_FLAG_FIRST_WORD_INVALID != 0,
+        source_mac,
     })
 }

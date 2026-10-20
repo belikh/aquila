@@ -183,6 +183,11 @@ pub fn generate_c_header() -> String {
         "AQ_CSI_BODY_OFF_RESERVED",
         csi_body_offset::RESERVED,
     );
+    emit_offset(
+        &mut s,
+        "AQ_CSI_BODY_OFF_SOURCE_MAC",
+        csi_body_offset::SOURCE_MAC,
+    );
     emit_offset(&mut s, "AQ_CSI_BODY_OFF_IQ", csi_body_offset::IQ);
     let _ = writeln!(s);
 
@@ -228,6 +233,10 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(s, "    int8_t   noise_floor_dbm;");
     let _ = writeln!(s, "    uint16_t phy_flags;");
     let _ = writeln!(s, "    uint16_t reserved;");
+    let _ = writeln!(
+        s,
+        "    uint8_t  source_mac[6]; /* the transmitting station's MAC address */"
+    );
     let _ = writeln!(s, "}} aq_csi_body_fixed_t;");
     let _ = writeln!(s);
     let _ = writeln!(s, "typedef struct {{");

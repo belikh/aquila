@@ -230,6 +230,10 @@ def record_m2_result(session_id: str,
     """Record M2 characterisation results as ledger entries."""
     entries: List[LedgerEntry] = []
     worst_band = m2_report.get("worst_band", "unknown")
+    # Whether the residual came from the live nodes or from the model. The
+    # witness grade cannot tell the two apart, and the distinction is the
+    # whole point of the M2 question, so it is recorded explicitly.
+    source = m2_report.get("source", "simulation")
 
     for result in m2_report.get("results", []):
         pair = result.get("pair", ["?", "?"])
@@ -250,7 +254,8 @@ def record_m2_result(session_id: str,
             passed=(band != "red"),
             hardware_gated=(band == "red"),
             data_gated=False,
-            notes=f"M2 cross-node phase residual, pair {pair[0]}->{pair[1]}, band={band}",
+            notes=(f"M2 cross-node phase residual, pair {pair[0]}->{pair[1]}, "
+                   f"band={band}, source={source}"),
         ))
 
     # BCPT clearance claim (headline if proceeding to BCPT).

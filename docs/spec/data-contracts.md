@@ -911,7 +911,7 @@ application layer.
 | 14 | 1 | `bandwidth_mhz` | `u8` |
 | 15 | 1 | `flags` | `u8`; bit 0 = `first_word_invalid` (leading complex sample unreliable); other bits reserved = 0 |
 
-**Body (msg_type 1) — 28-byte fixed part, then `2 × n` bytes**
+**Body (msg_type 1) — 34-byte fixed part (wire minor 1), then `2 × n` bytes**
 
 | Offset | Size | Field |
 | --- | --- | --- |
@@ -924,12 +924,16 @@ application layer.
 | 23 | 1 | `noise_floor_dbm` (`i8`) |
 | 24 | 2 | `phy_flags` (`u16`) |
 | 26 | 2 | reserved = 0 |
-| 28 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
+| 28 | 6 | `source_mac` — the transmitting station's MAC address (wire minor 1 and later; all zeroes means "transmitter unknown") |
+| 34 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
 
 Rules: a receiver validates `magic`, `wire_major`, `payload_len` and
-`payload_len == 28 + 2 * n_subcarriers` before trusting any field. `wire_minor`
+`payload_len == 34 + 2 * n_subcarriers` before trusting any field. `wire_minor`
 mismatches are accepted (additive); `wire_major` mismatches are rejected and
-counted once per `(node_id, boot_epoch)`. The `magic` is `AQCI` and the payload
+counted once per `(node_id, boot_epoch)`. The codec knows each minor's body
+layout: wire minor 0 carries no `source_mac` and its fixed body is 28 bytes, so
+`payload_len == 28 + 2 * n_subcarriers`; wire minor 1 and later carry the
+six-byte `source_mac`. The `magic` is `AQCI` and the payload
 is the raw signed int8 I/Q sample, **imaginary byte first** (ADR-0005,
 ADR-0006). Header `flags` bit 0 (`first_word_invalid`) marks a frame whose
 leading complex sample (two bytes) the driver reported unreliable. The

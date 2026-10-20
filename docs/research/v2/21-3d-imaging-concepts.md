@@ -19,7 +19,7 @@ This note proposes **nine distinct 3D indoor imaging approaches** that could be 
 - **Gauge-invariant (usable, no shared reference):** amplitude `|ĥ|`; per-link subcarrier differential phase → delay/ToF `τ_ij`; inter-antenna differential phase within one receiver → AoA; two-way products `ĥ_AB · ĥ_BA`; temporal differentials → Doppler.
 - **Provably unobservable without an added reference:** absolute cross-node phase; absolute range-from-carrier-phase; absolute synchronisation; cross-receiver AoA.
 - **Minimal added reference (one per connected component):** (1) common-transmitter broadcast; (2) one OTA reciprocal round trip per link `ĥ_AB · ĥ_BA⁻¹`; (3) shared/conducted clock + tone.
-- **M2:** per-packet cross-node phase residual after CFO removal — **unmeasured on ESP32-S3 wireless-only**. Every coherent approach below is gated on M2; every incoherent approach must work if M2 fails.
+- **M2:** per-packet cross-node phase residual after CFO removal — **measured on ESP32-S3 wireless-only, and RED** (`22-m2-hardware-measurement.md`). The ESP32-S3 negates the whole channel vector from frame to frame and the negation is an independent coin flip at each receiver, so the cross-node phase for one packet is ambiguous modulo π with no resolvable reference; every measured subcarrier sits at zero or π. Every coherent approach below is therefore gated, and every incoherent approach must work. The gauge-invariant **phase slope** (per-link group delay) *is* available and is validated to about a decimetre by reciprocity, so the slope-based approaches below are not gated.
 - **ESP32-S3:** int8 CSI, 20/40 MHz (~64/128 subcarriers), 2.4 GHz only, nanosecond RX timestamp (12.5 ns grid, ~20.8 µs latch), **no TX hardware timestamp**; CSI ping = ESP-NOW HT40 MCS0; range resolution `c/2B` ≈ 7.5 m (20 MHz) / 3.75 m (40 MHz) raw bin — sub-metre imaging requires synthetic bandwidth or delay-gating, not a single 20 MHz channel.
 
 None of these repeats inventions a–t or u–w verbatim. They are imaging approaches; several use closure phase or reciprocity only as a *component*, not as the whole invention.
@@ -354,7 +354,7 @@ occupancy(v) = σ( Σ_{(i,j): link(i,j) crosses v} [ α · Δρ_ij / ρ⁰_ij + 
 
 ## Recommended 10-Node Hardware Campaign Sequencing
 
-**Build 1 — MPDT (the core).** Round-robin 5–10 nodes around a floor perimeter; measure the delay + amplitude matrix; reconstruct 2D/3D slices of people and static structure. Purpose: prove 3D imaging is possible on ESP32-S3 *without* any cross-node phase coherence, so the campaign does not depend on the unmeasured M2. Uses existing esp-csi + test_harness.py. Build first because it de-risks everything else.
+**Build 1 — MPDT (the core).** Round-robin 5–10 nodes around a floor perimeter; measure the delay + amplitude matrix; reconstruct 2D/3D slices of people and static structure. Purpose: prove 3D imaging is possible on ESP32-S3 *without* any cross-node phase coherence, so the campaign does not depend on the cross-node phase — which is now measured red (`22-m2-hardware-measurement.md`). Uses existing esp-csi + test_harness.py. Build first because it de-risks everything else.
 
 **Build 2 — TGOT (occlusion).** Add the nanosecond RX timestamp and per-link delay gating; demonstrate detection of a person behind a drywall partition (late arrivals triangulated). Purpose: validate the S3 RX timestamp in anger and show people are visible even when occluded — the strongest differentiator vs camera-free rivals.
 

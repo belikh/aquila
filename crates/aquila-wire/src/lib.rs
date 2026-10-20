@@ -55,6 +55,7 @@
 //!     noise_floor_dbm: -90,
 //!     phy: PhyFlags(PhyFlags::HT),
 //!     first_word_invalid: false,
+//!     source_mac: None,
 //! };
 //!
 //! let bytes = encode_datagram(&frame);

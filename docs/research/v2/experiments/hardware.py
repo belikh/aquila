@@ -9,13 +9,16 @@ swaps from csi_sim.measure_csi to a real UDP socket.
 Design (from docs/spec/capture-and-firmware.md §5):
   * One CSI frame per UDP datagram, node -> core, unicast.
   * Default port 9100/udp, private-only.
-  * 16-byte AQCI header + 28-byte body + 2*n_subcarriers int8 I/Q payload.
+  * 16-byte AQCI header + fixed body + 2*n_subcarriers int8 I/Q payload.
   * Header fields: magic "AQCI", wire_major/minor, msg_type, sc_format,
     node_id (u16), payload_len, band, channel, bandwidth_mhz, flags.
   * Body: sequence(u64), device_time_us(u64), boot_epoch(u16),
     subcarrier_offset(i16), n_subcarriers(u16), rssi_dbm(i8),
     noise_floor_dbm(i8), phy_flags(u16), reserved(u16),
     then i_q[0..2n] interleaved signed int8 Q,I (imaginary first).
+  * Wire minor 1 adds source_mac[6] (the transmitting station's address)
+    after the reserved field, so the fixed body is 34 bytes and the I/Q
+    payload starts six bytes later. Wire minor 0 has no source MAC.
 
 Usage:
     # Discover nodes on the network.
@@ -40,6 +43,7 @@ AQCI_MAGIC = b"AQCI"
 AQCI_DATA_PORT = 9100
 AQCI_HEADER_SIZE = 16
 AQCI_BODY_SIZE = 28
+AQCI_BODY_SIZE_V1 = 34  # wire minor 1 adds the six-byte source MAC
 AQCI_MSG_TYPE_CSI_FRAME = 1
 AQCI_SC_FORMAT_INT8_IQ = 1  # raw signed int8 I/Q, imaginary first
 
@@ -59,6 +63,9 @@ class CsiFrame:
     rssi_dbm: int
     noise_floor_dbm: int
     first_word_invalid: bool
+    # The transmitting station's MAC address, as "aa:bb:cc:dd:ee:ff", or None
+    # when the node did not report one (wire minor 0).
+    source_mac: Optional[str]
     # Complex CSI per subcarrier: re/im in f32 (derived from int8 I/Q).
     csi: List[complex]
     host_arrival_us: int
@@ -168,7 +175,13 @@ class CsiCollector:
         if sc_format != AQCI_SC_FORMAT_INT8_IQ:
             return None
 
-        body = data[AQCI_HEADER_SIZE : AQCI_HEADER_SIZE + AQCI_BODY_SIZE]
+        # The fixed body layout follows the wire minor: minor 0 has no source
+        # MAC, minor 1 and later do.
+        body_size = AQCI_BODY_SIZE_V1 if wire_minor >= 1 else AQCI_BODY_SIZE
+        if len(data) < AQCI_HEADER_SIZE + body_size:
+            return None
+
+        body = data[AQCI_HEADER_SIZE : AQCI_HEADER_SIZE + body_size]
         sequence = struct.unpack_from("<Q", body, 0)[0]
         device_time_us = struct.unpack_from("<Q", body, 8)[0]
         boot_epoch = struct.unpack_from("<H", body, 16)[0]
@@ -178,7 +191,13 @@ class CsiCollector:
         noise_floor_dbm = struct.unpack_from("<b", body, 23)[0]
         # phy_flags at 24, reserved at 26
 
-        iq_payload = data[AQCI_HEADER_SIZE + AQCI_BODY_SIZE :]
+        source_mac: Optional[str] = None
+        if wire_minor >= 1:
+            raw_mac = body[28:34]
+            if raw_mac != b"\x00" * 6:
+                source_mac = ":".join(f"{byte:02x}" for byte in raw_mac)
+
+        iq_payload = data[AQCI_HEADER_SIZE + body_size :]
         expected_iq_bytes = 2 * n_subcarriers
         if len(iq_payload) < expected_iq_bytes:
             return None
@@ -220,6 +239,7 @@ class CsiCollector:
             rssi_dbm=rssi_dbm,
             noise_floor_dbm=noise_floor_dbm,
             first_word_invalid=first_word_invalid,
+            source_mac=source_mac,
             csi=csi,
             host_arrival_us=0,  # set by caller
         )

@@ -51,7 +51,15 @@ link** (a star is CRB-optimal), or a **shared/conducted clock+tone**. Cost O(N).
   `τ_{π/2} = 1/(4Δf) ≈ 5–10 µs` (`17`). After CFO removal the residual is
   phase-noise-limited (track A), so the governing quantity is the **residual
   after CFO estimation over the exchange interval** — which is exactly the
-  unmeasured M2. `10` notes hardware chain coefficients drift <2.6 % over 4 h, but
+  M2 residual. **M2 is now measured on S3 and is red**
+  (`22-m2-hardware-measurement.md`): the ESP32-S3 negates the whole channel
+  vector from frame to frame, independently at each receiver, so the
+  cross-node phase of one packet is ambiguous modulo pi with no resolvable
+  reference. The relative-LO reasoning above therefore does not apply on this
+  hardware — the ambiguity is not a drift that estimation can track, it is a
+  discrete per-frame sign. The **gauge-invariant phase slope** survives it and
+  gives a per-link path length to about a decimetre, validated to a couple of
+  centimetres by reciprocity. `10` notes hardware chain coefficients drift <2.6 % over 4 h, but
   inter-node **LO phase must be re-estimated at the synchronisation rate**, not
   the hardware-calibration rate; conflating the two is the classic error.
 - **Timekeeping (`17`):** the MAC exposes a **nanosecond RX timestamp**
@@ -191,8 +199,13 @@ not S3) or an unproven wireless escape.
 
 ## 9. Residual unknowns
 
-- The reciprocity residual after CFO correction (M2) — the whole wireless-only
-  question turns on it.
+- The reciprocity residual after CFO correction (M2) — **measured, and red**
+  (`22-m2-hardware-measurement.md`). The cross-node absolute phase is
+  ambiguous modulo pi on ESP32-S3, with no resolvable reference, so every
+  coherent route is closed on this hardware. The gauge-invariant phase slope
+  (per-link group delay) survives the ambiguity and is validated to about a
+  decimetre; its sensitivity to a person moving between nodes is not yet
+  measured.
 - S3-specific multi-node accuracy and volumetric gain (no primary exists).
 - I/Q **path** coherence (ESPARGOS coherence is on the CSI path, not I/Q).
 - Mutual coupling / shadowing in a solid array.

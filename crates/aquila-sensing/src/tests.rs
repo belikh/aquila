@@ -54,6 +54,7 @@ fn envelope(node: u16, sequence: u64, arrival_ns: u64) -> CsiEnvelope {
             noise_floor_dbm: -90,
             phy: PhyFlags(PhyFlags::HT),
             first_word_invalid: false,
+            source_mac: None,
         },
         host_rx_mono_ns: arrival_ns,
         host_rx_unix_ms: 0,

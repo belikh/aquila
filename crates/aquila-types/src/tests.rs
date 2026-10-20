@@ -54,6 +54,7 @@ fn csi_frame() -> CsiFrame {
         noise_floor_dbm: -90,
         phy: PhyFlags(PhyFlags::HT | PhyFlags::SHORT_GI),
         first_word_invalid: false,
+        source_mac: None,
     }
 }
 
