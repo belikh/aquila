@@ -39,3 +39,9 @@ docs/research/v2/experiments/__pycache__/
 docs/research/v2/code/*/__pycache__/
 # v2 experiment data outputs
 docs/research/v2/experiments/data/
+
+# Firmware OTA signing material and the generated NVS provisioning images.
+# The Ed25519 seed is a secret: it must never be committed.
+data/
+nvs_*.csv
+nvs_*.bin

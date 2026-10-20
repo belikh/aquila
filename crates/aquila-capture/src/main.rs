@@ -31,6 +31,7 @@
 
 mod cli;
 mod error;
+mod ota_push;
 mod provision;
 mod record;
 mod synth;
@@ -86,6 +87,10 @@ fn run(args: &[String]) -> Result<(), CaptureError> {
             Some(options) => options.run_provision(),
             None => Ok(()),
         },
+        "ota-push" => match Options::parse(rest, OTA_PUSH_FLAGS, "ota-push")? {
+            Some(options) => options.run_ota_push(),
+            None => Ok(()),
+        },
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
             Ok(())
@@ -106,6 +111,7 @@ SUBCOMMANDS:
     synth      Write a deterministic .aqs Session from a scene script
     verify     Validate a .aqs Session container and its digest
     provision  Write a node NVS provisioning payload as JSON
+    ota-push   Sign a firmware image and push it to a node over the control channel
 
 Run a subcommand with --help to list its flags.";
 
@@ -150,6 +156,22 @@ const PROVISION_FLAGS: &[Flag] = &[
     Flag::optional("core-data-port", "the CSI data port (default 9100)"),
     Flag::optional("core-control-port", "the control port (default 9101)"),
     Flag::optional("pairing-code", "the short-lived pairing code"),
+];
+
+/// The flags `ota-push` accepts.
+const OTA_PUSH_FLAGS: &[Flag] = &[
+    Flag::required("image", "the firmware image to push"),
+    Flag::required("key", "the 32-byte Ed25519 firmware signing key"),
+    Flag::required("version", "the image version, major.minor.patch"),
+    Flag::required("core", "the core's IP, the address the node streams to"),
+    Flag::optional("pairing-code", "the pairing code the node was provisioned with"),
+    Flag::optional("target", "the target chip (default: esp32s3)"),
+    Flag::optional("mac", "the node MAC to push to, aa:bb:cc:dd:ee:ff"),
+    Flag::optional("token", "an already-paired node's 64-hex pairing token"),
+    Flag::optional("token-file", "write the issued pairing token here"),
+    Flag::optional("node-ip", "the already-paired node's IP address"),
+    Flag::optional("probe", "probe: test whether the node accepts the token"),
+    Flag::optional("chunk-size", "the OTA chunk size in bytes"),
 ];
 
 #[cfg(test)]

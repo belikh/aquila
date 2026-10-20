@@ -141,7 +141,9 @@ static void load_security_version(void)
         return;
     }
     uint32_t stored = 0;
-    if (nvs_get_u32(handle, "security_version", &stored) == ESP_OK &&
+    /* The NVS key is fifteen characters at most, so the anti-rollback floor
+     * is stored under a name that fits; "security_version" does not. */
+    if (nvs_get_u32(handle, "sec_version", &stored) == ESP_OK &&
         stored > s_stored_secver) {
         s_stored_secver = stored;
     }
@@ -154,7 +156,7 @@ static void save_security_version(uint32_t value)
     if (nvs_open(OTA_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
         return;
     }
-    nvs_set_u32(handle, "security_version", value);
+    nvs_set_u32(handle, "sec_version", value);
     nvs_commit(handle);
     nvs_close(handle);
 }

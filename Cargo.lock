@@ -82,8 +82,11 @@ dependencies = [
  "aquila-sources",
  "aquila-types",
  "aquila-wire",
+ "crc32fast",
+ "ed25519-dalek",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
 ]
 

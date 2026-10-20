@@ -30,6 +30,10 @@ typedef struct {
     uint16_t csi_len_cap;  /* maximum raw int8 CSI bytes (2 per subcarrier) */
     uint32_t max_tx_rate_hz; /* transmit-rate cap; frames over it are dropped */
     uint32_t heartbeat_ms; /* STATUS cadence in ms; SET_CONFIG may override */
+    /* Manual CSI scale: the number of bits the scale is shifted by. The
+     * automatic scale leaves the samples in a handful of int8 levels, which
+     * costs phase precision; 255 means automatic. */
+    uint8_t csi_shift;
 } csi_node_config_t;
 
 /* The v1 defaults for a freshly booted node. */

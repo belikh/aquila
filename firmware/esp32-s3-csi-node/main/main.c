@@ -41,6 +41,33 @@ static const char *TAG = "aquila_node";
 
 static EventGroupHandle_t s_wifi_events;
 
+/* Parse an `aa:bb:cc:dd:ee:ff` MAC address into six octets. */
+static bool parse_bssid(const char *text, uint8_t out[6])
+{
+    if (strlen(text) != 17u) {
+        return false;
+    }
+    for (int index = 0; index < 6; ++index) {
+        int high = 0;
+        int low = 0;
+        char a = text[index * 3];
+        char b = text[index * 3 + 1];
+        if (a >= '0' && a <= '9') { high = a - '0'; }
+        else if (a >= 'a' && a <= 'f') { high = a - 'a' + 10; }
+        else if (a >= 'A' && a <= 'F') { high = a - 'A' + 10; }
+        else { return false; }
+        if (b >= '0' && b <= '9') { low = b - '0'; }
+        else if (b >= 'a' && b <= 'f') { low = b - 'a' + 10; }
+        else if (b >= 'A' && b <= 'F') { low = b - 'A' + 10; }
+        else { return false; }
+        if (index > 0 && text[index * 3 - 1] != ':') {
+            return false;
+        }
+        out[index] = (uint8_t)((high << 4) | low);
+    }
+    return true;
+}
+
 /* The node's provisioning, loaded from NVS over the Kconfig factory defaults. */
 typedef struct {
     char ssid[33];
@@ -50,6 +77,18 @@ typedef struct {
     uint16_t control_port;
     uint16_t node_id;
     uint32_t pairing_code;
+    /* Optional AP pinning: the BSSID and channel of the one access point the
+     * node must join. Pinning is what keeps a mesh of nodes on ONE channel:
+     * without it each node joins whichever AP it hears strongest, so two
+     * nodes can end up on different channels and never see the same ambient
+     * packets — which is what the cross-node phase measurement needs. */
+    uint8_t ap_bssid[6];
+    bool ap_bssid_set;
+    uint8_t ap_channel;
+    /* Manual CSI scaling: the automatic scale leaves the samples in a
+     * handful of int8 levels, which costs phase precision. `csi_shift` is
+     * the number of bits the scale is shifted by; 255 means automatic. */
+    uint8_t csi_shift;
 } provisioning_t;
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id,
@@ -84,6 +123,13 @@ static void load_provisioning(provisioning_t *out)
     out->control_port = (uint16_t)CONFIG_AQUILA_CORE_CONTROL_PORT;
     out->node_id = (uint16_t)CONFIG_AQUILA_NODE_ID;
     out->pairing_code = (uint32_t)CONFIG_AQUILA_PAIRING_CODE;
+    /* Every field must have a defined value before the NVS reads: the
+     * struct is not zero-initialised by the caller, so a field left
+     * unset would carry stack garbage. */
+    memset(out->ap_bssid, 0, sizeof(out->ap_bssid));
+    out->ap_bssid_set = false;
+    out->ap_channel = 0;
+    out->csi_shift = 255u; /* 255 means automatic scaling */
 
     nvs_handle_t handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
@@ -101,7 +147,9 @@ static void load_provisioning(provisioning_t *out)
     if (nvs_get_u16(handle, "core_data_port", &port) == ESP_OK && port != 0u) {
         out->data_port = port;
     }
-    if (nvs_get_u16(handle, "core_control_port", &port) == ESP_OK && port != 0u) {
+    /* The NVS key is fifteen characters at most, so the control port is
+     * stored under a name that fits; "core_control_port" does not. */
+    if (nvs_get_u16(handle, "ctrl_port", &port) == ESP_OK && port != 0u) {
         out->control_port = port;
     }
     if (nvs_get_u16(handle, "node_id", &port) == ESP_OK && port != 0u) {
@@ -110,6 +158,25 @@ static void load_provisioning(provisioning_t *out)
     uint32_t code = 0;
     if (nvs_get_u32(handle, "pairing_code", &code) == ESP_OK) {
         out->pairing_code = code;
+    }
+    /* The pinned access point, when the operator provisioned one. */
+    char bssid_text[18];
+    len = sizeof(bssid_text);
+    if (nvs_get_str(handle, "ap_bssid", bssid_text, &len) == ESP_OK) {
+        if (parse_bssid(bssid_text, out->ap_bssid)) {
+            out->ap_bssid_set = true;
+        } else {
+            ESP_LOGW(TAG, "ap_bssid `%s` is not a MAC address; ignoring",
+                     bssid_text);
+        }
+    }
+    uint8_t channel = 0;
+    if (nvs_get_u8(handle, "ap_channel", &channel) == ESP_OK) {
+        out->ap_channel = channel;
+    }
+    uint8_t shift = 255u; /* 255 means automatic scaling */
+    if (nvs_get_u8(handle, "csi_shift", &shift) == ESP_OK) {
+        out->csi_shift = shift;
     }
     nvs_close(handle);
 }
@@ -135,6 +202,19 @@ static void wifi_start(const provisioning_t *provisioning)
             sizeof(wifi_config.sta.ssid) - 1);
     strncpy((char *)wifi_config.sta.password, provisioning->password,
             sizeof(wifi_config.sta.password) - 1);
+    if (provisioning->ap_bssid_set) {
+        /* Pin the node to one access point, and hint its channel: this is
+         * what keeps every node of the mesh on the same channel, so they all
+         * see the same ambient packets. */
+        wifi_config.sta.bssid_set = 1;
+        memcpy(wifi_config.sta.bssid, provisioning->ap_bssid, 6);
+        wifi_config.sta.channel = provisioning->ap_channel;
+        ESP_LOGI(TAG, "pinned to AP %02x:%02x:%02x:%02x:%02x:%02x on channel %u",
+                 provisioning->ap_bssid[0], provisioning->ap_bssid[1],
+                 provisioning->ap_bssid[2], provisioning->ap_bssid[3],
+                 provisioning->ap_bssid[4], provisioning->ap_bssid[5],
+                 (unsigned)provisioning->ap_channel);
+    }
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
@@ -187,6 +267,7 @@ void app_main(void)
     csi.csi_enable = true;
     csi.max_tx_rate_hz = 200u;
     csi.heartbeat_ms = 5000u;
+    csi.csi_shift = provisioning.csi_shift;
 
     if (csi_node_start(&csi, provisioning.core_host, provisioning.data_port) != 0) {
         ESP_LOGE(TAG, "CSI data plane failed to start");

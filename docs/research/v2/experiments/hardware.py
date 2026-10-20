@@ -189,8 +189,16 @@ class CsiCollector:
         # Decode interleaved int8 Q,I (imaginary first) to complex f32.
         csi: List[complex] = []
         for k in range(n_subcarriers):
-            q = iq_payload[2 * k]
-            i_val = iq_payload[2 * k + 1]
+            # The payload bytes are SIGNED int8 (ADR-0005). Indexing a bytes
+            # object yields the unsigned value, so a negative sample would
+            # read as 128..255 instead of -128..-1: the sign must be
+            # restored before the sample is scaled.
+            q = iq_payload[2 * k] - 256 if iq_payload[2 * k] > 127 else iq_payload[2 * k]
+            i_val = (
+                iq_payload[2 * k + 1] - 256
+                if iq_payload[2 * k + 1] > 127
+                else iq_payload[2 * k + 1]
+            )
             # Convert signed int8 to f32, divide by IQ_COUNTS_PER_UNIT (~128).
             # Spec: re = i_q[2k+1]/IQ_COUNTS_PER_UNIT, im = i_q[2k]/IQ_COUNTS_PER_UNIT.
             csi.append(
@@ -221,12 +229,12 @@ class CsiCollector:
         """Map Wi-Fi channel to centre frequency (Hz)."""
         if band == 0:  # 2.4 GHz
             if 1 <= channel <= 13:
-                return 2412 + (channel - 1) * 5
+                return (2412 + (channel - 1) * 5) * 1_000_000
             if channel == 14:
-                return 2484
+                return 2_484_000_000
         elif band == 1:  # 5 GHz
-            # 5 GHz: 5000 + 5*channel for most channels.
-            return 5000 + 5 * channel
+            # 5 GHz: 5000 + 5*channel (MHz) for the standard UNII channels.
+            return (5000 + 5 * channel) * 1_000_000
         return 2_412_000_000
 
     def get_frames(self, clear: bool = True) -> List[CsiFrame]:

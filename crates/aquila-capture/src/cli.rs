@@ -160,6 +160,11 @@ impl Options {
     pub(crate) fn run_provision(&self) -> Result<(), CaptureError> {
         crate::provision::run(self)
     }
+
+    /// Dispatch to the `ota-push` subcommand.
+    pub(crate) fn run_ota_push(&self) -> Result<(), CaptureError> {
+        crate::ota_push::run(self)
+    }
 }
 
 /// Print a subcommand's flag help.

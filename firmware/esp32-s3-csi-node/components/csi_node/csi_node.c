@@ -69,6 +69,7 @@ static uint16_t s_boot_epoch;
 static int s_sock = -1;
 static struct sockaddr_in s_core;
 static int64_t s_last_send_us;
+static bool s_logged_bad_length;
 
 /* The band byte: 0 (2.4 GHz) for channels 1..14, 1 (5 GHz) for the standard
  * UNII channels 32..177, and 255 (unknown) otherwise. The receiver can report
@@ -140,6 +141,36 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         atomic_fetch_add_explicit(&s_dropped, 1u, memory_order_relaxed);
         return;
     }
+    /* The driver calls back even for frames received in error; a non-zero
+     * rx_state means the frame was not received cleanly, so its CSI is not
+     * trustworthy (ESP-IDF wifi.rst: the driver itself only inspects
+     * rx_state for its own validity flags). */
+    if (info->rx_ctrl.rx_state != 0u) {
+        atomic_fetch_add_explicit(&s_dropped, 1u, memory_order_relaxed);
+        return;
+    }
+    /* ESP32-S3 produces only these CSI lengths (bytes): 128 (LLTF only),
+     * 256 (HT-LTF, 20 MHz), 376/380/384 (40 MHz or STBC, 4-byte aligned) and
+     * 612 (40 MHz HT STBC). Anything else means the buffer was not filled
+     * with CSI, so the frame is dropped rather than streamed as garbage. */
+    static const uint16_t legal_lengths[] = {128u, 256u, 376u, 380u, 384u, 612u};
+    bool legal = false;
+    for (size_t i = 0; i < sizeof(legal_lengths) / sizeof(legal_lengths[0]); ++i) {
+        if ((uint16_t)len == legal_lengths[i]) {
+            legal = true;
+            break;
+        }
+    }
+    if (!legal) {
+        /* Log the unexpected length once: the set of lengths the radio
+         * produces is the ground truth, not the documented table. */
+        if (!s_logged_bad_length) {
+            s_logged_bad_length = true;
+            ESP_LOGW(TAG, "unexpected CSI length %d bytes; dropping", len);
+        }
+        atomic_fetch_add_explicit(&s_dropped, 1u, memory_order_relaxed);
+        return;
+    }
 
     uint32_t tail = atomic_load_explicit(&s_tail, memory_order_relaxed);
     uint32_t next = (tail + 1u) % CSI_RING_SLOTS;
@@ -177,7 +208,7 @@ static csi_node_config_t snapshot_config(void)
 }
 
 /* Build and apply the esp-csi configuration from `cfg`. */
-static void apply_esp_csi(const csi_node_config_t *cfg)
+static esp_err_t apply_esp_csi(const csi_node_config_t *cfg)
 {
     wifi_csi_config_t csi_config = {
         .lltf_en = cfg->lltf_enable,
@@ -185,10 +216,15 @@ static void apply_esp_csi(const csi_node_config_t *cfg)
         .stbc_htltf2_en = cfg->stbc_ht_ltf_enable,
         .ltf_merge_en = true,
         .channel_filter_en = false,
-        .manu_scale = false,
-        .shift = false,
+        .manu_scale = cfg->csi_shift != 255u,
+        .shift = cfg->csi_shift != 255u ? cfg->csi_shift : 0,
     };
-    esp_wifi_set_csi_config(&csi_config);
+    esp_err_t err = esp_wifi_set_csi_config(&csi_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_csi_config failed: %s",
+                 esp_err_to_name(err));
+    }
+    return err;
 }
 
 /*
@@ -213,6 +249,7 @@ static void csi_sender_task(void *arg)
                               memory_order_release);
 
         if (!atomic_load_explicit(&s_streaming, memory_order_relaxed)) {
+            vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
 
@@ -224,6 +261,7 @@ static void csi_sender_task(void *arg)
             int64_t min_interval_us = 1000000 / (int64_t)cfg.max_tx_rate_hz;
             if (now_us - s_last_send_us < min_interval_us) {
                 atomic_fetch_add_explicit(&s_dropped, 1u, memory_order_relaxed);
+                vTaskDelay(pdMS_TO_TICKS(1));
                 continue;
             }
         }
@@ -236,12 +274,14 @@ static void csi_sender_task(void *arg)
         if (n > AQ_CSI_MAX_SUBCARRIERS) {
             n = AQ_CSI_MAX_SUBCARRIERS;
         }
-        /* The leading complex sample (two bytes) is unreliable when the driver
-         * says so; null it and mark the header flags byte, exactly as the
-         * simulator and the core decoder do (capture-and-firmware.md §7.4). */
+        /* The ESP32-S3 hardware invalidates the FIRST FOUR BYTES of the CSI
+         * data (two complex samples) when first_word_invalid is set, so both
+         * leading complex samples are nulled, not one. */
         if (slot.first_word_invalid) {
             slot.csi[0] = 0;
             slot.csi[1] = 0;
+            slot.csi[2] = 0;
+            slot.csi[3] = 0;
         }
 
         // PROVISIONAL: unconfirmed against a real capture (S11/F19; signal.md §7)
@@ -273,6 +313,11 @@ csi_node_config_t csi_node_default_config(void)
         .csi_len_cap = (uint16_t)CSI_RAW_MAX,
         .max_tx_rate_hz = 200u,
         .heartbeat_ms = 5000u,
+        /* The automatic scale leaves the samples in about thirty int8 levels,
+         * which costs the phase precision the cross-node measurement needs.
+         * A shift of four puts them across roughly 235 of the 255 levels
+         * without clipping; five saturates. */
+        .csi_shift = 4u,
     };
     return cfg;
 }
@@ -302,9 +347,31 @@ int csi_node_start(const csi_node_config_t *config, const char *core_host,
         return -1;
     }
 
-    apply_esp_csi(config);
-    esp_wifi_set_csi_rx_cb(csi_rx_cb, NULL);
-    esp_wifi_set_csi(true);
+    /* Never block on sendto(): a dead route or unreachable core must not hang
+     * the sender task and trip the task watchdog (§9.1.3). */
+    struct timeval snd_timeout = { .tv_sec = 0, .tv_usec = 50000 }; /* 50 ms */
+    if (setsockopt(s_sock, SOL_SOCKET, SO_SNDTIMEO, &snd_timeout,
+                   sizeof(snd_timeout)) != 0) {
+        ESP_LOGW(TAG, "could not set send timeout on CSI data socket");
+    }
+
+    /* Every one of these must succeed: a failure here leaves the PHY not
+     * dumping the LTF while the callback still fires, which streams an
+     * unwritten buffer. */
+    if (apply_esp_csi(config) != ESP_OK) {
+        ESP_LOGE(TAG, "CSI config not applied; the node cannot capture CSI");
+        return -1;
+    }
+    esp_err_t err = esp_wifi_set_csi_rx_cb(csi_rx_cb, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_csi_rx_cb failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+    err = esp_wifi_set_csi(true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_csi failed: %s", esp_err_to_name(err));
+        return -1;
+    }
 
     if (xTaskCreate(csi_sender_task, "csi_sender", CSI_SENDER_STACK, NULL,
                     CSI_SENDER_PRIO, NULL) != pdPASS) {
@@ -332,12 +399,13 @@ void csi_node_apply_config(const csi_node_config_t *config)
     s_config.csi_len_cap = config->csi_len_cap;
     s_config.max_tx_rate_hz = config->max_tx_rate_hz;
     s_config.heartbeat_ms = config->heartbeat_ms;
+    s_config.csi_shift = config->csi_shift;
     portEXIT_CRITICAL(&s_cfg_mux);
 
     s_raw_cap = config->csi_len_cap < CSI_RAW_MAX ? config->csi_len_cap
                                                   : (uint16_t)CSI_RAW_MAX;
     atomic_store(&s_streaming, config->csi_enable);
-    apply_esp_csi(config);
+    (void)apply_esp_csi(config);
     if (config->channel != 0u) {
         /* `secondary` (0 none, 1 above, 2 below) selects the 40 MHz offset;
          * anything unrecognised falls back to no secondary channel (F5). */

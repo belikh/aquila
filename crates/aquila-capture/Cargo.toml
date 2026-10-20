@@ -11,8 +11,11 @@ aquila-wire = { path = "../aquila-wire" }
 aquila-session = { path = "../aquila-session" }
 aquila-sources = { path = "../aquila-sources" }
 aquila-simulator = { path = "../aquila-simulator" }
+crc32fast = { workspace = true }
+ed25519-dalek = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]
