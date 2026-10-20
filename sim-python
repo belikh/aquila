@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Aquila v2 experiment Python.
+# A pip virtualenv (`.venv`, Python 3.12) needs two nix runtime libraries that
+# the bare store interpreter does not carry: libstdc++ (numpy's C extension)
+# and libz (zlib-ng). Everything else is a bundled wheel.
+set -euo pipefail
+GCC_LIB=/nix/store/604gsr59rj7dzd0nrhp143rpvf7gyiaz-gcc-15.3.0-lib/lib
+ZLIB_LIB=/nix/store/8gjx3y4pyfqypqlq136v4gknmr2w51qj-zlib-ng-2.3.3/lib
+export LD_LIBRARY_PATH="${GCC_LIB}:${ZLIB_LIB}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+exec /home/matt/projects/aquila-v2-spec/.venv/bin/python "$@"

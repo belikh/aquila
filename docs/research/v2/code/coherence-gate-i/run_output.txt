@@ -1,0 +1,126 @@
+== Part V: noise-synthesis validation (MC Allan deviation vs theory) ==
+  S0-stock-pess    tau=1.0e-03  MC=3.141e-07  theory=3.162e-07
+  S0-stock-pess    tau=1.0e-01  MC=3.084e-08  theory=3.162e-08
+  S1-stock-typ     tau=1.0e-03  MC=3.137e-08  theory=3.162e-08
+  S1-stock-typ     tau=1.0e-01  MC=3.192e-09  theory=3.162e-09
+  S2-good-XO       tau=1.0e-03  MC=9.415e-09  theory=9.492e-09
+  S2-good-XO       tau=1.0e-01  MC=9.712e-10  theory=9.955e-10
+  T0-TCXO          tau=1.0e-03  MC=3.131e-09  theory=3.164e-09
+  T0-TCXO          tau=1.0e-01  MC=3.207e-10  theory=3.331e-10
+  V0-VCTCXO-1ppb   tau=1.0e-03  MC=3.121e-10  theory=3.164e-10
+  V0-VCTCXO-1ppb   tau=1.0e-01  MC=3.308e-11  theory=4.582e-11
+
+== Part A: gate map sigma_phi(T_gap) [rad] (MC, n=300) ==
+tier                 0.1ms     0.3ms     1.0ms     3.0ms    10.0ms    20.0ms    50.0ms   100.0ms
+  S0-stock-pess     1.446    2.622    4.926    8.243   15.753   22.171   36.009   49.144
+  S1-stock-typ      0.151    0.289    0.541    0.930    1.593    2.244    3.709    4.905
+  S2-good-XO        0.042    0.075    0.139    0.260    0.454    0.633    0.994    1.446
+  T0-TCXO           0.015    0.028    0.048    0.083    0.145    0.221    0.331    0.474
+  V0-VCTCXO-1ppb    0.001    0.002    0.005    0.009    0.015    0.022    0.033    0.048
+
+  untracked deterministic offset (for context; tracking removes it):
+   dF0=12.0 kHz      7.54    22.62    75.40   226.19   753.98  1507.96  3769.91  7539.82
+   dF0=48.7 kHz     30.60    91.80   305.99   917.97  3059.91  6119.82 15299.56 30599.11
+
+  gate identity: sigma_phi = 2 pi fc sigma_x(T)  ->  0.5 rad <=> time error 32.7 ps
+  S0-stock-pess    WFM-only 0.5-rad crossing: T* =    0.011 ms
+  S1-stock-typ     WFM-only 0.5-rad crossing: T* =    1.066 ms
+  S2-good-XO       WFM-only 0.5-rad crossing: T* =   11.847 ms
+  T0-TCXO          WFM-only 0.5-rad crossing: T* =  106.627 ms
+  V0-VCTCXO-1ppb   WFM-only 0.5-rad crossing: T* = 10662.750 ms
+
+== Part B: strobe-exchange simulation (8-frame bursts @100 us; per-frame meas 0.52 rad) ==
+tier                 1.0ms     2.0ms     5.0ms    10.0ms    20.0ms    50.0ms   (burst-mean R in rad^2)
+  S0-stock-pess     1.797    1.816    1.812    1.805    1.816    1.827   1.486 1.482 1.493 1.505 1.481 1.455
+  S1-stock-typ      0.352    0.488    0.764    1.079    1.450    1.774   0.048 0.048 0.049 0.048 0.049 0.051
+  S2-good-XO        0.167    0.205    0.279    0.364    0.492    0.746   0.035 0.035 0.035 0.035 0.035 0.035
+  T0-TCXO           0.094    0.114    0.143    0.177    0.216    0.297   0.034 0.034 0.034 0.034 0.035 0.033
+  V0-VCTCXO-1ppb    0.032    0.038    0.050    0.062    0.076    0.101   0.034 0.034 0.034 0.034 0.035 0.033
+
+hazard arms (tier S1-stock-typ):
+  baseline, 1 ms cycles                     :  0.351 rad
+  airflow event (RW 1e-8/sqrt s), 1 ms      :  0.351 rad
+  airflow event, 20 ms cycles               :  1.557 rad
+  (same, typical thermal, 20 ms)            :  1.459 rad
+  walker 1 m/s non-reciprocity, 2 ms cycles :  0.500 rad
+
+analytic two-way reply budget lines:
+  dF0=12.0 kHz, reply-timing sigma=    30 ns ->  0.002 rad
+  dF0=48.7 kHz, reply-timing sigma=    30 ns ->  0.009 rad
+  dF0=12.0 kHz, reply-timing sigma=  1000 ns ->  0.075 rad
+  dF0=48.7 kHz, reply-timing sigma=  1000 ns ->  0.306 rad
+  CFO-quantisation artefact 2 pi (g/sqrt12) dT_eff:
+   g=   100 Hz, dT_eff=20 us ->  0.004 rad
+   g=   400 Hz, dT_eff=20 us ->  0.015 rad
+   g=  1600 Hz, dT_eff=20 us ->  0.058 rad
+
+== Part C: averaging law, sigma_est/sigma_single (tier S1) ==
+  faces share the node LO exactly (wander common-mode); packets share
+  wander over the burst window. Rows N_p packets, cols N_f faces.
+        Nf=     1 Nf=     4 Nf=    20
+  Np=  1   0.924   0.489   0.224   (abs: 0.481 0.254 0.116 rad)
+  Np=  2   0.720   0.386   0.190   (abs: 0.375 0.201 0.099 rad)
+  Np=  4   0.543   0.293   0.198   (abs: 0.283 0.152 0.103 rad)
+  Np=  8   0.439   0.266   0.249   (abs: 0.228 0.138 0.130 rad)
+  Np= 16   0.400   0.325   0.311   (abs: 0.208 0.169 0.162 rad)
+  Np= 32   0.490   0.457   0.445   (abs: 0.255 0.238 0.232 rad)
+
+== Part D: end-to-end chain: sum-CP cascade -> coherent 3D position ==
+
+D1: integer-ambiguity lock rate (6 links; window = prior quality):
+  sigma_phi=0.10 epochs= 1 window ±1 cell: lock   100%
+  sigma_phi=0.10 epochs= 1 window ±2 cell: lock    75%
+  sigma_phi=0.10 epochs= 5 window ±1 cell: lock   100%
+  sigma_phi=0.10 epochs=20 window ±1 cell: lock   100%
+  sigma_phi=0.30 epochs= 1 window ±1 cell: lock   100%
+  sigma_phi=0.30 epochs= 1 window ±2 cell: lock    40%
+  sigma_phi=0.30 epochs= 5 window ±1 cell: lock   100%
+  sigma_phi=0.30 epochs=20 window ±1 cell: lock   100%
+  sigma_phi=0.50 epochs= 1 window ±1 cell: lock    85%
+  sigma_phi=0.50 epochs= 1 window ±2 cell: lock    20%
+  sigma_phi=0.50 epochs= 5 window ±1 cell: lock   100%
+  sigma_phi=0.50 epochs=20 window ±1 cell: lock   100%
+  (an FTM-only 1.5 m prior spans ±25 cells: needs the motion or
+   stitched-delay cascade -- flagged as residual unknown, not simulated)
+
+D2: single-epoch position RMSE vs sigma_phi (ambiguity locked, 300 MC):
+  sigma_phi=0.05 rad -> RMSE   0.1 cm  (with 3 cm/link bias arm:   5.4 cm)
+  sigma_phi=0.10 rad -> RMSE   0.2 cm  (with 3 cm/link bias arm:   5.7 cm)
+  sigma_phi=0.20 rad -> RMSE   0.4 cm  (with 3 cm/link bias arm:   5.8 cm)
+  sigma_phi=0.30 rad -> RMSE   0.5 cm  (with 3 cm/link bias arm:   5.5 cm)
+  sigma_phi=0.50 rad -> RMSE   0.9 cm  (with 3 cm/link bias arm:   5.4 cm)
+  sigma_phi=1.00 rad -> RMSE   1.8 cm  (with 3 cm/link bias arm:   6.5 cm)
+  GDOP at room centre = 1.84; CRLB: sigma_pos = 1.80 cm x sigma_phi[rad]
+
+  coherent sum gain loss / sidelobe pedestal (K equal links):
+   K=  6 sigma=0.3: gain -0.39 dB, pedestal  -18.4 dB
+   K=  6 sigma=0.5: gain -1.09 dB, pedestal  -14.3 dB
+   K= 20 sigma=0.3: gain -0.39 dB, pedestal  -23.7 dB
+   K= 20 sigma=0.5: gain -1.09 dB, pedestal  -19.6 dB
+   K=190 sigma=0.3: gain -0.39 dB, pedestal  -33.4 dB
+   K=190 sigma=0.5: gain -1.09 dB, pedestal  -29.3 dB
+
+measurement-noise anchor comparison (tier S1, 2 ms cycles):
+  per-frame 0.52 rad (ESP-PPB board-6 anchor):  0.487 rad
+  per-frame 0.06 rad (MCRB, 56 subc, ~6 dB)  :  0.452 rad
+
+== Part E: phase-swept beacon (direction f) ==
+  common-view pairwise difference of ONE frame cancels the hub phase
+  exactly (same physical TX event); per-pair relative-phase noise:
+   burst N= 1: sigma_phi(pair) =  0.735 rad
+   burst N= 4: sigma_phi(pair) =  0.368 rad
+   burst N= 8: sigma_phi(pair) =  0.260 rad
+   burst N=16: sigma_phi(pair) =  0.184 rad
+  the sweep adds: known per-frame phase code -> frame association,
+  per-frame self-consistency test, unambiguous differencing.
+  RIPS-style dual-TX beat: relative LO phase in the baseband beat-phase
+  difference; needs concurrent adjacent-channel TX + wideband RX (raw
+  I/Q via ESP-SDR) -> SPECULATIVE on S3; CSI path cannot see the beat.
+
+  airtime per reference cycle (300 us frames):
+   fleet N= 4: two-way O(N) =  1.20 ms; beacon O(1) = 0.30 ms
+   fleet N= 8: two-way O(N) =  2.40 ms; beacon O(1) = 0.30 ms
+   fleet N=16: two-way O(N) =  4.80 ms; beacon O(1) = 0.30 ms
+   fleet N=32: two-way O(N) =  9.60 ms; beacon O(1) = 0.30 ms
+
+wrote m2i_summary.csv and m2i_figures.png

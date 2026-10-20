@@ -1,0 +1,159 @@
+part,param,value,units
+B,posterior p11 a=100 r=0.01 (p11->r),0.00999839,rad^2
+B,posterior p11 a=3.553e-05 r=0.01 (0.00292 (Wolfram DARE check)),0.00291973,rad^2
+B,posterior p11 a=1e+06 r=1e-06 (p11->r),1.00001e-06,rad^2
+B,bridge sigma a=0.05 r=0.01 closed form,0.0777282,rad
+B,bridge sigma a=0.05 r=0.01 MC,0.0777755,rad
+B,bridge sigma a=0.567 r=0.01 closed form,0.129663,rad
+B,bridge sigma a=0.567 r=0.01 MC,0.129397,rad
+B,bridge sigma a=6.3 r=0.05 closed form,0.395285,rad
+B,bridge sigma a=6.3 r=0.05 MC,0.395941,rad
+B,"posterior residual-CFO sigma (30 Hz OU, Tc=1ms)",0.00247338,Hz
+B,  -> product correction term 2pi f_post Delta0,5.43926e-06,rad
+B,"posterior residual-CFO sigma (30 Hz OU, Tc=20ms)",0.0674938,Hz
+B,  -> product correction term 2pi f_post Delta0,0.000148427,rad
+A,coh sigma_phi Tc=0.7ms res=3Hz,0.0748142,rad
+A,coh sigma_phi Tc=0.7ms res=10Hz,0.0748146,rad
+A,coh sigma_phi Tc=0.7ms res=30Hz,0.0748176,rad
+A,coh sigma_phi Tc=0.7ms res=100Hz,0.0748519,rad
+A,coh sigma_phi Tc=0.7ms res=300Hz,0.0751528,rad
+A,coh sigma_phi Tc=0.7ms res=1000Hz,0.0784944,rad
+A,coh sigma_phi Tc=1ms res=3Hz,0.0748143,rad
+A,coh sigma_phi Tc=1ms res=10Hz,0.0748153,rad
+A,coh sigma_phi Tc=1ms res=30Hz,0.0748241,rad
+A,coh sigma_phi Tc=1ms res=100Hz,0.0749241,rad
+A,coh sigma_phi Tc=1ms res=300Hz,0.0757972,rad
+A,coh sigma_phi Tc=1ms res=1000Hz,0.0851005,rad
+A,coh sigma_phi Tc=2ms res=3Hz,0.074815,rad
+A,coh sigma_phi Tc=2ms res=10Hz,0.074823,rad
+A,coh sigma_phi Tc=2ms res=30Hz,0.0748933,rad
+A,coh sigma_phi Tc=2ms res=100Hz,0.0756886,rad
+A,coh sigma_phi Tc=2ms res=300Hz,0.08235,rad
+A,coh sigma_phi Tc=2ms res=1000Hz,0.136955,rad
+A,coh sigma_phi Tc=5ms res=3Hz,0.0748266,rad
+A,coh sigma_phi Tc=5ms res=10Hz,0.0749515,rad
+A,coh sigma_phi Tc=5ms res=30Hz,0.0760409,rad
+A,coh sigma_phi Tc=5ms res=100Hz,0.0874833,rad
+A,coh sigma_phi Tc=5ms res=300Hz,0.15525,rad
+A,coh sigma_phi Tc=5ms res=1000Hz,0.45958,rad
+A,coh sigma_phi Tc=10ms res=3Hz,0.0749131,rad
+A,coh sigma_phi Tc=10ms res=10Hz,0.0759056,rad
+A,coh sigma_phi Tc=10ms res=30Hz,0.0841285,rad
+A,coh sigma_phi Tc=10ms res=100Hz,0.148481,rad
+A,coh sigma_phi Tc=10ms res=300Hz,0.391971,rad
+A,coh sigma_phi Tc=10ms res=1000Hz,1.28473,rad
+A,coh sigma_phi Tc=20ms res=3Hz,0.0756016,rad
+A,coh sigma_phi Tc=20ms res=10Hz,0.0831451,rad
+A,coh sigma_phi Tc=20ms res=30Hz,0.132063,rad
+A,coh sigma_phi Tc=20ms res=100Hz,0.370394,rad
+A,coh sigma_phi Tc=20ms res=300Hz,1.09085,rad
+A,coh sigma_phi Tc=20ms res=1000Hz,3.62837,rad
+A,unbracketed holdover sigma_phi res=3Hz 20ms,0.217656,rad
+A,unbracketed holdover sigma_phi res=10Hz 20ms,0.72552,rad
+A,unbracketed holdover sigma_phi res=30Hz 20ms,2.17656,rad
+A,unbracketed holdover sigma_phi res=100Hz 20ms,7.2552,rad
+A,unbracketed holdover sigma_phi res=300Hz 20ms,21.7656,rad
+A,unbracketed holdover sigma_phi res=1000Hz 20ms,72.552,rad
+A,prod sigma_phi sj=0.1us Tc=1ms,0.0377948,rad
+A,prod sigma_phi sj=0.1us Tc=20ms,0.0377951,rad
+A,prod sigma_phi sj=0.33us Tc=1ms,0.103459,rad
+A,prod sigma_phi sj=0.33us Tc=20ms,0.103459,rad
+A,prod sigma_phi sj=1us Tc=1ms,0.307042,rad
+A,prod sigma_phi sj=1us Tc=20ms,0.307042,rad
+A,prod sigma_phi sj=3us Tc=1ms,0.918994,rad
+A,prod sigma_phi sj=3us Tc=20ms,0.918994,rad
+A,prod sigma_phi sj=10us Tc=1ms,3.0625,rad
+A,prod sigma_phi sj=10us Tc=20ms,3.0625,rad
+A,sigma_jit crossing 0.5 rad @ 10ppm,3.26539,us
+A,sigma_jit crossing 0.1 rad @ 10ppm,0.653077,us
+A,sigma_jit crossing 0.5 rad @ 20ppm,1.63269,us
+A,sigma_jit crossing 0.1 rad @ 20ppm,0.326539,us
+A,sigma_jit crossing 0.5 rad @ 40ppm,0.816347,us
+A,sigma_jit crossing 0.1 rad @ 40ppm,0.163269,us
+A,"residual-CFO crossing 0.5 rad (wander), Tc=1ms",12328.1,Hz
+A,"residual-CFO crossing 0.1 rad (wander), Tc=1ms",2465.62,Hz
+A,"residual-CFO crossing 0.5 rad (wander), Tc=20ms",137.832,Hz
+A,"residual-CFO crossing 0.1 rad (wander), Tc=20ms",27.5664,Hz
+A,worst-case bistatic Doppler at 1 m/s,16.2579,Hz
+A,motion bias over 0.7 ms exchange,0.035753,rad
+A,motion bias over 20 ms cycle,2.04303,rad
+C,dual-LTF per-frame CFO sigma,1246.35,Hz
+C,dual-LTF unambiguous CFO range,62500,Hz
+C,FTM seed max error (1 ppm resolution),1200,Hz (<< probe range: seed always resolves the probe branch)
+C,dual-LTF CFO sigma after 4 frames,623.175,Hz
+C,dual-LTF CFO sigma after 16 frames,311.588,Hz
+C,dual-LTF CFO sigma after 64 frames,155.794,Hz
+C,unwrap success T_b=0.7ms res=30Hz,0.97921,frac
+C,unwrap success T_b=0.7ms res=100Hz,0.9778,frac
+C,unwrap success T_b=1ms res=30Hz,0.89106,frac
+C,unwrap success T_b=1ms res=100Hz,0.89218,frac
+C,unwrap success T_b=2ms res=30Hz,0.57766,frac
+C,unwrap success T_b=2ms res=100Hz,0.57577,frac
+C,unwrap success T_b=5ms res=30Hz,0.25082,frac
+C,unwrap success T_b=5ms res=100Hz,0.25404,frac
+C,unwrap success T_b=20ms res=30Hz,0.06358,frac
+C,unwrap success T_b=20ms res=100Hz,0.06379,frac
+D,position CRLB N=4 nodes sig_phi=0.05rad,0.000983822,m
+D,position CRLB N=4 nodes sig_phi=0.1rad,0.00196764,m
+D,position CRLB N=4 nodes sig_phi=0.3rad,0.00590293,m
+D,position CRLB N=4 nodes sig_phi=0.5rad,0.00983822,m
+D,position CRLB N=4 nodes sig_phi=1rad,0.0196764,m
+D,position CRLB N=6 nodes sig_phi=0.05rad,0.000532013,m
+D,position CRLB N=6 nodes sig_phi=0.1rad,0.00106403,m
+D,position CRLB N=6 nodes sig_phi=0.3rad,0.00319208,m
+D,position CRLB N=6 nodes sig_phi=0.5rad,0.00532013,m
+D,position CRLB N=6 nodes sig_phi=1rad,0.0106403,m
+D,position CRLB N=8 nodes sig_phi=0.05rad,0.00042679,m
+D,position CRLB N=8 nodes sig_phi=0.1rad,0.000853579,m
+D,position CRLB N=8 nodes sig_phi=0.3rad,0.00256074,m
+D,position CRLB N=8 nodes sig_phi=0.5rad,0.0042679,m
+D,position CRLB N=8 nodes sig_phi=1rad,0.00853579,m
+D,integer-resolution success N=6 sphi=0.1 scal=0.1,0.95,frac
+D,  expected false candidates (analytic),1.41397e-13,count
+D,integer-resolution success N=6 sphi=0.3 scal=0.1,0.395,frac
+D,  expected false candidates (analytic),2.47011e-08,count
+D,integer-resolution success N=6 sphi=0.3 scal=0.3,0.045,frac
+D,  expected false candidates (analytic),2.0289e-06,count
+D,integer-resolution success N=6 sphi=0.5 scal=0.3,0,frac
+D,  expected false candidates (analytic),0.000239226,count
+D,integer-resolution success N=4 sphi=0.3 scal=0.1,0,frac
+D,  expected false candidates (analytic),4.67235,count
+D,integer-resolution success N=8 sphi=0.3 scal=0.3,0.905,frac
+D,  expected false candidates (analytic),5.11468e-17,count
+D,differential range-sum precision per link (sphi=0.1),0.00195788,m
+D,differential range-sum precision per link (sphi=0.3),0.00587363,m
+D,differential range-sum precision per link (sphi=0.5),0.00978938,m
+E,target coherence time lam/(2v) at 1 m/s,0.0615085,s
+E,motion bias over gap=0.7 ms,0.071506,rad
+E,motion bias over gap=1 ms,0.102151,rad
+E,motion bias over gap=5 ms,0.510757,rad
+E,motion bias over gap=20 ms,2.04303,rad
+E,motion bias over gap=61 ms,6.23124,rad
+E,beat-phase sigma MC K=256 rho=10dB,0.0139868,rad
+E,beat-phase CRB K=256 rho=10dB,0.0197642,rad
+E,beat-phase CRB K=80000 rho=10dB,0.00111803,rad
+E,beat-phase CRB K=80000 rho=0dB,0.00353553,rad
+E,beat-phase CRB K=80000 rho=-10dB,0.0111803,rad
+E,"range resolution per epoch, 40 MHz",3.74741,m
+E,"range resolution, 13-ch stitched (83.5 MHz)",1.79516,m
+E,range-sum ambiguity (product phase),0.123017,m
+E,monostatic-equivalent ambiguity (R = L/2),0.0615085,m
+F,"windows to discriminate sigma=0.1 vs 0.3 (alpha .05, power .90)",5,windows
+F,"windows to discriminate sigma=0.3 vs 1.0 (alpha .05, power .90)",5,windows
+F,"windows to discriminate sigma=0.05 vs 0.1 (alpha .05, power .90)",11,windows
+F,"windows to discriminate sigma=0.1 vs 0.5 (alpha .05, power .90)",4,windows
+F,"airtime duty, star N=6 Tc=20ms",15,%
+F,"airtime duty, star N=6 Tc=5ms",60,%
+F,"airtime duty, star N=6 Tc=1ms",300,%
+F,"airtime duty, star N=10 Tc=20ms",27,%
+F,"airtime duty, star N=10 Tc=5ms",108,%
+F,"airtime duty, star N=10 Tc=1ms",540,%
+F,"airtime duty, star N=20 Tc=20ms",57,%
+F,"airtime duty, star N=20 Tc=5ms",228,%
+F,"airtime duty, star N=20 Tc=1ms",1140,%
+F,"airtime duty, all-pairs N=6 Tc=20ms",45,%
+F,"airtime duty, all-pairs N=10 Tc=20ms",135,%
+F,B = dnu*T_obs = 30Hz*0.7ms,0.021,cycles
+F,B = dnu*T_obs = 100Hz*0.7ms,0.07,cycles
+F,B = dnu*T_obs = 30Hz*20ms,0.6,cycles
+F,B = dnu*T_obs = 100Hz*20ms,2,cycles

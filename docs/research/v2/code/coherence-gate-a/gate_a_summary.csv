@@ -1,0 +1,109 @@
+part,param,value,units,note
+A_holdover,"sigma_f=2.4Hz,gap=0.1ms",0.00160401,rad,closed-form 0.0015
+A_holdover,"sigma_f=2.4Hz,gap=0.3ms",0.00481015,rad,closed-form 0.0045
+A_holdover,"sigma_f=2.4Hz,gap=1ms",0.0160382,rad,closed-form 0.0151
+A_holdover,"sigma_f=2.4Hz,gap=3ms",0.0480987,rad,closed-form 0.0452
+A_holdover,"sigma_f=2.4Hz,gap=8ms",0.128014,rad,closed-form 0.1205
+A_holdover,"sigma_f=2.4Hz,gap=20ms",0.317729,rad,closed-form 0.3006
+A_holdover,"sigma_f=2.4Hz,gap=100ms",1.57499,rad,closed-form 1.4832
+A_holdover,"sigma_f=10Hz,gap=0.1ms",0.00602549,rad,closed-form 0.0063
+A_holdover,"sigma_f=10Hz,gap=0.3ms",0.0180741,rad,closed-form 0.0188
+A_holdover,"sigma_f=10Hz,gap=1ms",0.0602366,rad,closed-form 0.0628
+A_holdover,"sigma_f=10Hz,gap=3ms",0.180875,rad,closed-form 0.1884
+A_holdover,"sigma_f=10Hz,gap=8ms",0.483192,rad,closed-form 0.5020
+A_holdover,"sigma_f=10Hz,gap=20ms",1.19849,rad,closed-form 1.2525
+A_holdover,"sigma_f=10Hz,gap=100ms",5.84527,rad,closed-form 6.1802
+A_holdover,"sigma_f=30Hz,gap=0.1ms",0.0186299,rad,closed-form 0.0188
+A_holdover,"sigma_f=30Hz,gap=0.3ms",0.0558751,rad,closed-form 0.0565
+A_holdover,"sigma_f=30Hz,gap=1ms",0.186532,rad,closed-form 0.1885
+A_holdover,"sigma_f=30Hz,gap=3ms",0.560506,rad,closed-form 0.5652
+A_holdover,"sigma_f=30Hz,gap=8ms",1.49919,rad,closed-form 1.5060
+A_holdover,"sigma_f=30Hz,gap=20ms",3.76499,rad,closed-form 3.7574
+A_holdover,"sigma_f=30Hz,gap=100ms",18.4404,rad,closed-form 18.5406
+A_holdover,"sigma_f=100Hz,gap=0.1ms",0.0641326,rad,closed-form 0.0628
+A_holdover,"sigma_f=100Hz,gap=0.3ms",0.192456,rad,closed-form 0.1885
+A_holdover,"sigma_f=100Hz,gap=1ms",0.642134,rad,closed-form 0.6282
+A_holdover,"sigma_f=100Hz,gap=3ms",1.92227,rad,closed-form 1.8840
+A_holdover,"sigma_f=100Hz,gap=8ms",5.11821,rad,closed-form 5.0199
+A_holdover,"sigma_f=100Hz,gap=20ms",12.7473,rad,closed-form 12.5246
+A_holdover,"sigma_f=100Hz,gap=100ms",62.8721,rad,closed-form 61.8019
+A_holdover,"T* at 0.5 rad, sigma_f=2.4Hz",33.1573,ms,short-gap budget 2 pi sigma_f T
+A_holdover,"T* at 0.5 rad, sigma_f=10Hz",7.95775,ms,short-gap budget 2 pi sigma_f T
+A_holdover,"T* at 0.5 rad, sigma_f=30Hz",2.65258,ms,short-gap budget 2 pi sigma_f T
+A_holdover,"T* at 0.5 rad, sigma_f=100Hz",0.795775,ms,short-gap budget 2 pi sigma_f T
+A_budget,"B gate (0.5 rad, short-gap)",0.0795775,cycles,sigma_phi ~ 2 pi sigma_f T_gap; B = sigma_f T_gap
+A_budget,"B @20ms,sigma_f=2.4Hz",0.048,cycles,PASS
+A_budget,"B @20ms,sigma_f=10Hz",0.2,cycles,FAIL
+A_budget,"B @20ms,sigma_f=30Hz",0.6,cycles,FAIL
+A_budget,"B @20ms,sigma_f=100Hz",2,cycles,FAIL
+A_budget,killing sigma_f at 20 ms,3.97887,Hz,0.5 rad unbracketed at T_gap = 20 ms
+A_budget,killing sigma_tau at 20 ppm,1.63269,us,2 pi df_raw sigma_tau = 0.5 rad
+A_timestamp_cfo,"n=10,Ts=5ms",1387.5,Hz,closed 1355.43; phase/1ms=8.718 rad
+A_timestamp_cfo,"n=20,Ts=5ms",470.532,Hz,closed 477.41; phase/1ms=2.956 rad
+A_timestamp_cfo,"n=50,Ts=20ms",29.5075,Hz,closed 30.16; phase/1ms=0.185 rad
+A_timestamp_cfo,"n=100,Ts=10ms",21.346,Hz,closed 21.32; phase/1ms=0.134 rad
+A_timestamp_cfo,"CSI-phase CFO n=20,Ts=5ms",0.0345012,Hz,phase/1ms=0.0002 rad
+A_timestamp_cfo,"CSI-phase CFO n=100,Ts=5ms",0.00308218,Hz,phase/1ms=0.0000 rad
+B_twoway,raw software reply,0.875752,rad,uncorrected product
+B_twoway,ns-timestamp corrected (asym 30 ns),0.265606,rad,ratio 0.040
+B_twoway,corrected + 3 us deferral gate,0.27377,rad,ratio 0.041
+B_twoway,corrected + 1 us deferral gate,0.271572,rad,ratio 0.042
+B_nonrecip,"v=0.5m/s,tau=1ms",0.0510757,rad,two-way Doppler residue
+B_nonrecip,"v=1.0m/s,tau=1ms",0.102151,rad,two-way Doppler residue
+C_averaging,N_faces=1,0.220907,rad,MC 0.2128; beta -
+C_averaging,N_faces=2,0.208349,rad,MC 0.2114; beta 0.08
+C_averaging,N_faces=4,0.201777,rad,MC 0.1981; beta 0.05
+C_averaging,N_faces=8,0.19841,rad,MC 0.1981; beta 0.02
+C_averaging,N_faces=16,0.196704,rad,MC 0.1958; beta 0.01
+C_averaging,N_faces=20,0.196361,rad,MC 0.1964; beta 0.01
+C_averaging,N_faces=40,0.195674,rad,MC 0.1955; beta 0.01
+C_averaging,wander floor at 1 ms,0.188464,rad,dominant term
+D_cascade,prior=0.1m,0.24157,frac,band 1.000
+D_cascade,prior=0.3m,0.0816514,frac,band 0.998
+D_cascade,prior=0.5m,0.0490458,frac,band 0.939
+D_cascade,prior=1m,0.0245345,frac,band 0.651
+D_cascade,prior=2m,0.0122687,frac,band 0.361
+D_cascade,prior=3.5m,0.00701087,frac,band 0.211
+D_cascade,"band->carrier, rho=0dB",0.44037,frac,band range sigma 5.27 cm
+D_cascade,"band->carrier, rho=10dB",0.93494,frac,band range sigma 1.67 cm
+D_cascade,"band->carrier, rho=20dB",1,frac,band range sigma 0.53 cm
+D_degeneracy,prior=+-1m,0.0151515,frac,~66 near-equal minima
+D_degeneracy,prior=+-2m,0.0153846,frac,~65 near-equal minima
+D_degeneracy,prior=+-4m,0.00763359,frac,~131 near-equal minima
+E_separability,max |P_orth J_p|,1.83515e-13,-,one-way sum phase additively separable
+E_e2e,sigma_phi=0.05 rad,0.00330395,m,CRLB 0.0023 m
+E_e2e,sigma_phi=0.1 rad,0.00637144,m,CRLB 0.0031 m
+E_e2e,sigma_phi=0.2 rad,0.0136196,m,CRLB 0.0043 m
+E_e2e,sigma_phi=0.3 rad,0.0198603,m,CRLB 0.0054 m
+E_e2e,sigma_phi=0.5 rad,0.0315869,m,CRLB 0.0079 m
+E_e2e,sigma_phi=1 rad,0.119091,m,CRLB 0.0145 m
+E_e2e,sigma_phi=2 rad,0.165358,m,CRLB 0.0281 m
+E_e2e,sigma_phi=3 rad,0.199057,m,CRLB 0.0418 m
+E_e2e,dCRLB/dsigma_phi (0.3 rad),0.000239962,m/rad,
+E_e2e,sigma_phi* at 10 cm,6.90242,rad,"LoS, no multipath"
+F_rips,beat-phase LO invariance,2.46766e-15,rad,common-mode algebra
+F_rips,"rho=0dB,T=1ms",0.0894427,rad,range-diff err 1.751 mm
+F_rips,"rho=0dB,T=10ms",0.0282843,rad,range-diff err 0.554 mm
+F_rips,"rho=0dB,T=100ms",0.00894427,rad,range-diff err 0.175 mm
+F_rips,"rho=10dB,T=1ms",0.0282843,rad,range-diff err 0.554 mm
+F_rips,"rho=10dB,T=10ms",0.00894427,rad,range-diff err 0.175 mm
+F_rips,"rho=10dB,T=100ms",0.00282843,rad,range-diff err 0.055 mm
+F_rips,"rho=20dB,T=1ms",0.00894427,rad,range-diff err 0.175 mm
+F_rips,"rho=20dB,T=10ms",0.00282843,rad,range-diff err 0.055 mm
+F_rips,"rho=20dB,T=100ms",0.000894427,rad,range-diff err 0.018 mm
+F_rips,"rho=30dB,T=1ms",0.00282843,rad,range-diff err 0.055 mm
+F_rips,"rho=30dB,T=10ms",0.000894427,rad,range-diff err 0.018 mm
+F_rips,"rho=30dB,T=100ms",0.000282843,rad,range-diff err 0.006 mm
+F_rips,"alignment,beat=3kHz",0.000235619,rad,per 12.5 ns
+F_rips,"alignment,beat=30kHz",0.00235619,rad,per 12.5 ns
+F_rips,"alignment,beat=60kHz",0.00471239,rad,per 12.5 ns
+G_airtime,round@10Hz,0.0117,frac,1.17 ms/round
+G_airtime,round@20Hz,0.0234,frac,1.17 ms/round
+G_airtime,round@50Hz,0.0585,frac,1.17 ms/round
+G_airtime,strobe@200Hz,0.026,frac,hub broadcast
+G_airtime,strobe@500Hz,0.065,frac,hub broadcast
+G_airtime,strobe@1000Hz,0.13,frac,hub broadcast
+G_airtime,bracket@sense=20Hz,0.0052,frac,ref frame before+after each sensing frame
+G_airtime,bracket@sense=50Hz,0.013,frac,ref frame before+after each sensing frame
+G_airtime,bracket@sense=100Hz,0.026,frac,ref frame before+after each sensing frame
+G_ledger,target coherence time @1 m/s,0.0615085,s,

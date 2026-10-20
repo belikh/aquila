@@ -1,0 +1,95 @@
+part,param,value,units
+E1_intercept,"K=4,ell=0.0ms",0.02504,rad
+E1_pred,"K=4,ell=0.0ms",0.04219,rad
+E1_pred_closed,"K=4,ell=0.0ms",0.04183,rad
+E1_intercept,"K=4,ell=1.0ms",0.02516,rad
+E1_pred,"K=4,ell=1.0ms",0.26138,rad
+E1_pred_closed,"K=4,ell=1.0ms",0.25836,rad
+E1_intercept,"K=4,ell=5.0ms",0.02520,rad
+E1_pred,"K=4,ell=5.0ms",1.14338,rad
+E1_pred_closed,"K=4,ell=5.0ms",1.15185,rad
+E1_intercept,"K=8,ell=0.0ms",0.01749,rad
+E1_pred,"K=8,ell=0.0ms",0.03261,rad
+E1_pred_closed,"K=8,ell=0.0ms",0.03227,rad
+E1_intercept,"K=8,ell=1.0ms",0.01770,rad
+E1_pred,"K=8,ell=1.0ms",0.10611,rad
+E1_pred_closed,"K=8,ell=1.0ms",0.10564,rad
+E1_intercept,"K=8,ell=5.0ms",0.01776,rad
+E1_pred,"K=8,ell=5.0ms",0.41198,rad
+E1_pred_closed,"K=8,ell=5.0ms",0.41314,rad
+E1_intercept,"K=16,ell=0.0ms",0.01259,rad
+E1_pred,"K=16,ell=0.0ms",0.02398,rad
+E1_pred_closed,"K=16,ell=0.0ms",0.02387,rad
+E1_intercept,"K=16,ell=1.0ms",0.01241,rad
+E1_pred,"K=16,ell=1.0ms",0.04911,rad
+E1_pred_closed,"K=16,ell=1.0ms",0.04907,rad
+E1_intercept,"K=16,ell=5.0ms",0.01242,rad
+E1_pred,"K=16,ell=5.0ms",0.15714,rad
+E1_pred_closed,"K=16,ell=5.0ms",0.15642,rad
+E2_intercept,none (noise only),0.01769,rad
+E2_pred,none (noise only),0.10616,rad
+E2_intercept,(a) constant artefact +-0.2 rad,0.11674,rad
+E2_pred,(a) constant artefact +-0.2 rad,0.15711,rad
+E2_intercept,(b) random per-frame 0.1 rad,0.03963,rad
+E2_pred,(b) random per-frame 0.1 rad,0.23347,rad
+E2_intercept,"(c) A1 fail: U(-pi,pi)/frame",0.64617,rad
+E2_pred,"(c) A1 fail: U(-pi,pi)/frame",3.84330,rad
+E2_intercept,(d) int8-CFO quant. artefact (T_ref=100us),0.02596,rad
+E2_pred,(d) int8-CFO quant. artefact (T_ref=100us),0.10783,rad
+E3_success,"sig=0.02,prior=17.0,R=3.0",0.5750,frac
+E3_rms_deg,"sig=0.02,prior=17.0,R=3.0",0.07629,deg
+E3_crlb_deg,"sig=0.02,prior=17.0,R=3.0",0.07084,deg
+E3_success,"sig=0.05,prior=17.0,R=3.0",0.5475,frac
+E3_rms_deg,"sig=0.05,prior=17.0,R=3.0",0.19384,deg
+E3_crlb_deg,"sig=0.05,prior=17.0,R=3.0",0.17556,deg
+E3_success,"sig=0.1,prior=17.0,R=3.0",0.6525,frac
+E3_rms_deg,"sig=0.1,prior=17.0,R=3.0",0.34724,deg
+E3_crlb_deg,"sig=0.1,prior=17.0,R=3.0",0.35366,deg
+E3_success,"sig=0.2,prior=17.0,R=3.0",0.6250,frac
+E3_rms_deg,"sig=0.2,prior=17.0,R=3.0",0.66953,deg
+E3_crlb_deg,"sig=0.2,prior=17.0,R=3.0",0.70303,deg
+E3_success,"sig=0.05,prior=5.0,R=3.0",0.9975,frac
+E3_rms_deg,"sig=0.05,prior=5.0,R=3.0",0.17524,deg
+E3_crlb_deg,"sig=0.05,prior=5.0,R=3.0",0.17552,deg
+E3_success,"sig=0.05,prior=10.0,R=3.0",0.8725,frac
+E3_rms_deg,"sig=0.05,prior=10.0,R=3.0",0.17846,deg
+E3_crlb_deg,"sig=0.05,prior=10.0,R=3.0",0.17767,deg
+E3_success,"sig=0.05,prior=30.0,R=3.0",0.2775,frac
+E3_rms_deg,"sig=0.05,prior=30.0,R=3.0",0.17032,deg
+E3_crlb_deg,"sig=0.05,prior=30.0,R=3.0",0.17611,deg
+E3_success,"sig=0.05,prior=45.0,R=3.0",0.1425,frac
+E3_rms_deg,"sig=0.05,prior=45.0,R=3.0",0.17889,deg
+E3_crlb_deg,"sig=0.05,prior=45.0,R=3.0",0.17622,deg
+E3_success,"sig=0.05,prior=60.0,R=3.0",0.0475,frac
+E3_rms_deg,"sig=0.05,prior=60.0,R=3.0",0.19149,deg
+E3_crlb_deg,"sig=0.05,prior=60.0,R=3.0",0.17597,deg
+E3_success,"sig=0.05,prior=17.0,R=1.0",0.5750,frac
+E3_rms_deg,"sig=0.05,prior=17.0,R=1.0",0.18546,deg
+E3_crlb_deg,"sig=0.05,prior=17.0,R=1.0",0.17762,deg
+E3_success,"sig=0.05,prior=17.0,R=8.0",0.5750,frac
+E3_rms_deg,"sig=0.05,prior=17.0,R=8.0",0.17432,deg
+E3_crlb_deg,"sig=0.05,prior=17.0,R=8.0",0.17714,deg
+E4_int_ok_hi,sig_phi=0.01,0.99575,frac
+E4_int_ok_lo,sig_phi=0.01,0.99575,frac
+E4_sig_tau_cm,sig_phi=0.01,4.44999,cm
+E4_int_ok_hi,sig_phi=0.02,0.97350,frac
+E4_int_ok_lo,sig_phi=0.02,0.97350,frac
+E4_sig_tau_cm,sig_phi=0.02,2.30978,cm
+E4_int_ok_hi,sig_phi=0.05,0.83000,frac
+E4_int_ok_lo,sig_phi=0.05,0.83000,frac
+E4_sig_tau_cm,sig_phi=0.05,5.67005,cm
+E4_int_ok_hi,sig_phi=0.07,0.72725,frac
+E4_int_ok_lo,sig_phi=0.07,0.72725,frac
+E4_sig_tau_cm,sig_phi=0.07,9.17880,cm
+E4_int_ok_hi,sig_phi=0.1,0.58325,frac
+E4_int_ok_lo,sig_phi=0.1,0.58325,frac
+E4_sig_tau_cm,sig_phi=0.1,8.76710,cm
+E4_int_ok_hi,sig_phi=0.15,0.41300,frac
+E4_int_ok_lo,sig_phi=0.15,0.41300,frac
+E4_sig_tau_cm,sig_phi=0.15,12.00814,cm
+E4_int_ok_hi,sig_phi=0.2,0.32925,frac
+E4_int_ok_lo,sig_phi=0.2,0.32925,frac
+E4_sig_tau_cm,sig_phi=0.2,14.72740,cm
+E4_int_ok_hi,sig_phi=0.3,0.22525,frac
+E4_int_ok_lo,sig_phi=0.3,0.22525,frac
+E4_sig_tau_cm,sig_phi=0.3,22.05630,cm

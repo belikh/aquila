@@ -1,0 +1,30 @@
+part,param,value,units
+F_selfsurvey,anchor_pos_rms,0.06209,m
+F_sigfix,phase_fix_at_sensing_frame,0.07470,rad
+F_localise_rms,"S1 design: stitched ranges only (8 cm, median-of-3)",0.33639,m
+F_localise_p95,"S1 design: stitched ranges only (8 cm, median-of-3)",0.67269,m
+F_localise_rmsxy,"S1 design: stitched ranges only (8 cm, median-of-3)",0.09977,m
+F_localise_rmsz,"S1 design: stitched ranges only (8 cm, median-of-3)",0.32125,m
+F_localise_rms,S2 design + coherent phase differences (mm differential),0.23706,m
+F_localise_p95,S2 design + coherent phase differences (mm differential),0.45296,m
+F_localise_rmsxy,S2 design + coherent phase differences (mm differential),0.07342,m
+F_localise_rmsz,S2 design + coherent phase differences (mm differential),0.22541,m
+F_localise_rms,S2b S2 + bounded multipath bias +-5 cm (budget term),0.25299,m
+F_localise_p95,S2b S2 + bounded multipath bias +-5 cm (budget term),0.46818,m
+F_localise_rmsxy,S2b S2 + bounded multipath bias +-5 cm (budget term),0.07808,m
+F_localise_rmsz,S2b S2 + bounded multipath bias +-5 cm (budget term),0.24064,m
+F_localise_rms,"S3 sigma_phi=0.30 rad: integers fail (22%), delay-only 22 cm",1.52933,m
+F_localise_p95,"S3 sigma_phi=0.30 rad: integers fail (22%), delay-only 22 cm",2.85190,m
+F_localise_rmsxy,"S3 sigma_phi=0.30 rad: integers fail (22%), delay-only 22 cm",0.78643,m
+F_localise_rmsz,"S3 sigma_phi=0.30 rad: integers fail (22%), delay-only 22 cm",1.31163,m
+F_localise_rms,S4 cascade dead (E-1 red): FTM-only multilateration,2.30112,m
+F_localise_p95,S4 cascade dead (E-1 red): FTM-only multilateration,4.05985,m
+F_localise_rmsxy,S4 cascade dead (E-1 red): FTM-only multilateration,1.38099,m
+F_localise_rmsz,S4 cascade dead (E-1 red): FTM-only multilateration,1.84066,m
+F_localise_rms,S2c S2 with perfectly surveyed anchors (isolates coherence floor),0.06992,m
+F_localise_p95,S2c S2 with perfectly surveyed anchors (isolates coherence floor),0.13354,m
+F_localise_rmsxy,S2c S2 with perfectly surveyed anchors (isolates coherence floor),0.01823,m
+F_localise_rmsz,S2c S2 with perfectly surveyed anchors (isolates coherence floor),0.06750,m
+G_duty,psb_bursts,0.04000,frac
+G_duty,tw_one_per_superframe,0.03500,frac
+G_target_coh,lambda_half_v_1ms,0.06151,s

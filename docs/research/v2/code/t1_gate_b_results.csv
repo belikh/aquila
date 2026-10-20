@@ -1,0 +1,177 @@
+quantity,value
+MC check bracket beta=4.0Hz T=1.0ms (MC / closed),0.165 / 0.164 rad
+MC check holdover beta=4.0Hz T=1.0ms (MC / closed),0.281 / 0.281 rad
+MC check bracket beta=4.0Hz T=20.0ms (MC / closed),0.514 / 0.516 rad
+MC check holdover beta=4.0Hz T=20.0ms (MC / closed),1.022 / 1.017 rad
+MC check bracket beta=40.0Hz T=1.0ms (MC / closed),0.374 / 0.374 rad
+MC check holdover beta=40.0Hz T=1.0ms (MC / closed),0.729 / 0.729 rad
+MC check bracket beta=40.0Hz T=20.0ms (MC / closed),1.609 / 1.590 rad
+MC check holdover beta=40.0Hz T=20.0ms (MC / closed),3.176 / 3.175 rad
+"max gap @0.5 rad, beta=0.05Hz sigma_p=0.03rad: holdover/bracket (ms)",396.45 / 1588.68
+"max gap @0.5 rad, beta=0.05Hz sigma_p=0.17rad: holdover/bracket (ms)",351.89 / 1499.56
+"max gap @0.5 rad, beta=0.05Hz sigma_p=0.5rad: holdover/bracket (ms)",inf / 795.77
+"max gap @0.5 rad, beta=0.5Hz sigma_p=0.03rad: holdover/bracket (ms)",39.65 / 158.87
+"max gap @0.5 rad, beta=0.5Hz sigma_p=0.17rad: holdover/bracket (ms)",35.19 / 149.96
+"max gap @0.5 rad, beta=0.5Hz sigma_p=0.5rad: holdover/bracket (ms)",inf / 79.58
+"max gap @0.5 rad, beta=4.0Hz sigma_p=0.03rad: holdover/bracket (ms)",4.96 / 19.86
+"max gap @0.5 rad, beta=4.0Hz sigma_p=0.17rad: holdover/bracket (ms)",4.40 / 18.74
+"max gap @0.5 rad, beta=4.0Hz sigma_p=0.5rad: holdover/bracket (ms)",inf / 9.95
+"max gap @0.5 rad, beta=40.0Hz sigma_p=0.03rad: holdover/bracket (ms)",0.50 / 1.99
+"max gap @0.5 rad, beta=40.0Hz sigma_p=0.17rad: holdover/bracket (ms)",0.44 / 1.87
+"max gap @0.5 rad, beta=40.0Hz sigma_p=0.5rad: holdover/bracket (ms)",inf / 0.99
+design points beta=0.05Hz sp=0.17: hold@20ms/brk@2ms/brk@1ms (rad),0.204 / 0.122 / 0.121
+design points beta=0.05Hz F=20 faces: hold@20ms/brk@1ms (rad),0.118 / 0.030
+design points beta=0.5Hz sp=0.17: hold@20ms/brk@2ms/brk@1ms (rad),0.393 / 0.133 / 0.127
+design points beta=0.5Hz F=20 faces: hold@20ms/brk@1ms (rad),0.357 / 0.048
+design points beta=4.0Hz sp=0.17: hold@20ms/brk@2ms/brk@1ms (rad),1.017 / 0.199 / 0.164
+design points beta=4.0Hz F=20 faces: hold@20ms/brk@1ms (rad),1.003 / 0.115
+design points beta=40.0Hz sp=0.17: hold@20ms/brk@2ms/brk@1ms (rad),3.175 / 0.516 / 0.374
+design points beta=40.0Hz F=20 faces: hold@20ms/brk@1ms (rad),3.171 / 0.356
+ESP-PPB <1 deg best @1ms: implied beta_rel / implied sigma_p,0.10 Hz / 0.025 rad
+ESP-PPB <10 deg typical @1ms: implied beta_rel / implied sigma_p,9.70 Hz / 0.247 rad
+Kalman beta=0.05Hz sp=0.17 cad=0.2ms: innov/hold@20ms/sig_f,0.176 rad / 0.153 rad / 0.66 Hz
+Kalman beta=0.05Hz sp=0.17 cad=0.5ms: innov/hold@20ms/sig_f,0.180 rad / 0.161 rad / 0.67 Hz
+Kalman beta=0.05Hz sp=0.17 cad=1.0ms: innov/hold@20ms/sig_f,0.185 rad / 0.169 rad / 0.69 Hz
+Kalman beta=0.05Hz sp=0.17 cad=2.0ms: innov/hold@20ms/sig_f,0.193 rad / 0.180 rad / 0.71 Hz
+Kalman beta=0.05Hz sp=0.17 cad=5.0ms: innov/hold@20ms/sig_f,0.212 rad / 0.198 rad / 0.74 Hz
+Kalman beta=0.05Hz sp=0.17 cad=10.0ms: innov/hold@20ms/sig_f,0.238 rad / 0.214 rad / 0.77 Hz
+Kalman beta=0.05Hz sp=0.17 cad=20.0ms: innov/hold@20ms/sig_f,0.287 rad / 0.231 rad / 0.82 Hz
+Kalman beta=0.05Hz sp=0.17 cad=50.0ms: innov/hold@20ms/sig_f,0.449 rad / 0.251 rad / 0.94 Hz
+Kalman beta=0.05Hz sp=0.17 cad=100.0ms: innov/hold@20ms/sig_f,0.815 rad / 0.263 rad / 1.13 Hz
+Kalman beta=0.5Hz sp=0.17 cad=0.2ms: innov/hold@20ms/sig_f,0.189 rad / 0.392 rad / 1.14 Hz
+Kalman beta=0.5Hz sp=0.17 cad=0.5ms: innov/hold@20ms/sig_f,0.201 rad / 0.396 rad / 1.14 Hz
+Kalman beta=0.5Hz sp=0.17 cad=1.0ms: innov/hold@20ms/sig_f,0.215 rad / 0.401 rad / 1.14 Hz
+Kalman beta=0.5Hz sp=0.17 cad=2.0ms: innov/hold@20ms/sig_f,0.237 rad / 0.406 rad / 1.15 Hz
+Kalman beta=0.5Hz sp=0.17 cad=5.0ms: innov/hold@20ms/sig_f,0.286 rad / 0.414 rad / 1.16 Hz
+Kalman beta=0.5Hz sp=0.17 cad=10.0ms: innov/hold@20ms/sig_f,0.350 rad / 0.420 rad / 1.17 Hz
+Kalman beta=0.5Hz sp=0.17 cad=20.0ms: innov/hold@20ms/sig_f,0.457 rad / 0.425 rad / 1.20 Hz
+Kalman beta=0.5Hz sp=0.17 cad=50.0ms: innov/hold@20ms/sig_f,0.739 rad / 0.431 rad / 1.27 Hz
+Kalman beta=0.5Hz sp=0.17 cad=100.0ms: innov/hold@20ms/sig_f,1.217 rad / 0.437 rad / 1.39 Hz
+Kalman beta=4.0Hz sp=0.17 cad=0.2ms: innov/hold@20ms/sig_f,0.227 rad / 1.038 rad / 1.91 Hz
+Kalman beta=4.0Hz sp=0.17 cad=0.5ms: innov/hold@20ms/sig_f,0.267 rad / 1.040 rad / 1.91 Hz
+Kalman beta=4.0Hz sp=0.17 cad=1.0ms: innov/hold@20ms/sig_f,0.316 rad / 1.042 rad / 1.91 Hz
+Kalman beta=4.0Hz sp=0.17 cad=2.0ms: innov/hold@20ms/sig_f,0.392 rad / 1.044 rad / 1.91 Hz
+Kalman beta=4.0Hz sp=0.17 cad=5.0ms: innov/hold@20ms/sig_f,0.557 rad / 1.045 rad / 1.91 Hz
+Kalman beta=4.0Hz sp=0.17 cad=10.0ms: innov/hold@20ms/sig_f,0.758 rad / 1.046 rad / 1.92 Hz
+Kalman beta=4.0Hz sp=0.17 cad=20.0ms: innov/hold@20ms/sig_f,1.060 rad / 1.047 rad / 1.93 Hz
+Kalman beta=4.0Hz sp=0.17 cad=50.0ms: innov/hold@20ms/sig_f,1.722 rad / 1.048 rad / 1.98 Hz
+Kalman beta=4.0Hz sp=0.17 cad=100.0ms: innov/hold@20ms/sig_f,2.599 rad / 1.050 rad / 2.05 Hz
+Kalman beta=40.0Hz sp=0.17 cad=0.2ms: innov/hold@20ms/sig_f,0.391 rad / 3.203 rad / 3.38 Hz
+Kalman beta=40.0Hz sp=0.17 cad=0.5ms: innov/hold@20ms/sig_f,0.554 rad / 3.203 rad / 3.38 Hz
+Kalman beta=40.0Hz sp=0.17 cad=1.0ms: innov/hold@20ms/sig_f,0.748 rad / 3.203 rad / 3.38 Hz
+Kalman beta=40.0Hz sp=0.17 cad=2.0ms: innov/hold@20ms/sig_f,1.032 rad / 3.204 rad / 3.38 Hz
+Kalman beta=40.0Hz sp=0.17 cad=5.0ms: innov/hold@20ms/sig_f,1.607 rad / 3.204 rad / 3.38 Hz
+Kalman beta=40.0Hz sp=0.17 cad=10.0ms: innov/hold@20ms/sig_f,2.265 rad / 3.204 rad / 3.39 Hz
+Kalman beta=40.0Hz sp=0.17 cad=20.0ms: innov/hold@20ms/sig_f,3.208 rad / 3.204 rad / 3.39 Hz
+Kalman beta=40.0Hz sp=0.17 cad=50.0ms: innov/hold@20ms/sig_f,5.133 rad / 3.204 rad / 3.42 Hz
+Kalman beta=40.0Hz sp=0.17 cad=100.0ms: innov/hold@20ms/sig_f,7.419 rad / 3.205 rad / 3.45 Hz
+Kalman MC check beta=4Hz cad=2ms sp=0.17: innovation MC/DARE,0.389 / 0.392 rad
+Kalman MC check beta=4Hz cad=2ms: 20 ms holdover MC/DARE,1.061 / 1.044 rad
+"residual freq error used (Hz, beta=4Hz cad=2ms)",1.91
+two-way sigma @Delta=0.7ms jitter=0.3us M=1 F=20,0.216 rad
+two-way sigma @Delta=0.7ms jitter=0.3us M=10 F=20,0.069 rad
+two-way sigma @Delta=0.7ms jitter=1.6us M=1 F=20,0.527 rad
+two-way sigma @Delta=0.7ms jitter=1.6us M=10 F=20,0.167 rad
+two-way sigma @Delta=0.7ms jitter=16.0us M=1 F=20,4.900 rad
+two-way sigma @Delta=0.7ms jitter=16.0us M=10 F=20,1.549 rad
+two-way sigma @Delta=0.7ms jitter=1.6us F=20 M=1,0.527 rad
+two-way sigma @Delta=3.0ms jitter=1.6us F=20 M=1,0.628 rad
+two-way sigma @Delta=20.0ms jitter=1.6us F=20 M=1,1.143 rad
+two-way sigma @Delta=0.7ms jitter=1.6us beta=0.05Hz,0.493 rad
+two-way sigma @Delta=0.7ms jitter=1.6us beta=0.5Hz,0.497 rad
+two-way sigma @Delta=0.7ms jitter=1.6us beta=4.0Hz,0.527 rad
+two-way sigma @Delta=0.7ms jitter=1.6us beta=40.0Hz,0.771 rad
+max single-exchange reply jitter for 0.5 rad @48.7 kHz (us),1.63
+max reply jitter for 0.5 rad @48.7 kHz with M=10 (us),5.2
+MC check averaging law beta=4Hz M=16 Tc=1ms sp=0.17 (MC / closed),0.262 / 0.263 rad
+"best M @1ms cadence & sigma, beta=0.05Hz F=1","M=32, sigma=0.051 rad"
+"best M @1ms cadence & sigma, beta=0.05Hz F=20","M=4, sigma=0.024 rad"
+"best M @1ms cadence & sigma, beta=0.5Hz F=1","M=8, sigma=0.089 rad"
+"best M @1ms cadence & sigma, beta=0.5Hz F=20","M=1, sigma=0.038 rad"
+"best M @1ms cadence & sigma, beta=4.0Hz F=1","M=4, sigma=0.161 rad"
+"best M @1ms cadence & sigma, beta=4.0Hz F=20","M=1, sigma=0.038 rad"
+"best M @1ms cadence & sigma, beta=40.0Hz F=1","M=1, sigma=0.170 rad"
+"best M @1ms cadence & sigma, beta=40.0Hz F=20","M=1, sigma=0.038 rad"
+cascade bias=0.005m sig_phi=0.05rad: link/all/RMSE/RMSE|ok,0.997/0.986/47cm/0.1cm
+cascade bias=0.01m sig_phi=0.05rad: link/all/RMSE/RMSE|ok,0.995/0.970/47cm/0.1cm
+cascade bias=0.03m sig_phi=0.05rad: link/all/RMSE/RMSE|ok,0.686/0.103/47cm/0.1cm
+cascade bias=0.05m sig_phi=0.05rad: link/all/RMSE/RMSE|ok,0.459/0.012/48cm/0.1cm
+cascade bias=0.1m sig_phi=0.05rad: link/all/RMSE/RMSE|ok,0.240/0.000/50cm/0.0cm
+cascade bias=0.3m sig_phi=0.05rad: link/all/RMSE/RMSE|ok,0.082/0.000/69cm/nancm
+cascade bias=0.005m sig_phi=0.1rad: link/all/RMSE/RMSE|ok,0.997/0.986/47cm/0.2cm
+cascade bias=0.01m sig_phi=0.1rad: link/all/RMSE/RMSE|ok,0.995/0.969/47cm/0.2cm
+cascade bias=0.03m sig_phi=0.1rad: link/all/RMSE/RMSE|ok,0.686/0.104/47cm/0.2cm
+cascade bias=0.05m sig_phi=0.1rad: link/all/RMSE/RMSE|ok,0.459/0.012/48cm/0.1cm
+cascade bias=0.1m sig_phi=0.1rad: link/all/RMSE/RMSE|ok,0.240/0.000/50cm/0.1cm
+cascade bias=0.3m sig_phi=0.1rad: link/all/RMSE/RMSE|ok,0.081/0.000/69cm/nancm
+cascade bias=0.005m sig_phi=0.3rad: link/all/RMSE/RMSE|ok,0.997/0.986/47cm/0.5cm
+cascade bias=0.01m sig_phi=0.3rad: link/all/RMSE/RMSE|ok,0.993/0.962/47cm/0.5cm
+cascade bias=0.03m sig_phi=0.3rad: link/all/RMSE/RMSE|ok,0.682/0.101/47cm/0.5cm
+cascade bias=0.05m sig_phi=0.3rad: link/all/RMSE/RMSE|ok,0.460/0.012/48cm/0.4cm
+cascade bias=0.1m sig_phi=0.3rad: link/all/RMSE/RMSE|ok,0.239/0.000/50cm/0.3cm
+cascade bias=0.3m sig_phi=0.3rad: link/all/RMSE/RMSE|ok,0.081/0.000/69cm/nancm
+cascade bias=0.005m sig_phi=0.5rad: link/all/RMSE/RMSE|ok,0.997/0.985/47cm/0.8cm
+cascade bias=0.01m sig_phi=0.5rad: link/all/RMSE/RMSE|ok,0.989/0.939/47cm/0.8cm
+cascade bias=0.03m sig_phi=0.5rad: link/all/RMSE/RMSE|ok,0.679/0.098/47cm/0.8cm
+cascade bias=0.05m sig_phi=0.5rad: link/all/RMSE/RMSE|ok,0.459/0.011/48cm/0.7cm
+cascade bias=0.1m sig_phi=0.5rad: link/all/RMSE/RMSE|ok,0.237/0.000/50cm/0.5cm
+cascade bias=0.3m sig_phi=0.5rad: link/all/RMSE/RMSE|ok,0.081/0.000/69cm/nancm
+cascade bias=0.005m sig_phi=1.0rad: link/all/RMSE/RMSE|ok,0.991/0.947/47cm/1.6cm
+cascade bias=0.01m sig_phi=1.0rad: link/all/RMSE/RMSE|ok,0.965/0.814/47cm/1.6cm
+cascade bias=0.03m sig_phi=1.0rad: link/all/RMSE/RMSE|ok,0.663/0.084/47cm/1.6cm
+cascade bias=0.05m sig_phi=1.0rad: link/all/RMSE/RMSE|ok,0.454/0.009/48cm/1.4cm
+cascade bias=0.1m sig_phi=1.0rad: link/all/RMSE/RMSE|ok,0.236/0.000/50cm/1.0cm
+cascade bias=0.3m sig_phi=1.0rad: link/all/RMSE/RMSE|ok,0.081/0.000/69cm/nancm
+carrier-phase range noise per link @ sig_phi=0.3 rad (mm),2.9
+"stitched-delay CRLB range noise @83 MHz, 20 dB, 728 sc (mm)",2.6
+stitched unambiguous range c/2B (m),1.81
+two-way carrier ambiguity lambda/2 (cm),6.15
+"CH20 delay noise, 56 sc, 20 dB (cm)",3.90
+"rung diag bias=0.01m: ok20/ok83/okc per-link, FTMpos/stitched RMSE","0.9971/0.9971/0.9927, 2.13m/49cm"
+"rung diag bias=0.03m: ok20/ok83/okc per-link, FTMpos/stitched RMSE","0.9971/0.9971/0.6877, 2.13m/49cm"
+HT20 frame time MCS0 127B (us),270
+HT20 frame time MCS7-SGI 127B (us),63
+airtime N=2 MCS0 cadence=10Hz cycle=1.4ms,1.4%
+airtime N=2 MCS0 cadence=20Hz cycle=1.4ms,2.9%
+airtime N=2 MCS0 cadence=50Hz cycle=1.4ms,7.2%
+airtime N=2 MCS7 cadence=10Hz cycle=0.4ms,0.4%
+airtime N=2 MCS7 cadence=20Hz cycle=0.4ms,0.8%
+airtime N=2 MCS7 cadence=50Hz cycle=0.4ms,2.0%
+airtime N=8 MCS0 cadence=10Hz cycle=3.1ms,3.1%
+airtime N=8 MCS0 cadence=20Hz cycle=3.1ms,6.3%
+airtime N=8 MCS0 cadence=50Hz cycle=3.1ms,15.7%
+airtime N=8 MCS7 cadence=10Hz cycle=0.9ms,0.9%
+airtime N=8 MCS7 cadence=20Hz cycle=0.9ms,1.7%
+airtime N=8 MCS7 cadence=50Hz cycle=0.9ms,4.3%
+airtime N=20 MCS0 cadence=10Hz cycle=6.6ms,6.6%
+airtime N=20 MCS0 cadence=20Hz cycle=6.6ms,13.2%
+airtime N=20 MCS0 cadence=50Hz cycle=6.6ms,32.9%
+airtime N=20 MCS7 cadence=10Hz cycle=1.8ms,1.8%
+airtime N=20 MCS7 cadence=20Hz cycle=1.8ms,3.6%
+airtime N=20 MCS7 cadence=50Hz cycle=1.8ms,9.1%
+RIPS beat-phase sigma rho=0dB Tw=1ms,0.0632 rad -> q-noise 1.24 mm
+RIPS beat-phase sigma rho=0dB Tw=10ms,0.0200 rad -> q-noise 0.39 mm
+RIPS beat-phase sigma rho=10dB Tw=1ms,0.0200 rad -> q-noise 0.39 mm
+RIPS beat-phase sigma rho=10dB Tw=10ms,0.0063 rad -> q-noise 0.12 mm
+RIPS beat-phase sigma rho=20dB Tw=1ms,0.0063 rad -> q-noise 0.12 mm
+RIPS beat-phase sigma rho=20dB Tw=10ms,0.0020 rad -> q-noise 0.04 mm
+RIPS beat-phase sigma rho=30dB Tw=1ms,0.0020 rad -> q-noise 0.04 mm
+RIPS beat-phase sigma rho=30dB Tw=10ms,0.0006 rad -> q-noise 0.01 mm
+RIPS cross-node time alignment for 0.1 rad beat phase @48.7 kHz (us),0.33
+B_det = dnu_res*T_obs = 1Hz x 0.02s (cycles),0.02
+B_det = dnu_res*T_obs = 1Hz x 1.0s (cycles),1.00
+B_det = dnu_res*T_obs = 10Hz x 0.02s (cycles),0.20
+B_det = dnu_res*T_obs = 10Hz x 1.0s (cycles),10.00
+B_det = dnu_res*T_obs = 100Hz x 0.02s (cycles),2.00
+B_det = dnu_res*T_obs = 100Hz x 1.0s (cycles),100.00
+sigma_phi wiener beta=0.05Hz T=1ms (rad),0.0251
+sigma_phi wiener beta=0.05Hz T=20ms (rad),0.1121
+sigma_phi wiener beta=0.5Hz T=1ms (rad),0.0793
+sigma_phi wiener beta=0.5Hz T=20ms (rad),0.3545
+sigma_phi wiener beta=4.0Hz T=1ms (rad),0.2242
+sigma_phi wiener beta=4.0Hz T=20ms (rad),1.0027
+sigma_phi wiener beta=40.0Hz T=1ms (rad),0.7090
+sigma_phi wiener beta=40.0Hz T=20ms (rad),3.1707
+target coherence time lambda/2v @ v=1.0 m/s (ms),62
+target coherence time lambda/2v @ v=0.5 m/s (ms),123
+target coherence time lambda/2v @ v=0.1 m/s (ms),615

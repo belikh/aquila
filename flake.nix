@@ -1,5 +1,5 @@
 {
-  description = "Aquila — reproducible dev environments (host + wasm32 + HA)";
+  description = "Aquila — reproducible dev environments (host + wasm32 + HA + v2 tooling)";
 
   inputs = {
     nixpkgs.url = "nixpkgs";
@@ -64,6 +64,88 @@
           ];
           shellHook = ''
             echo "Aquila HA shell — python $(python3 --version | cut -d' ' -f2); aiohttp/voluptuous/pytest/pyyaml + homeassistant"
+          '';
+        };
+
+        # v2 tooling shell: `nix develop .#sim`.
+        #
+        # Deliberately carries NO Python packages. This flake's `nixpkgs` is a
+        # *path* input, so the binary cache does not apply and every Python
+        # package would compile from source — and several nixpkgs test-suites
+        # (e.g. anyio's TLS tests) fail in this environment, which cascades and
+        # blocks the whole shell. Python numerics are provided instead by the
+        # pip virtualenv at `.venv/` (see docs/research/v2/EXPERIMENT-ENV.md).
+        sim = pkgs.mkShell {
+          packages = [
+            rust
+            pkgs.jq
+            pkgs.unzip
+            pkgs.gnuplot
+            pkgs.graphviz
+            pkgs.gnumake
+            pkgs.which
+          ];
+          shellHook = ''
+            echo "Aquila sim shell — tooling only (rust/jq/gnuplot/graphviz)."
+            echo "  Python numerics:  source .venv/bin/activate    (see docs/research/v2/EXPERIMENT-ENV.md)"
+            echo "  In-repo CSI simulator: cargo run -p aquila-capture -- synth"
+            echo "  Wolfram: use the Wolfram MCP tools (no local install)."
+          '';
+        };
+
+        # ESP32-S3 firmware shell: `nix develop .#esp`.
+        #
+        # ESP-IDF and its xtensa toolchain are installed by Espressif's own
+        # installer (into ~/.espressif), NOT by Nix: this flake's nixpkgs is a
+        # path input (no binary cache), and a source-built IDF toolchain would
+        # be enormous. This shell provides the host prerequisites, locates the
+        # IDF checkout, and wires up Espressif's QEMU fork for
+        # firmware-in-the-loop testing without hardware (see docs/plan/v2/map.md).
+        esp = pkgs.mkShell {
+          packages = [
+            pkgs.python3
+            pkgs.git
+            pkgs.wget
+            pkgs.curl
+            pkgs.gnumake
+            pkgs.cmake
+            pkgs.ninja
+            pkgs.flex
+            pkgs.bison
+            pkgs.gperf
+            pkgs.ccache
+            pkgs.dfu-util
+            pkgs.unzip
+            pkgs.which
+          ];
+          shellHook = ''
+            echo "Aquila esp shell — ESP-IDF host prerequisites (python3/git/cmake/ninja/flex/bison/gperf/ccache/dfu-util)."
+            idf_found=""
+            for d in "''${ESP_IDF:-}" "$HOME/esp/v5.5.2/esp-idf" "$HOME/esp/esp-idf"; do
+              if [ -n "$d" ] && [ -f "$d/export.sh" ]; then idf_found="$d"; break; fi
+            done
+            if [ -n "$idf_found" ]; then
+              echo "  ESP-IDF checkout: $idf_found"
+              echo "  Activate with:   . $idf_found/export.sh"
+              if ls "$HOME"/.espressif/tools/qemu-xtensa/*/qemu/bin/qemu-system-xtensa >/dev/null 2>&1; then
+                echo "  QEMU (espressif fork): installed"
+                echo "  Firmware-in-the-loop:  idf.py qemu monitor   (no hardware needed)"
+              else
+                echo "  QEMU not installed yet — one-time:"
+                echo "    python3 $idf_found/tools/idf_tools.py install qemu-xtensa"
+                echo "  then: idf.py qemu monitor   (also: idf.py qemu gdb, qemu efuse-burn / efuse-summary)"
+              fi
+            else
+              echo "  No ESP-IDF checkout found (checked \$ESP_IDF, ~/esp/v5.5.2/esp-idf, ~/esp/esp-idf)."
+              echo "  One-time bootstrap:"
+              echo "    mkdir -p ~/esp && cd ~/esp"
+              echo "    git clone -b v5.5.2 --recursive https://github.com/espressif/esp-idf.git"
+              echo "    cd esp-idf && ./install.sh esp32s3"
+              echo "  then activate:  . ~/esp/esp-idf/export.sh"
+            fi
+            echo "  Note: QEMU emulates CPU/memory/digital peripherals, eFuses and secure"
+            echo "        boot v2 — it does NOT emulate the radio. Sim-only results stay"
+            echo "        Hardware-gated (evaluation.md §5)."
           '';
         };
       };

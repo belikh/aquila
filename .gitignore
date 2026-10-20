@@ -14,3 +14,12 @@
 # OS / editor
 .DS_Store
 *.swp
+
+# v2 experiment virtualenv
+.venv/
+
+# v2 experiment bytecode caches
+docs/research/v2/experiments/__pycache__/
+docs/research/v2/code/*/__pycache__/
+# v2 experiment data outputs
+docs/research/v2/experiments/data/
