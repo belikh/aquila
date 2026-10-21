@@ -1,0 +1,1231 @@
+{
+ "source_rom_sha256": "c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd",
+ "note": "offset is the byte offset in the ROM's PHY function table; address is where the entry points; region says whether it is the ROM's own code, the application's replacement for it, or neither",
+ "entries": [
+  {
+   "offset": 0,
+   "address": 1073971112,
+   "symbol": "rom_disable_agc",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 4,
+   "address": 1073971148,
+   "symbol": "rom_enable_agc",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 8,
+   "address": 1077384504,
+   "symbol": "toascii+0x3221F8",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 12,
+   "address": 1077384572,
+   "symbol": "toascii+0x32223C",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 16,
+   "address": 1073971380,
+   "symbol": "rom_phy_disable_cca",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 20,
+   "address": 1073971424,
+   "symbol": "rom_phy_enable_cca",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 24,
+   "address": 1074093256,
+   "symbol": "rom_pow_usr",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 28,
+   "address": 1073971448,
+   "symbol": "rom_set_loopback_gain",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 32,
+   "address": 1073971540,
+   "symbol": "rom_set_cal_rxdc",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 36,
+   "address": 1073971604,
+   "symbol": "rom_loopback_mode_en",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 40,
+   "address": 1074093276,
+   "symbol": "rom_get_data_sat",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 44,
+   "address": 1073971672,
+   "symbol": "rom_write_gain_mem",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 48,
+   "address": 1074093292,
+   "symbol": "rom_bt_index_to_bb",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 52,
+   "address": 1074093320,
+   "symbol": "rom_bt_bb_to_index",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 56,
+   "address": 1074093348,
+   "symbol": "rom_get_bbgain_db",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 60,
+   "address": 1073971728,
+   "symbol": "rom_set_tx_dig_gain",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 64,
+   "address": 1073971796,
+   "symbol": "rom_rx_gain_force",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 68,
+   "address": 1073971864,
+   "symbol": "rom_set_txclk_en",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 72,
+   "address": 1073971908,
+   "symbol": "rom_set_rxclk_en",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 76,
+   "address": 1073972040,
+   "symbol": "rom_spur_reg_write_one_tone",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 80,
+   "address": 1074093424,
+   "symbol": "rom_spur_cal",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 84,
+   "address": 1107729496,
+   "symbol": "toascii+0x2012918",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 88,
+   "address": 1073972984,
+   "symbol": "rom_bb_wdg_test_en",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 92,
+   "address": 1073975240,
+   "symbol": "rom_mhz2ieee",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 96,
+   "address": 1073973040,
+   "symbol": "rom_bb_bss_cbw40_dig",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 100,
+   "address": 1073975308,
+   "symbol": "rom_cbw2040_cfg",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 104,
+   "address": 1073975348,
+   "symbol": "rom_mac_tx_chan_offset",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 108,
+   "address": 1073975412,
+   "symbol": "rom_bb_bss_cbw40",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 112,
+   "address": 1073973072,
+   "symbol": "rom_noise_floor_auto_set",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 116,
+   "address": 1073973148,
+   "symbol": "rom_phy_get_noisefloor",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 120,
+   "address": 1073973216,
+   "symbol": "rom_check_noise_floor",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 124,
+   "address": 1073973380,
+   "symbol": "rom_read_hw_noisefloor",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 128,
+   "address": 1107798928,
+   "symbol": "toascii+0x2023850",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 132,
+   "address": 1073975548,
+   "symbol": "rom_set_cca",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 136,
+   "address": 1073973472,
+   "symbol": "rom_bb_wdt_rst_enable",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 140,
+   "address": 1073973508,
+   "symbol": "rom_bb_wdt_int_enable",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 144,
+   "address": 1073973544,
+   "symbol": "rom_bb_wdt_timeout_clear",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 148,
+   "address": 1073973568,
+   "symbol": "rom_bb_wdt_get_status",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 152,
+   "address": 1074093388,
+   "symbol": "rom_phy_byte_to_word",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 156,
+   "address": 1073973620,
+   "symbol": "rom_tx_paon_set",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 160,
+   "address": 1073973744,
+   "symbol": "rom_i2cmst_reg_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 164,
+   "address": 1073974016,
+   "symbol": "rom_iq_corr_enable",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 168,
+   "address": 1073974084,
+   "symbol": "rom_fe_reg_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 172,
+   "address": 1073974364,
+   "symbol": "rom_agc_reg_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 176,
+   "address": 1073974524,
+   "symbol": "rom_bb_reg_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 180,
+   "address": 1073974540,
+   "symbol": "rom_mac_enable_bb",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 184,
+   "address": 1073974604,
+   "symbol": "rom_bb_wdg_cfg",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 188,
+   "address": 1073975656,
+   "symbol": "rom_force_txon",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 192,
+   "address": 1073974656,
+   "symbol": "rom_fe_txrx_reset",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 196,
+   "address": 1073974708,
+   "symbol": "rom_set_rx_comp",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 200,
+   "address": 1077382748,
+   "symbol": "toascii+0x321B1C",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 204,
+   "address": 1073975136,
+   "symbol": "rom_write_chan_freq",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 208,
+   "address": 1073975744,
+   "symbol": "rom_phy_get_rx_freq",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 212,
+   "address": 1073974956,
+   "symbol": "rom_phy_xpd_rf",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 216,
+   "address": 1073975096,
+   "symbol": "rom_set_xpd_sar",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 220,
+   "address": 1074093000,
+   "symbol": "rom_txbbgain_to_index",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 224,
+   "address": 1073964088,
+   "symbol": "rom_index_to_txbbgain",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 228,
+   "address": 1073964144,
+   "symbol": "rom_pwdet_sar2_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 232,
+   "address": 1073964296,
+   "symbol": "rom_en_pwdet",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 236,
+   "address": 1074093044,
+   "symbol": "rom_abs_temp",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 240,
+   "address": 1107725040,
+   "symbol": "toascii+0x20117B0",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 244,
+   "address": 1073964556,
+   "symbol": "rom_iq_est_disable",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 248,
+   "address": 1073964616,
+   "symbol": "rom_dc_iq_est",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 252,
+   "address": 1107719172,
+   "symbol": "toascii+0x20100C4",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 256,
+   "address": 1077384928,
+   "symbol": "toascii+0x3223A0",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 260,
+   "address": 1073964948,
+   "symbol": "rom_linear_to_db",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 264,
+   "address": 1073965060,
+   "symbol": "rom_wifi_11g_rate_chg",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 268,
+   "address": 1073965088,
+   "symbol": "rom_get_target_power_offset",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 272,
+   "address": 1073965252,
+   "symbol": "rom_write_txrate_power_offset",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 276,
+   "address": 1073965420,
+   "symbol": "rom_get_rate_fcc_index",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 280,
+   "address": 1073965548,
+   "symbol": "rom_get_rate_target_power",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 284,
+   "address": 1074093052,
+   "symbol": "rom_target_power_add_backoff",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 288,
+   "address": 1073965592,
+   "symbol": "rom_pkdet_vol_start",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 292,
+   "address": 1073965732,
+   "symbol": "rom_read_sar_dout",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 296,
+   "address": 1107720340,
+   "symbol": "toascii+0x2010554",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 300,
+   "address": 1073965820,
+   "symbol": "rom_get_sar2_vol",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 304,
+   "address": 1073965892,
+   "symbol": "rom_get_pll_vol",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 308,
+   "address": 1073965976,
+   "symbol": "rom_phy_set_bbfreq_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 312,
+   "address": 1074093084,
+   "symbol": "rom_get_pwctrl_correct",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 316,
+   "address": 1073966024,
+   "symbol": "rom_tx_pwctrl_bg_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 320,
+   "address": 1073966060,
+   "symbol": "rom_get_phy_target_power",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 324,
+   "address": 1107719048,
+   "symbol": "toascii+0x2010048",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 328,
+   "address": 1073966120,
+   "symbol": "rom_phy_track_pll_cap",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 332,
+   "address": 1073966304,
+   "symbol": "rom_phy_pwdet_always_en",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 336,
+   "address": 1073966364,
+   "symbol": "rom_phy_pwdet_onetime_en",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 340,
+   "address": 1073960052,
+   "symbol": "rom_get_i2c_read_mask",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 344,
+   "address": 1073960084,
+   "symbol": "rom_get_i2c_mst0_mask",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 348,
+   "address": 1077385564,
+   "symbol": "toascii+0x32261C",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 352,
+   "address": 1074092984,
+   "symbol": "rom_enter_critical_phy",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 356,
+   "address": 1074092992,
+   "symbol": "rom_exit_critical_phy",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 360,
+   "address": 1073960188,
+   "symbol": "rom_chip_i2c_readReg_org",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 364,
+   "address": 1077385628,
+   "symbol": "toascii+0x32265C",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 368,
+   "address": 1073960340,
+   "symbol": "rom_i2c_paral_set_mst0",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 372,
+   "address": 1073960408,
+   "symbol": "rom_i2c_paral_set_read",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 376,
+   "address": 1073960468,
+   "symbol": "rom_i2c_paral_read",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 380,
+   "address": 1073960580,
+   "symbol": "rom_i2c_paral_write",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 384,
+   "address": 1073960688,
+   "symbol": "rom_i2c_paral_write_num",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 388,
+   "address": 1073960760,
+   "symbol": "rom_i2c_paral_write_mask",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 392,
+   "address": 1073960952,
+   "symbol": "rom_i2c_readReg",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 396,
+   "address": 1077385716,
+   "symbol": "toascii+0x3226B4",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 400,
+   "address": 1073961088,
+   "symbol": "rom_i2c_writeReg",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 404,
+   "address": 1073961116,
+   "symbol": "rom_i2c_readReg_Mask",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 408,
+   "address": 1073961176,
+   "symbol": "rom_i2c_writeReg_Mask",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 412,
+   "address": 1073961316,
+   "symbol": "rom_pbus_force_mode",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 416,
+   "address": 1073961516,
+   "symbol": "rom_pbus_rd_addr",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 420,
+   "address": 1073961592,
+   "symbol": "rom_pbus_rd_shift",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 424,
+   "address": 1073961676,
+   "symbol": "rom_pbus_force_test",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 428,
+   "address": 1073961768,
+   "symbol": "rom_pbus_rd",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 432,
+   "address": 1073961836,
+   "symbol": "rom_pbus_debugmode",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 436,
+   "address": 1073961856,
+   "symbol": "rom_pbus_workmode",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 440,
+   "address": 1073961876,
+   "symbol": "rom_pbus_set_rxgain",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 444,
+   "address": 1073961976,
+   "symbol": "rom_pbus_xpd_rx_off",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 448,
+   "address": 1073962028,
+   "symbol": "rom_pbus_xpd_rx_on",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 452,
+   "address": 1073962112,
+   "symbol": "rom_pbus_xpd_tx_off",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 456,
+   "address": 1073962196,
+   "symbol": "rom_pbus_xpd_tx_on",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 460,
+   "address": 1073962336,
+   "symbol": "rom_pbus_set_dco",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 464,
+   "address": 1073962436,
+   "symbol": "rom_bb_bss_cbw40_ana",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 468,
+   "address": 1073962556,
+   "symbol": "rom_chan_to_freq",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 472,
+   "address": 1073962620,
+   "symbol": "rom_open_i2c_xpd",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 476,
+   "address": 1073962668,
+   "symbol": "rom_dac_rate_set",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 480,
+   "address": 1073962820,
+   "symbol": "rom_tsens_read_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 484,
+   "address": 1107718976,
+   "symbol": "toascii+0x2010000",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 488,
+   "address": 1073963040,
+   "symbol": "rom_tsens_index_to_dac",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 492,
+   "address": 1073963068,
+   "symbol": "rom_tsens_index_to_offset",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 496,
+   "address": 1073963100,
+   "symbol": "rom_tsens_dac_cal",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 500,
+   "address": 1073963220,
+   "symbol": "rom_code_to_temp",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 504,
+   "address": 1073963296,
+   "symbol": "rom_write_pll_cap_mem",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 508,
+   "address": 1073963396,
+   "symbol": "rom_pll_correct_dcap",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 512,
+   "address": 1077381668,
+   "symbol": "toascii+0x3216E4",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 516,
+   "address": 1077381696,
+   "symbol": "toascii+0x321700",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 520,
+   "address": 1107798684,
+   "symbol": "toascii+0x202375C",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 524,
+   "address": 1107717464,
+   "symbol": "toascii+0x200FA18",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 528,
+   "address": 1073966484,
+   "symbol": "rom_set_tx_gain_mem",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 532,
+   "address": 1073966712,
+   "symbol": "rom_bt_tx_dig_gain",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 536,
+   "address": 1107722676,
+   "symbol": "toascii+0x2010E74",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 540,
+   "address": 1073967044,
+   "symbol": "rom_get_chan_target_power",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 544,
+   "address": 1074093180,
+   "symbol": "rom_get_tx_gain_value",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 548,
+   "address": 1077381992,
+   "symbol": "toascii+0x321828",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 552,
+   "address": 1107722912,
+   "symbol": "toascii+0x2010F60",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 556,
+   "address": 1077384700,
+   "symbol": "toascii+0x3222BC",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 560,
+   "address": 1073967700,
+   "symbol": "rom_wifi_agc_sat_gain",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 564,
+   "address": 1077381780,
+   "symbol": "toascii+0x321754",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 568,
+   "address": 1073967808,
+   "symbol": "rom_bt_filter_reg",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 572,
+   "address": 1073967888,
+   "symbol": "rom_i2c_sar2_init_code",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 576,
+   "address": 1073967944,
+   "symbol": "rom_phy_bbpll_cal",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 580,
+   "address": 1073967984,
+   "symbol": "rom_phy_param_addr",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 584,
+   "address": 1073967996,
+   "symbol": "rom_phy_reg_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 588,
+   "address": 1073968124,
+   "symbol": "rom_set_chan_reg",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 592,
+   "address": 1073968280,
+   "symbol": "rom_phy_wakeup_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 596,
+   "address": 1077385116,
+   "symbol": "toascii+0x32245C",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 600,
+   "address": 1107719028,
+   "symbol": "toascii+0x2010034",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 604,
+   "address": 1073969156,
+   "symbol": "rom_bt_track_pll_cap",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 608,
+   "address": 1073969236,
+   "symbol": "rom_wifi_track_pll_cap",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 612,
+   "address": 1107723196,
+   "symbol": "toascii+0x201107C",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 616,
+   "address": 1107707400,
+   "symbol": "toascii+0x200D2C8",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 620,
+   "address": 1073969732,
+   "symbol": "rom_tx_pwctrl_background",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 624,
+   "address": 1077382100,
+   "symbol": "toascii+0x321894",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 628,
+   "address": 1073969928,
+   "symbol": "rom_noise_check_loop",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 632,
+   "address": 1073970228,
+   "symbol": "rom_phy_close_rf",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 636,
+   "address": 1073970288,
+   "symbol": "rom_phy_xpd_tsens",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 640,
+   "address": 1073970312,
+   "symbol": "rom_phy_freq_mem_backup",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 644,
+   "address": 1073970472,
+   "symbol": "rom_phy_ant_init",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 648,
+   "address": 1107707684,
+   "symbol": "toascii+0x200D3E4",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 652,
+   "address": 1107707708,
+   "symbol": "toascii+0x200D3FC",
+   "name_is_exact": false,
+   "region": "app"
+  },
+  {
+   "offset": 656,
+   "address": 1073970668,
+   "symbol": "rom_phy_dig_reg_backup",
+   "name_is_exact": true,
+   "region": "rom"
+  },
+  {
+   "offset": 660,
+   "address": 64,
+   "symbol": "0x00000040",
+   "name_is_exact": true,
+   "region": "data"
+  },
+  {
+   "offset": 664,
+   "address": 404232216,
+   "symbol": "0x18181818",
+   "name_is_exact": true,
+   "region": "data"
+  },
+  {
+   "offset": 668,
+   "address": 16,
+   "symbol": "0x00000010",
+   "name_is_exact": true,
+   "region": "data"
+  },
+  {
+   "offset": 672,
+   "address": 32,
+   "symbol": "0x00000020",
+   "name_is_exact": true,
+   "region": "data"
+  },
+  {
+   "offset": 716,
+   "address": 6832152,
+   "symbol": "0x00684018",
+   "name_is_exact": true,
+   "region": "data"
+  },
+  {
+   "offset": 720,
+   "address": 4194304,
+   "symbol": "0x00400000",
+   "name_is_exact": true,
+   "region": "data"
+  },
+  {
+   "offset": 724,
+   "address": 65536,
+   "symbol": "0x00010000",
+   "name_is_exact": true,
+   "region": "data"
+  },
+  {
+   "offset": 728,
+   "address": 4096,
+   "symbol": "0x00001000",
+   "name_is_exact": true,
+   "region": "data"
+  },
+  {
+   "offset": 732,
+   "address": 256,
+   "symbol": "0x00000100",
+   "name_is_exact": true,
+   "region": "data"
+  },
+  {
+   "offset": 736,
+   "address": 65535,
+   "symbol": "0x0000FFFF",
+   "name_is_exact": true,
+   "region": "data"
+  }
+ ]
+}

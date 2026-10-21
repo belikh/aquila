@@ -1,0 +1,111 @@
+{
+ "artefact": "esp32s3-rom-phy-interface",
+ "description": "the ESP32-S3's ROM PHY function table: the list of hardware controls the chip exposes, read from a running node and resolved against the ROM's symbol index",
+ "source": {
+  "path": "/home/matt/.espressif/tools/esp-rom-elfs/20241011/esp32s3_rev0_rom.elf",
+  "sha256": "c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd"
+ },
+ "architecture": {
+  "machine": "Tensilica Xtensa",
+  "bits": 32,
+  "byte_order": "little",
+  "elf_class": "ELF32"
+ },
+ "code_image": {
+  "path": "rom_code.bin",
+  "sha256": "66b9b972e7df084e939c34e3c3df1213cb9ee6ba50fdce6855269cd62f1bd6e6",
+  "bytes": 357741,
+  "layout": [
+   {
+    "name": ".ResetVector.text",
+    "address": 1073742848,
+    "size": 364,
+    "offset_in_image": 0
+   },
+   {
+    "name": ".fixed.test",
+    "address": 1073743212,
+    "size": 24264,
+    "offset_in_image": 364
+   },
+   {
+    "name": ".bt_text",
+    "address": 1073767476,
+    "size": 190142,
+    "offset_in_image": 24628
+   },
+   {
+    "name": ".text",
+    "address": 1073957620,
+    "size": 142516,
+    "offset_in_image": 214770
+   },
+   {
+    "name": ".WindowVectors.text",
+    "address": 1073741824,
+    "size": 368,
+    "offset_in_image": 357286
+   },
+   {
+    "name": ".Level2InterruptVector.text",
+    "address": 1073742208,
+    "size": 6,
+    "offset_in_image": 357654
+   },
+   {
+    "name": ".Level3InterruptVector.text",
+    "address": 1073742272,
+    "size": 6,
+    "offset_in_image": 357660
+   },
+   {
+    "name": ".Level4InterruptVector.text",
+    "address": 1073742336,
+    "size": 6,
+    "offset_in_image": 357666
+   },
+   {
+    "name": ".Level5InterruptVector.text",
+    "address": 1073742400,
+    "size": 6,
+    "offset_in_image": 357672
+   },
+   {
+    "name": ".DebugExceptionVector.text",
+    "address": 1073742464,
+    "size": 11,
+    "offset_in_image": 357678
+   },
+   {
+    "name": ".NMIExceptionVector.text",
+    "address": 1073742528,
+    "size": 3,
+    "offset_in_image": 357689
+   },
+   {
+    "name": ".KernelExceptionVector.text",
+    "address": 1073742592,
+    "size": 6,
+    "offset_in_image": 357692
+   },
+   {
+    "name": ".UserExceptionVector.text",
+    "address": 1073742656,
+    "size": 37,
+    "offset_in_image": 357698
+   },
+   {
+    "name": ".DoubleExceptionVector.text",
+    "address": 1073742784,
+    "size": 6,
+    "offset_in_image": 357735
+   }
+  ],
+  "note": "the ROM's bytes are not copied into this repository: they are Espressif's, and the published ELF in the toolchain is the source. The digest below identifies the exact ROM the table was read from."
+ },
+ "symbol_index": {
+  "path": "rom_symbols.json",
+  "sha256": "ec00e3921295f66e73bb3996382fdd1f7c42dffddc1816872d1cf1d9a74d0262",
+  "functions": 2327
+ }
+}

@@ -506,16 +506,42 @@ reference in the data that could resolve it. That is the same verdict §2
 reaches from the measurement, and the reverse engineering is what rules out
 "it is something we configured".
 
-**What "driving the hardware manually" can and cannot buy.** The driver's
-control surface over the CSI acquisition has been enumerated in full — four
-functional choices, three PHY register writes and two PHY calls — and every
-one of them has been tested and none of them changes the negation. There is
-no further lever above the MAC. Below it, the CSI samples are produced by
-the RF path, which is closed and unnamed in the ROM; the 382 KB of ROM text
-contains no sign-mask negation, so the sign is decided inside the
-estimator's arithmetic rather than by a step that could be found and undone.
-So the absolute cross-node phase is not recoverable on this hardware by any
-route available here.
+### 4.6 The ROM, and the manual surface
+
+The ESP32-S3's WiFi MAC, PHY and baseband are the chip's mask-programmed ROM,
+not a flash blob — which is worth establishing rather than assuming, because
+the node's partition table *declares* a `phy_init` region that nothing writes.
+The application does not read it either: `esp_phy_get_init_data` returns the
+built-in `phy_init_data` struct. The only flash-side PHY artefact is 1072
+bytes of RF calibration tables. `docs/research/v2/experiments/rom/` has the
+extraction.
+
+The application reaches the ROM's PHY through a dispatch table, and it patches
+nine of the ROM's entries with its own RAM implementations. That table lives
+in the ROM's RAM and is filled at boot, so the published ELF cannot show it;
+the only place it exists is a running node. Dumping it from the node and
+resolving it against the ROM's symbol index gives **135 named ROM entry
+points** and 30 application replacements.
+
+**The table is the complete list of hardware controls the chip exposes**, and
+what it does *not* contain is the finding. It has the AGC, the noise floor,
+the DC and I/Q calibration, the gain control, the I²C and the power control.
+Every entry is a configuration or a calibration function. **None of them is a
+per-frame phase function** — the channel estimate is produced per frame by
+the baseband's hardware, and the ROM's table exposes no control over it.
+
+That is the boundary. The per-frame sign is decided in hardware the
+application cannot reach and cannot configure, which is why "drive the
+hardware manually" has a measured ceiling rather than an assumed one.
+
+One control was tested directly. `rom_iq_est_disable` — the DC and
+I/Q-imbalance correction, exactly the kind of thing that would negate a whole
+channel vector if its sign came from a noisy estimate — was called through the
+table. The register it clears was read before and after: the bits were
+**already clear**, so the call was a no-op and the flip is present with that
+switch in that state. The switch does not gate the flip. (Reported as it
+happened: the intended toggling experiment was vacuous, and what the
+measurement shows is the flip's presence with the register in that state.)
 
 **What is left is the part that does not need the sign.** A whole-vector
 negation shifts every subcarrier's phase by the same pi, so it leaves the
@@ -525,7 +551,8 @@ that quantity, and it is validated. It also survives the training-field
 change: with node 1 rebuilt for the high-throughput field alone, the group
 delay and the reciprocity checks were unchanged (1.3 cm, 5.8 cm, 3.2 cm and
 1.9 cm apart). The project does not need the absolute phase; it needs the
-path length, and the path length is measurable.
+path length, and the path length is measurable — to about a decimetre, and
+the nodes can range to each other with it (§3.1).
 
 ## 5. What this means for the project
 

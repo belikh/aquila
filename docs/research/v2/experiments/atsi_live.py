@@ -83,6 +83,23 @@ def frame_log_amplitude(frame: CsiFrame) -> Optional[float]:
     return math.log(total / counted + 1e-6)
 
 
+def frame_to_frame_variability(values: Sequence[float]) -> float:
+    """The typical frame-to-frame change in the log-amplitude.
+
+    This is the reference-free motion signal. The *mean* power barely moves
+    when a person walks past — a body's shadow and its reflection roughly
+    cancel in the mean — but the channel fluctuates enormously while it
+    moves. So the frame-to-frame variability is a motion detector that needs
+    no baseline and no reference: a quiet room has a small one, and a moving
+    person has a large one.
+    """
+    if len(values) < 3:
+        return 0.0
+    changes = [abs(values[index + 1] - values[index])
+               for index in range(len(values) - 1)]
+    return statistics.median(changes)
+
+
 @dataclass
 class NodeSeries:
     """A node's log-amplitude series over one window."""
@@ -176,6 +193,18 @@ def run_repeats(duration_s: float, repeats: int) -> int:
         worst = max(max(abs(v) for v in values) for values in changes.values())
         print(f"  a person entering a zone has to move the node-local power by "
               f"more than {worst * 4.343:.2f} dB")
+
+    print()
+    print("=== the reference-free motion signal ===")
+    print("  the frame-to-frame variability of the node-local power: a quiet")
+    print("  room has a small one, a moving person has a large one, and")
+    print("  neither needs a baseline")
+    for index, window in enumerate(windows):
+        detail = ", ".join(
+            f"node {node_id} {frame_to_frame_variability(window[node_id].values):.4f}"
+            for node_id in sorted(window)
+        )
+        print(f"  window {index + 1}: {detail}")
     return 0
 
 

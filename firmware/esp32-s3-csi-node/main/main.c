@@ -246,6 +246,59 @@ static bool node_ota_health(void *ctx)
     return node_control_is_responsive();
 }
 
+/*
+ * Dump the ESP32-S3's ROM PHY function table once at boot.
+ *
+ * The ROM is the chip's mask-programmed firmware — the WiFi MAC, the PHY and
+ * the baseband, including the channel estimator that produces the CSI. Its
+ * PHY function table is the list of hardware controls the chip exposes, and
+ * it is the surface the application reaches the ROM through. The table lives
+ * in the ROM's RAM and is filled at boot, so it cannot be read out of the
+ * published ELF; the running node is the only place it exists.
+ *
+ * The dump is the reverse-engineering record for the ROM's interface. It is
+ * off by default: it prints a table of addresses that is of no use to the
+ * node's job.
+ */
+#define AQUILA_DUMP_ROM_PHY_TABLE 0
+
+/*
+ * The ROM's IQ/DC estimate switch.
+ *
+ * The ESP32-S3's receiver estimates its DC offset and I/Q imbalance. The ROM
+ * exposes the switch as `rom_iq_est_disable`, at table offset 0xf4, and the
+ * application can reach it through the ROM's own PHY function table.
+ *
+ * Measured on the node: the register's bits 0 and 1 are already clear before
+ * the call, so the switch is a no-op in this configuration and the flip is
+ * present with it in that state. The switch does not gate the flip.
+ */
+#define AQUILA_DISABLE_IQ_EST 0
+#define ROM_PHY_IQ_EST_DISABLE_OFFSET 0xf4
+
+/* The driver's copy of the ROM's PHY function table, filled at boot. */
+extern void *g_phyFuns;
+
+/* The ROM's PHY table is a block of function pointers; this is its size. */
+#define ROM_PHY_TABLE_BYTES 0x300
+
+static void dump_rom_phy_table(void)
+{
+    void *table = g_phyFuns;
+    if (table == NULL) {
+        ESP_LOGW(TAG, "the ROM PHY table is not available");
+        return;
+    }
+    ESP_LOGI(TAG, "ROMPHY base=%p", table);
+    const uint32_t *words = (const uint32_t *)table;
+    for (int offset = 0; offset < ROM_PHY_TABLE_BYTES; offset += 4) {
+        uint32_t value = words[offset / 4];
+        if (value != 0u) {
+            ESP_LOGI(TAG, "ROMPHY %03x %08x", (unsigned)offset, (unsigned)value);
+        }
+    }
+}
+
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -258,6 +311,33 @@ void app_main(void)
     load_provisioning(&provisioning);
 
     wifi_start(&provisioning);
+
+#if AQUILA_DUMP_ROM_PHY_TABLE
+    dump_rom_phy_table();
+#endif
+
+#if AQUILA_DISABLE_IQ_EST
+    {
+        /* The register the ROM's `rom_iq_est_disable` clears bits in. It is
+         * read before and after the call so that the test's validity can be
+         * checked rather than assumed: if the bits were already clear, the
+         * call was a no-op and the result means nothing. */
+        volatile uint32_t *iq_est_reg = (volatile uint32_t *)0x60006144u;
+        uint32_t before = *iq_est_reg;
+        void (**table)(void) = (void (**)(void))g_phyFuns;
+        void (*disable)(void) = table[ROM_PHY_IQ_EST_DISABLE_OFFSET / 4u];
+        if (disable != NULL) {
+            disable();
+            ESP_LOGI(TAG, "IQ estimation disabled through the ROM PHY table");
+        } else {
+            ESP_LOGE(TAG, "the ROM PHY table has no IQ-estimate switch");
+        }
+        uint32_t after = *iq_est_reg;
+        ESP_LOGI(TAG, "IQ est register 0x%08x -> 0x%08x (bits 0-1: %u -> %u)",
+                 (unsigned)before, (unsigned)after,
+                 (unsigned)(before & 0x3u), (unsigned)(after & 0x3u));
+    }
+#endif
 
     csi_node_config_t csi = csi_node_default_config();
     csi.node_id = provisioning.node_id;
