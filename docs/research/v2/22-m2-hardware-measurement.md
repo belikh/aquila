@@ -418,9 +418,10 @@ target: `xtensa-esp32s3-elf-objdump` on the extracted objects
   to generate htlft data by averaging lltf and ht_ltf data when receiving HT
   packet"* — which suggested a hypothesis worth testing (§4.3).
 
-* **There is no sign-mask negation anywhere in the ROM.** The whole 382 KB of
-  ROM text was disassembled and searched: 575 `xor` instructions, none of
-  them with 0x80, and no `movi` of a 0x80 sign mask. A whole-vector
+* **There is no sign-mask negation anywhere in the ROM.** The ROM's 357 KB
+  of code — 142 KB of WiFi `.text` and 190 KB of Bluetooth — was
+  disassembled and searched: 575 `xor` instructions, none of them with 0x80,
+  and no `movi` of a 0x80 sign mask. A whole-vector
   negation of the int8 samples would be exactly an exclusive-or with 0x80,
   so the flip is **not** a post-processing step applied to the CSI buffer
   after the estimate. It is in the estimator's arithmetic, below everything
@@ -542,6 +543,19 @@ table. The register it clears was read before and after: the bits were
 switch in that state. The switch does not gate the flip. (Reported as it
 happened: the intended toggling experiment was vacuous, and what the
 measurement shows is the flip's presence with the register in that state.)
+
+**The estimator itself is not in the named ROM.** The ROM's symbol index has
+2327 names, but they are the Bluetooth stack and the handful of WiFi entry
+points the application may call. The only name that looks like a phase
+matcher, `r_cali_phase_match_p`, is in `.bt_text` — it is the Bluetooth RF
+calibration's phase match, not the WiFi one. The WiFi channel estimator is in
+the ROM's unnamed `.text`.
+
+So the mechanism is not recoverable from the artefacts available: the
+estimator is unnamed, it contains no sign-mask negation that could be found
+and undone, and no control the chip exposes reaches it. That is a firm
+boundary rather than a failure of effort, and it is the reason the project's
+direction moved to the phase slope.
 
 **What is left is the part that does not need the sign.** A whole-vector
 negation shifts every subcarrier's phase by the same pi, so it leaves the
