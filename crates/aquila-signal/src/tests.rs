@@ -136,6 +136,8 @@ fn decode_csi_bridges_the_contract_frame() {
         first_word_invalid: false,
         source_mac: None,
         rx_seq: None,
+        rx_flags: 0,
+        rx_timestamp: 0,
     };
     let decoded = decode_csi(&frame).expect("a valid contract frame decodes");
     assert_eq!(decoded.meta.node, NodeId(7));
@@ -169,6 +171,8 @@ fn decode_csi_zeroes_first_pair_when_flagged() {
         first_word_invalid: false,
         source_mac: None,
         rx_seq: None,
+        rx_flags: 0,
+        rx_timestamp: 0,
     };
     let clean = decode_csi(&frame).expect("clean decodes");
     assert_eq!(clean.bins.len(), 2);
@@ -199,6 +203,8 @@ fn decode_csi_rejects_malformed_contract_frames() {
         first_word_invalid: false,
         source_mac: None,
         rx_seq: None,
+        rx_flags: 0,
+        rx_timestamp: 0,
     };
     // An odd-length interleaved sample is not whole I/Q pairs.
     assert!(matches!(

@@ -544,6 +544,38 @@ switch in that state. The switch does not gate the flip. (Reported as it
 happened: the intended toggling experiment was vacuous, and what the
 measurement shows is the flip's presence with the register in that state.)
 
+### 4.6 The receiver's own metadata does not record the sign
+
+The last observable route was the receiver's own per-frame metadata. Wire
+**minor 2** adds it: the antenna index, the rate, the modulation and coding
+scheme, the aggregation flag, the channel-estimate smoothing flag, the
+sounding flag and the receive timestamp. The antenna is the interesting one,
+because it is the only per-frame binary choice the receiver makes about *which*
+channel response it is reporting, and a receiver that switched between two
+paths differing by a half wavelength would negate the whole vector.
+
+It does not. Over three nodes and thirteen hundred same-packet pairs:
+
+| field | values seen | predicts the flip? |
+| --- | --- | --- |
+| antenna | 0, always | the bits differ on **0 of 913** pairs, while the signs disagree on 52 % |
+| rate | 11, always | no |
+| modulation and coding scheme | 0, always | no |
+| aggregation | 0, always | no |
+| channel-estimate smoothing | 0, always | no |
+| sounding | 0, always | no |
+| receive timestamp parity | even or odd | no (0.513 against 0.555) |
+
+The ESP32-S3 has one WiFi antenna, so the antenna bit is constant, and every
+other field the receiver reports is constant too. **The sign is not recorded
+anywhere the node can see.** That closes the observable routes as well as the
+configuration ones: there is no bit anywhere in the data that says which way
+the frame's channel vector points.
+
+The metadata is worth keeping regardless — the rate, the modulation scheme and
+the receive timestamp are the link's own parameters, and the core needs them to
+weigh a frame by its signal quality.
+
 **The estimator itself is not in the named ROM.** The ROM's symbol index has
 2327 names, but they are the Bluetooth stack and the handful of WiFi entry
 points the application may call. The only name that looks like a phase
@@ -553,9 +585,10 @@ the ROM's unnamed `.text`.
 
 So the mechanism is not recoverable from the artefacts available: the
 estimator is unnamed, it contains no sign-mask negation that could be found
-and undone, and no control the chip exposes reaches it. That is a firm
-boundary rather than a failure of effort, and it is the reason the project's
-direction moved to the phase slope.
+and undone, no control the chip exposes reaches it, and nothing the receiver
+reports records the sign it chose. That is a firm boundary rather than a
+failure of effort, and it is the reason the project's direction moved to the
+phase slope.
 
 ### 4.7 What the device actually holds
 

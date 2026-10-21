@@ -29,7 +29,9 @@
 //!     40    2 phy_flags
 //!     42    2 rx_seq (the 802.11 sequence number; 0xFFFF = not reported)
 //!     44    6 source_mac (the transmitting station's MAC address)
-//!     50   2n i_q[0..2n] (i8, interleaved Q,I per subcarrier)
+//!     50    2 rx_flags (the receiver's per-frame link parameters)
+//!     52    4 rx_timestamp (the receiver's receive timestamp, microseconds)
+//!     56   2n i_q[0..2n] (i8, interleaved Q,I per subcarrier)
 //! ```
 //!
 //! Wire minor 0 has no `source_mac` and no `rx_seq`, and its I/Q payload
@@ -41,9 +43,9 @@
 use aquila_types::{Band, CsiFrame, MacAddr, NodeId, PhyFlags};
 
 use crate::constants::{
-    CSI_BODY_FIXED_LEN, CSI_BODY_FIXED_LEN_V0, CSI_FLAG_FIRST_WORD_INVALID, CSI_HEADER_LEN,
-    CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ, WIRE_MAJOR,
-    WIRE_MINOR,
+    CSI_BODY_FIXED_LEN, CSI_BODY_FIXED_LEN_V0, CSI_BODY_FIXED_LEN_V1, CSI_FLAG_FIRST_WORD_INVALID,
+    CSI_HEADER_LEN, CSI_MAGIC, CSI_MESSAGE_TYPE, MAX_SUBCARRIERS, SUBCARRIER_FORMAT_INT8_IQ,
+    WIRE_MAJOR, WIRE_MINOR,
 };
 use crate::cursor::{Reader, Writer};
 use crate::error::WireError;
@@ -142,6 +144,11 @@ pub fn encode_datagram(frame: &CsiFrame) -> Vec<u8> {
         }
     }
 
+    // The receiver's per-frame link parameters and its receive timestamp
+    // (wire minor 2 and later).
+    w.u16(frame.rx_flags);
+    w.u32(frame.rx_timestamp);
+
     // Interleaved signed int8 I/Q, imaginary (Q) then real (I) per subcarrier (ADR-0006).
     for i in 0..2 * n {
         w.i8(frame.i_q.get(i).copied().unwrap_or(0));
@@ -215,11 +222,12 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
     }
 
     // The fixed body layout follows the wire minor: minor 0 has no source MAC
-    // field, minor 1 and later do.
-    let body_fixed_len = if minor == 0 {
-        CSI_BODY_FIXED_LEN_V0
-    } else {
-        CSI_BODY_FIXED_LEN
+    // field, minor 1 has the source MAC but no per-frame link parameters, and
+    // minor 2 and later have both.
+    let body_fixed_len = match minor {
+        0 => CSI_BODY_FIXED_LEN_V0,
+        1 => CSI_BODY_FIXED_LEN_V1,
+        _ => CSI_BODY_FIXED_LEN,
     };
 
     let expected_payload = body_fixed_len + 2 * n as usize;
@@ -264,6 +272,14 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         None
     };
 
+    // The receiver's per-frame link parameters and receive timestamp, which
+    // wire minor 2 and later carry.
+    let (rx_flags, rx_timestamp) = if minor >= 2 {
+        (r.u16()?, r.u32()?)
+    } else {
+        (0, 0)
+    };
+
     let count = n as usize;
     let mut i_q = Vec::with_capacity(2 * count);
     for _ in 0..2 * count {
@@ -287,5 +303,7 @@ pub fn decode_datagram(bytes: &[u8]) -> Result<CsiFrame, WireError> {
         first_word_invalid: flags & CSI_FLAG_FIRST_WORD_INVALID != 0,
         source_mac,
         rx_seq,
+        rx_flags,
+        rx_timestamp,
     })
 }

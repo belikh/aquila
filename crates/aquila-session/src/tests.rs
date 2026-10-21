@@ -53,6 +53,8 @@ fn demo_datagram(node: u16, sequence: u64) -> Vec<u8> {
         first_word_invalid: false,
         source_mac: None,
         rx_seq: None,
+        rx_flags: 0,
+        rx_timestamp: 0,
     };
     aquila_wire::encode_datagram(&frame)
 }

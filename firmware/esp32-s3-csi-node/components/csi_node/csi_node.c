@@ -57,6 +57,9 @@ typedef struct {
      * it does not know it, which is not a legal sequence number (they are
      * twelve bits), so the sentinel carries through the wire unchanged. */
     uint16_t rx_seq;
+    /* The receiver's per-frame link parameters and its receive timestamp. */
+    uint16_t rx_flags;
+    uint32_t rx_timestamp;
     uint16_t csi_len;
     int8_t csi[CSI_RAW_MAX];
 } csi_slot_t;
@@ -127,6 +130,29 @@ static uint16_t phy_flags_from_rx(const wifi_pkt_rx_ctrl_t *rx)
     if (rx->not_sounding == 0u) {
         flags |= 1u << 5; /* sounding/NDP */
     }
+    return flags;
+}
+
+/*
+ * The receiver's per-frame link parameters, packed for the wire.
+ *
+ * The antenna index is the interesting one: it is the only per-frame binary
+ * choice the receiver makes about *which* channel response it is reporting,
+ * and a receiver that switched between two paths differing by a half
+ * wavelength would negate the whole channel vector — which is what the
+ * measured per-frame sign flip looks like. The rate, the modulation scheme and
+ * the two frame-type flags are the link's own parameters, which the core
+ * needs to weigh a frame by its signal quality.
+ */
+static uint16_t rx_flags_from_rx(const wifi_pkt_rx_ctrl_t *rx)
+{
+    uint16_t flags = 0u;
+    flags |= (uint16_t)(rx->ant & 0x1u) << 0;
+    flags |= (uint16_t)(rx->rate & 0x1Fu) << 1;
+    flags |= (uint16_t)(rx->mcs & 0x7Fu) << 6;
+    flags |= (uint16_t)(rx->aggregation & 0x1u) << 13;
+    flags |= (uint16_t)(rx->smoothing & 0x1u) << 14;
+    flags |= (uint16_t)(rx->not_sounding & 0x1u) << 15;
     return flags;
 }
 
@@ -207,6 +233,8 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
      * identifies one transmission exactly, which is how the core pairs two
      * nodes' captures of the same ambient packet. */
     slot->rx_seq = info->rx_seq;
+    slot->rx_flags = rx_flags_from_rx(&info->rx_ctrl);
+    slot->rx_timestamp = info->rx_ctrl.timestamp;
     slot->csi_len = (uint16_t)len;
     memcpy(slot->csi, info->buf, (size_t)len);
 
@@ -310,7 +338,8 @@ static void csi_sender_task(void *arg)
             cfg.node_id, slot.band, slot.channel, cfg.bandwidth_mhz, slot.sequence,
             slot.device_ts_us, s_boot_epoch, subcarrier_offset, n, slot.rssi,
             slot.noise_floor, slot.phy_flags, slot.first_word_invalid,
-            slot.rx_seq, slot.source_mac, slot.csi, datagram, sizeof(datagram));
+            slot.rx_seq, slot.rx_flags, slot.rx_timestamp, slot.source_mac,
+            slot.csi, datagram, sizeof(datagram));
         if (length > 0u && s_sock >= 0) {
             sendto(s_sock, datagram, length, 0, (struct sockaddr *)&s_core,
                    sizeof(s_core));

@@ -28,8 +28,9 @@ pub const WIRE_MAJOR: u8 = 1;
 ///   and the `u16` at body offset 26 is reserved.
 /// * **minor 1** — `source_mac` at body offset 28; the fixed body is 34 bytes
 ///   and the `u16` at body offset 26 is still reserved.
-/// * **minor 2** — `source_mac` at body offset 28 *and* `rx_seq` at body
-///   offset 26; the fixed body is 34 bytes.
+/// * **minor 2** — `source_mac` at body offset 28, `rx_seq` at body
+///   offset 26, the per-frame link parameters at body offset 34 and the
+///   receive timestamp at body offset 36; the fixed body is 40 bytes.
 ///
 /// The codec knows each minor's body layout, so a node on any of them is
 /// read correctly. The split matters: minor 1 and minor 2 have the same body
@@ -61,9 +62,15 @@ pub const CSI_HEADER_LEN: usize = 16;
 
 /// The fixed part of the CSI body, before the `int8` I/Q payload, in bytes.
 ///
-/// Wire minor 1 adds the six-byte source MAC address of the transmitting
-/// station, so the fixed body is 28 + 6 = 34 bytes.
-pub const CSI_BODY_FIXED_LEN: usize = 34;
+/// Wire minor 2 adds the receiver's per-frame link parameters and its receive
+/// timestamp, so the fixed body is 34 + 2 + 4 = 40 bytes.
+pub const CSI_BODY_FIXED_LEN: usize = 40;
+
+/// The fixed part of the CSI body for wire minor 1, in bytes.
+///
+/// Minor 1 carries the six-byte source MAC address of the transmitting
+/// station and no per-frame link parameters, so its fixed body is 34 bytes.
+pub const CSI_BODY_FIXED_LEN_V1: usize = 34;
 
 /// The fixed part of the CSI body for wire minor 0, before the `int8` I/Q
 /// payload, in bytes.
@@ -259,8 +266,13 @@ pub(crate) mod csi_body_offset {
     /// The six-byte MAC address of the transmitting station (wire minor 1 and
     /// later).
     pub(crate) const SOURCE_MAC: usize = 28;
+    /// The receiver's per-frame link parameters (wire minor 2 and later).
+    pub(crate) const RX_FLAGS: usize = 34;
+    /// The receiver's receive timestamp in microseconds (wire minor 2 and
+    /// later).
+    pub(crate) const RX_TIMESTAMP: usize = 36;
     /// The first interleaved signed int8 byte: `Q` (imaginary first), then `I`.
-    pub(crate) const IQ: usize = 34;
+    pub(crate) const IQ: usize = 40;
 }
 
 /// Byte offsets within the fixed 12-byte control header

@@ -72,6 +72,7 @@ size_t aq_frame_csi(uint16_t node_id, uint8_t band, uint8_t channel,
                     int16_t subcarrier_offset, uint16_t n_subcarriers,
                     int8_t rssi_dbm, int8_t noise_floor_dbm, uint16_t phy_flags,
                     bool first_word_invalid, uint16_t rx_seq,
+                    uint16_t rx_flags, uint32_t rx_timestamp,
                     const uint8_t *source_mac, const int8_t *i_q, uint8_t *out,
                     size_t out_cap)
 {
@@ -118,6 +119,13 @@ size_t aq_frame_csi(uint16_t node_id, uint8_t band, uint8_t channel,
      * number, so it carries through unchanged.
      */
     aq_put_u16_le(&body[AQ_CSI_BODY_OFF_RX_SEQ], rx_seq);
+
+    /*
+     * The receiver's per-frame link parameters and its receive timestamp
+     * (wire minor 2 and later).
+     */
+    aq_put_u16_le(&body[AQ_CSI_BODY_OFF_RX_FLAGS], rx_flags);
+    aq_put_u32_le(&body[AQ_CSI_BODY_OFF_RX_TIMESTAMP], rx_timestamp);
 
     /*
      * The six-byte MAC address of the station that transmitted the frame

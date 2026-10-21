@@ -18,7 +18,9 @@ Design (from docs/spec/capture-and-firmware.md §5):
     then i_q[0..2n] interleaved signed int8 Q,I (imaginary first).
   * Wire minor 1 adds source_mac[6] (the transmitting station's address)
     after the reserved field, so the fixed body is 34 bytes and the I/Q
-    payload starts six bytes later. Wire minor 0 has no source MAC.
+    payload starts six bytes later. Wire minor 2 adds the receiver's per-frame
+    link parameters and its receive timestamp, so the fixed body is 40 bytes.
+    Wire minor 0 has no source MAC.
 
 Usage:
     # Discover nodes on the network.
@@ -44,6 +46,7 @@ AQCI_DATA_PORT = 9100
 AQCI_HEADER_SIZE = 16
 AQCI_BODY_SIZE = 28
 AQCI_BODY_SIZE_V1 = 34  # wire minor 1 adds the six-byte source MAC
+AQCI_BODY_SIZE_V2 = 40  # wire minor 2 adds the per-frame link parameters
 AQCI_MSG_TYPE_CSI_FRAME = 1
 AQCI_SC_FORMAT_INT8_IQ = 1  # raw signed int8 I/Q, imaginary first
 
@@ -69,6 +72,13 @@ class CsiFrame:
     # The 802.11 sequence number of the received frame, or None when the node
     # did not report one.
     rx_seq: Optional[int]
+    # The receiver's per-frame link parameters, packed into sixteen bits: bit 0
+    # is the antenna, bits 1 to 5 the rate, bits 6 to 12 the modulation and
+    # coding scheme, bit 13 aggregation, bit 14 channel-estimate smoothing and
+    # bit 15 the sounding flag.
+    rx_flags: int
+    # The receiver's own receive timestamp, in microseconds.
+    rx_timestamp: int
     # Complex CSI per subcarrier: re/im in f32 (derived from int8 I/Q).
     csi: List[complex]
     host_arrival_us: int
@@ -179,8 +189,14 @@ class CsiCollector:
             return None
 
         # The fixed body layout follows the wire minor: minor 0 has no source
-        # MAC, minor 1 and later do.
-        body_size = AQCI_BODY_SIZE_V1 if wire_minor >= 1 else AQCI_BODY_SIZE
+        # MAC, minor 1 adds it, and minor 2 adds the per-frame link
+        # parameters.
+        if wire_minor >= 2:
+            body_size = AQCI_BODY_SIZE_V2
+        elif wire_minor >= 1:
+            body_size = AQCI_BODY_SIZE_V1
+        else:
+            body_size = AQCI_BODY_SIZE
         if len(data) < AQCI_HEADER_SIZE + body_size:
             return None
 
@@ -196,6 +212,11 @@ class CsiCollector:
 
         source_mac: Optional[str] = None
         rx_seq: Optional[int] = None
+        rx_flags = 0
+        rx_timestamp = 0
+        if wire_minor >= 2:
+            rx_flags = struct.unpack_from("<H", body, 34)[0]
+            rx_timestamp = struct.unpack_from("<I", body, 36)[0]
         if wire_minor >= 1:
             raw_mac = body[28:34]
             if raw_mac != b"\x00" * 6:
@@ -249,6 +270,8 @@ class CsiCollector:
             first_word_invalid=first_word_invalid,
             source_mac=source_mac,
             rx_seq=rx_seq,
+            rx_flags=rx_flags,
+            rx_timestamp=rx_timestamp,
             csi=csi,
             host_arrival_us=0,  # set by caller
         )

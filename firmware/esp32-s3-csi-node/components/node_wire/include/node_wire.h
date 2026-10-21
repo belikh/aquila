@@ -24,8 +24,8 @@
 #define AQ_CSI_DATA_PORT 9100u
 #define AQ_CONTROL_PORT 9101u
 #define AQ_CSI_HEADER_LEN 16u
-#define AQ_CSI_BODY_FIXED_LEN 34u
-#define AQ_CSI_MAX_SUBCARRIERS 711u
+#define AQ_CSI_BODY_FIXED_LEN 40u
+#define AQ_CSI_MAX_SUBCARRIERS 708u
 #define AQ_CSI_MAX_DATAGRAM_LEN 1472u
 #define AQ_CONTROL_HEADER_LEN 12
 #define AQ_CONTROL_AUTH_LEN 32u
@@ -86,7 +86,9 @@
 #define AQ_CSI_BODY_OFF_PHY_FLAGS 24u
 #define AQ_CSI_BODY_OFF_RX_SEQ 26u
 #define AQ_CSI_BODY_OFF_SOURCE_MAC 28u
-#define AQ_CSI_BODY_OFF_IQ 34u
+#define AQ_CSI_BODY_OFF_RX_FLAGS 34u
+#define AQ_CSI_BODY_OFF_RX_TIMESTAMP 36u
+#define AQ_CSI_BODY_OFF_IQ 40u
 
 /* Control header field offsets. */
 #define AQ_CONTROL_OFF_MAGIC 0u
@@ -123,6 +125,8 @@ typedef struct {
     uint16_t phy_flags;
     uint16_t rx_seq; /* the 802.11 sequence number; 0xFFFF = not reported */
     uint8_t  source_mac[6]; /* the transmitting station's MAC address */
+    uint16_t rx_flags; /* the receiver's per-frame link parameters */
+    uint32_t rx_timestamp; /* the receiver's receive timestamp, microseconds */
 } aq_csi_body_fixed_t;
 
 typedef struct {

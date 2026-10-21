@@ -56,6 +56,8 @@ fn csi_frame() -> CsiFrame {
         first_word_invalid: false,
         source_mac: None,
         rx_seq: None,
+        rx_flags: 0,
+        rx_timestamp: 0,
     }
 }
 

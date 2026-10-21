@@ -130,6 +130,20 @@ pub struct CsiFrame {
     /// arrival times, which is a guess that goes wrong whenever two
     /// transmitters are active at once.
     pub rx_seq: Option<u16>,
+    /// The receiver's per-frame link parameters, packed into sixteen bits.
+    ///
+    /// The bit layout is the node's, not the core's: bit 0 is the antenna the
+    /// frame was received on, bits 1 to 5 the rate, bits 6 to 12 the modulation
+    /// and coding scheme, bit 13 whether the frame was aggregated, bit 14 the
+    /// channel-estimate smoothing flag and bit 15 the sounding flag. The core
+    /// reads them for weighting a frame by its link quality.
+    pub rx_flags: u16,
+    /// The receiver's own receive timestamp for the frame, in microseconds.
+    ///
+    /// The node's clock, not synchronised: the value says when the frame
+    /// arrived, and the *differences* between frames at one node are
+    /// meaningful.
+    pub rx_timestamp: u32,
 }
 
 impl CsiFrame {

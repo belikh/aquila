@@ -287,10 +287,12 @@ the application layer.
 | 24 | 2 | `phy_flags` (`u16`) |
 | 26 | 2 | `rx_seq` — the 802.11 sequence number of the received frame (`u16`); `0xFFFF` means the node did not report one |
 | 28 | 6 | `source_mac` — the MAC address of the station that transmitted the frame (wire minor 1 and later; all zeroes means "transmitter unknown") |
-| 34 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
+| 34 | 2 | `rx_flags` — the receiver's per-frame link parameters (wire minor 2 and later): bit 0 the antenna, bits 1–5 the rate, bits 6–12 the modulation and coding scheme, bit 13 aggregation, bit 14 the channel-estimate smoothing flag, bit 15 the sounding flag |
+| 36 | 4 | `rx_timestamp` — the receiver's own receive timestamp for the frame, in microseconds (wire minor 2 and later) |
+| 40 | 2n | `i_q[0..2n]` (interleaved signed int8 `Q, I` per subcarrier, imaginary first) |
 
 A receiver validates `magic`, `wire_major`, `payload_len` and
-`payload_len == 34 + 2 * n_subcarriers` before trusting any field. A `wire_minor`
+`payload_len == 40 + 2 * n_subcarriers` before trusting any field. A `wire_minor`
 mismatch is accepted (additive); a `wire_major` mismatch is rejected and counted
 once per `(node_id, boot_epoch)`, never guessed. The codec knows each minor's
 body layout: **wire minor 0** carries no `source_mac` and its fixed body is 28

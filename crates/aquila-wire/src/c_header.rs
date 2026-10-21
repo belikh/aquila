@@ -184,6 +184,16 @@ pub fn generate_c_header() -> String {
         "AQ_CSI_BODY_OFF_SOURCE_MAC",
         csi_body_offset::SOURCE_MAC,
     );
+    emit_offset(
+        &mut s,
+        "AQ_CSI_BODY_OFF_RX_FLAGS",
+        csi_body_offset::RX_FLAGS,
+    );
+    emit_offset(
+        &mut s,
+        "AQ_CSI_BODY_OFF_RX_TIMESTAMP",
+        csi_body_offset::RX_TIMESTAMP,
+    );
     emit_offset(&mut s, "AQ_CSI_BODY_OFF_IQ", csi_body_offset::IQ);
     let _ = writeln!(s);
 
@@ -235,6 +245,14 @@ pub fn generate_c_header() -> String {
     let _ = writeln!(
         s,
         "    uint8_t  source_mac[6]; /* the transmitting station's MAC address */"
+    );
+    let _ = writeln!(
+        s,
+        "    uint16_t rx_flags; /* the receiver's per-frame link parameters */"
+    );
+    let _ = writeln!(
+        s,
+        "    uint32_t rx_timestamp; /* the receiver's receive timestamp, microseconds */"
     );
     let _ = writeln!(s, "}} aq_csi_body_fixed_t;");
     let _ = writeln!(s);

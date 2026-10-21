@@ -426,6 +426,8 @@ impl SimulatorSource {
             // The 802.11 sequence number is twelve bits and counts up from
             // the transmitter, so it wraps.
             rx_seq: Some((tick % 4096) as u16),
+            rx_flags: 0,
+            rx_timestamp: 0,
         }
     }
 

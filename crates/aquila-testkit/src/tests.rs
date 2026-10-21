@@ -2226,6 +2226,8 @@ fn phase_sign_is_imaginary_first_end_to_end() {
         first_word_invalid: false,
         source_mac: None,
         rx_seq: None,
+        rx_flags: 0,
+        rx_timestamp: 0,
     };
     frame.validate().expect("valid frame");
 
