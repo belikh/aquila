@@ -606,10 +606,20 @@ an undocumented property of the silicon.
 **It may be the ESP32-S3's own PHY.** Espressif ranks the family's CSI
 quality as **ESP32-C5 ≫ ESP32-C6 ≫ ESP32-C3 ≈ ESP32-S3 ≫ ESP32**, so the
 S3 is the second-weakest of the chips that do this at all and the newest ones
-are explicitly better. The same measurement answers whether a C5 or C6 node
-has the same ambiguity. If it does not, the S3 is the constraint and the
-hardware choice is a lever; if it does, the family's CSI is not suited to
-cross-node coherent phase and the project's direction should be settled.
+are explicitly better. Two facts about the alternatives bear on this: the
+ESP32-S3 has a single receive chain, so it has no spatial diversity to offer,
+and the ESP32-C5 is the only chip of the family with 5 GHz, which matters
+because the delay resolution of a path measurement is the inverse of the
+bandwidth.
+
+**That ranking is not evidence about the sign.** It is a ranking of CSI
+quality in general, and the sign ambiguity is a specific thing measured here.
+Whether a C5 or C6 node has the same ambiguity is *untested*, and the same
+measurement answers it: run the cross-node residual on one C6 or C5 board and
+one of these. If the ambiguity is absent, the S3 is the constraint and the
+hardware choice is a lever. If it is present, the family's CSI is not suited to
+cross-node coherent phase and the project's direction should be settled
+without buying anything.
 
 ### 4.9 What the device actually holds
 
