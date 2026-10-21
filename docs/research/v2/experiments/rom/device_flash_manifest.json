@@ -1,0 +1,72 @@
+{
+ "source": {
+  "path": "/tmp/opencode/rea/device/flash_4MB.bin",
+  "sha256": "a0b278d26f673434aac730a1ca5a604c6162e70ed1090ac12837c8276bdebe57",
+  "bytes": 4194304
+ },
+ "partitions": [
+  {
+   "label": "nvs",
+   "type": "data",
+   "subtype": "nvs",
+   "offset": 36864,
+   "size": 24576,
+   "sha256": "dd53558698891fd40cf6f49bd64e5058ae99b32c5bb8d92690639b6d91d14270",
+   "all_0xff": false,
+   "non_zero_bytes": 7363
+  },
+  {
+   "label": "otadata",
+   "type": "data",
+   "subtype": "otadata",
+   "offset": 61440,
+   "size": 8192,
+   "sha256": "8ba3b110139f45443d4f268d1a3373ef99a1718b71d51664531b83ee2d4b91a3",
+   "all_0xff": false,
+   "non_zero_bytes": 12
+  },
+  {
+   "label": "phy_init",
+   "type": "data",
+   "subtype": "phy",
+   "offset": 69632,
+   "size": 4096,
+   "sha256": "3882d191d79bc62e1abd323bae379d29d4f0a308d21aac449c65ff6fc9142677",
+   "all_0xff": false,
+   "non_zero_bytes": 4096
+  },
+  {
+   "label": "ota_0",
+   "type": "app",
+   "subtype": "ota_0",
+   "offset": 131072,
+   "size": 2031616,
+   "sha256": "7241587402f5f9366a5dde65769ac5c9276d780774bc007ae31b8a3a7e2ccc71",
+   "all_0xff": false,
+   "non_zero_bytes": 743269,
+   "esp32_image": true,
+   "segments": 6,
+   "flash_mode": 2,
+   "flash_size": 4194304,
+   "flash_speed_code": 15,
+   "entry_point": 1007222816
+  },
+  {
+   "label": "ota_1",
+   "type": "app",
+   "subtype": "ota_1",
+   "offset": 2162688,
+   "size": 2031616,
+   "sha256": "540d602bfa613197a76543a0225e251bbc990e08bff52dffbacb9b3371534c4d",
+   "all_0xff": false,
+   "non_zero_bytes": 743203,
+   "esp32_image": true,
+   "segments": 6,
+   "flash_mode": 2,
+   "flash_size": 4194304,
+   "flash_speed_code": 15,
+   "entry_point": 1007222816
+  }
+ ],
+ "note": "the flash image itself is not committed: it holds the WiFi password and the OTA trust anchor. The digests below identify the exact image the inventory was taken from, so it can be re-read from a node and checked."
+}

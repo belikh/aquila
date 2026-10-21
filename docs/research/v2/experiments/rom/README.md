@@ -13,13 +13,14 @@ The node's partition table declares five regions — `nvs`, `otadata`,
 bootloader, the partition table, the application and the OTA state. The
 `phy_init` region at 0x11000 is declared and never written.
 
-That is not a fault. The ESP32-S3's PHY has no code blob: the application
-reaches the ROM's PHY through a function table, and the only flash-side
-artefact is the PHY's *calibration* data — `phy_multiple_init_data.bin`, 1072
-bytes of RF tables with a `PHYINIT` header, most of it unpopulated. The
-application does not even read the partition on this target:
-`esp_phy_get_init_data` returns the built-in `phy_init_data` struct directly.
-The partition is used only by the country-code update path.
+That is not a fault, and the device's own flash settles what is in it: the
+region is **fully used** and holds an `HLPR` helper blob — a small Xtensa
+program that checks `cpuid == xPortGetCoreID()` and cites
+`components/esp_system/esp_ipc.c`. It is the ESP-IDF's inter-core helper,
+used by the PHY's country-code path, and it is a code blob in its own right.
+(The calibration tables themselves are not there: the application does not
+read that partition on this target — `esp_phy_get_init_data` returns the
+built-in `phy_init_data` struct.)
 
 So the "binary blobs in use" are:
 
@@ -71,6 +72,34 @@ sign were taken from a noisy estimate. The register it clears was read before
 and after the call: the bits were **already clear**, so the call was a no-op
 and the flip is present with that switch in that state. The switch does not
 gate the flip.
+
+## The blobs on the device
+
+The chip-side story above is the ROM. The flash-side story is the device's own
+four megabytes, read from a running node with esptool and carved up by
+`extract_device_flash.py`:
+
+| region | offset | size | what is in it |
+| --- | --- | --- | --- |
+| `nvs` | 0x9000 | 24 KiB | the provisioning and the OTA trust anchor (7363 bytes used) |
+| `otadata` | 0xf000 | 8 KiB | which app slot is active: 12 bytes used |
+| `phy_init` | 0x11000 | 4 KiB | **fully used** — an `HLPR` helper blob |
+| `ota_0` | 0x20000 | 1.9 MiB | the active application (743 269 bytes, six segments) |
+| `ota_1` | 0x210000 | 1.9 MiB | the previous application, kept for the rollback |
+
+Two things here were worth checking rather than assuming. The `phy_init`
+region *is* written, and it is not the calibration table: it begins `HLPR` and
+carries a small Xtensa helper that checks `cpuid == xPortGetCoreID()` and
+cites `components/esp_system/esp_ipc.c`. It is the ESP-IDF's inter-core helper,
+used by the PHY's country-code path, and it is a code blob in its own right.
+
+And the `ota_1` slot is not empty: it holds the application that was running
+before the last update, which is the point of the A/B arrangement — the
+rollback target.
+
+The flash image itself is not committed: it holds the WiFi password and the
+OTA trust anchor. `device_flash_manifest.json` records the digests, so the
+image can be re-read from a node and checked against them.
 
 ## Reproducing it
 

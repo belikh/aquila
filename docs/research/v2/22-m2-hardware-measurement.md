@@ -557,6 +557,34 @@ and undone, and no control the chip exposes reaches it. That is a firm
 boundary rather than a failure of effort, and it is the reason the project's
 direction moved to the phase slope.
 
+### 4.7 What the device actually holds
+
+The chip-side story is the ROM, but the flash side is worth stating precisely
+too, because the node's partition table *declares* a `phy_init` region that
+`idf.py flash` does not write, and it is not obvious what is in it. Reading
+the node's four megabytes back and carving them up
+(`docs/research/v2/experiments/rom/`) settles it:
+
+| region | offset | size | what is in it |
+| --- | --- | --- | --- |
+| `nvs` | 0x9000 | 24 KiB | the provisioning and the OTA trust anchor (7363 bytes used) |
+| `otadata` | 0xf000 | 8 KiB | which app slot is active: 12 bytes used |
+| `phy_init` | 0x11000 | 4 KiB | **fully used** — an `HLPR` helper blob |
+| `ota_0` | 0x20000 | 1.9 MiB | the active application (743 269 bytes, six segments) |
+| `ota_1` | 0x210000 | 1.9 MiB | the previous application, kept for the rollback |
+
+The `phy_init` region *is* written, and it is not the calibration table: it
+begins `HLPR` and carries a small Xtensa helper that checks
+`cpuid == xPortGetCoreID()` and cites `components/esp_system/esp_ipc.c`. It
+is the ESP-IDF's inter-core helper, used by the PHY's country-code path. So
+the earlier statement that the region was uninitialised was wrong, and the
+inventory above replaces it.
+
+The other two findings are about the device's own operation: `otadata` is
+twelve bytes, which is all it ever is, and `ota_1` holds the previous
+application — which is the point of the A/B arrangement, the rollback
+target.
+
 **What is left is the part that does not need the sign.** A whole-vector
 negation shifts every subcarrier's phase by the same pi, so it leaves the
 phase *differences* between subcarriers untouched — and the phase slope, the
