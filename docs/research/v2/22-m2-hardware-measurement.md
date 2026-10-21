@@ -544,7 +544,7 @@ switch in that state. The switch does not gate the flip. (Reported as it
 happened: the intended toggling experiment was vacuous, and what the
 measurement shows is the flip's presence with the register in that state.)
 
-### 4.6 The receiver's own metadata does not record the sign
+### 4.7 The receiver's own metadata does not record the sign
 
 The last observable route was the receiver's own per-frame metadata. Wire
 **minor 2** adds it: the antenna index, the rate, the modulation and coding
@@ -590,7 +590,28 @@ reports records the sign it chose. That is a firm boundary rather than a
 failure of effort, and it is the reason the project's direction moved to the
 phase slope.
 
-### 4.7 What the device actually holds
+### 4.8 The limitation is undocumented, and it may be the chip's
+
+Two things from the wider record bear on what to do next.
+
+**Nobody documents it.** Espressif's own materials, the `esp-csi` repository
+and the two independent guides written around it describe the CSI's amplitude
+and phase as features, and say that the *amplitude* stays reliable under
+indoor interference — but none of them mentions the sign ambiguity. The
+`first_word_invalid` field is the only hint of a hardware limitation in the
+public interface, and it is about the first four bytes, not the sign. So this
+is not a rediscovery of something known with a known workaround: it looks like
+an undocumented property of the silicon.
+
+**It may be the ESP32-S3's own PHY.** Espressif ranks the family's CSI
+quality as **ESP32-C5 ≫ ESP32-C6 ≫ ESP32-C3 ≈ ESP32-S3 ≫ ESP32**, so the
+S3 is the second-weakest of the chips that do this at all and the newest ones
+are explicitly better. The same measurement answers whether a C5 or C6 node
+has the same ambiguity. If it does not, the S3 is the constraint and the
+hardware choice is a lever; if it does, the family's CSI is not suited to
+cross-node coherent phase and the project's direction should be settled.
+
+### 4.9 What the device actually holds
 
 The chip-side story is the ROM, but the flash side is worth stating precisely
 too, because the node's partition table *declares* a `phy_init` region that
